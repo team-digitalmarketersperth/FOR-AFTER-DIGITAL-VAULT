@@ -38,7 +38,7 @@ To ensure consistent Node versions across the team:
    ```bash
    cp .env.example .env
    ```
-5. Configure `.env` with your `DATABASE_URL`, `REDIS_HOST`, and `REDIS_PORT`.
+5. Configure `.env` with your `DATABASE_URL` and `REDIS_URL`.
 
 ## 4. Database Setup
 1. Create a local PostgreSQL database named `for_after`.
@@ -72,10 +72,8 @@ Ensure the following are set in your `.env`:
 ```env
 APP_ENV=development
 DATABASE_URL="postgresql://postgres:postgres@localhost:5432/for_after?schema=public"
-REDIS_HOST="localhost"
-REDIS_PORT=6379
+REDIS_URL=redis://localhost:6379
 SESSION_SECRET="your_session_secret"
-JWT_SECRET="your_jwt_secret"
 STRIPE_SECRET_KEY=""
 STRIPE_WEBHOOK_SECRET=""
 MUX_TOKEN_ID=""
