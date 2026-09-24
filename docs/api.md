@@ -79,9 +79,19 @@ Responses never include `ownerUserId` or `deletedAt`.
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
 | `GET` | `/trusted-contacts` | List trusted contacts |
-| `POST` | `/trusted-contacts` | Add trusted contact / send invite |
+| `POST` | `/trusted-contacts` | Add trusted contact (no invite is sent yet) |
+| `GET` | `/trusted-contacts/:id` | Get trusted contact |
 | `PATCH` | `/trusted-contacts/:id` | Update trusted contact |
-| `DELETE`| `/trusted-contacts/:id` | Revoke trusted contact |
+| `DELETE`| `/trusted-contacts/:id` | Remove trusted contact (soft delete, 204) |
+
+Same rules as Recipients: all five routes require a session **and** the `CUSTOMER` role (others get 403).
+Every query is scoped to the session user's id, which is never accepted from the body.
+A contact that is missing, deleted or owned by someone else gives the same `404 Trusted contact not found.`
+A non-UUID `:id` returns 400, and responses never include `ownerUserId` or `deletedAt`.
+Body fields: `firstName` (required), `lastName`, `relationship`, `email`, `mobile`.
+**At least one of `email` / `mobile` is required, and must remain after any PATCH**: clearing the last one returns 400.
+A trusted contact is not a login account and gets no access to the owner's content.
+There is no maximum per customer yet; the PRD says "1 or 2", but PROJECT_OVERVIEW §58 lists this as open.
 
 ### Messages
 | Method | Endpoint | Description |
