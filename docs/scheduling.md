@@ -42,12 +42,12 @@ flowchart TD
 
 ```typescript
 import { BullModule } from '@nestjs/bullmq';
+import IORedis from 'ioredis';
 
+// Same REDIS_URL as sessions (rediss:// for TLS in production).
+// BullMQ workers require maxRetriesPerRequest: null.
 BullModule.forRoot({
-  connection: { 
-    host: process.env.REDIS_HOST, 
-    port: Number(process.env.REDIS_PORT) 
-  }
+  connection: new IORedis(process.env.REDIS_URL!, { maxRetriesPerRequest: null }),
 });
 
 BullModule.registerQueue({ 
