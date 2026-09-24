@@ -66,7 +66,14 @@ All responses are returned in JSON format. The standard error format includes th
 | `POST` | `/recipients` | Create recipient (body: `firstName`, `lastName`, `relationship`, `email`, `mobile`) |
 | `GET` | `/recipients/:id` | Get recipient |
 | `PATCH` | `/recipients/:id` | Update recipient |
-| `DELETE`| `/recipients/:id` | Remove recipient |
+| `DELETE`| `/recipients/:id` | Remove recipient (soft delete, 204) |
+
+"People I Love" = `Recipient`. All five routes require a session **and** the `CUSTOMER` role (others get 403).
+Every query is scoped to the session user's id (`ownerUserId`), which is never accepted from the body.
+A recipient that is missing, deleted or owned by someone else gives the same `404 Recipient not found.`
+Body fields: `firstName` (required), `lastName`, `relationship`, `email`, `mobile`, `birthday` (`YYYY-MM-DD`), `privateNote` (max 2000).
+In `PATCH`, all are optional and optional fields accept `null` to clear. Any other field returns 400. A non-UUID `:id` returns 400.
+Responses never include `ownerUserId` or `deletedAt`.
 
 ### Trusted Contacts
 | Method | Endpoint | Description |
@@ -191,9 +198,11 @@ POST /recipients
 {
   "firstName": "Jane",
   "lastName": "Doe",
-  "relationship": "SPOUSE",
+  "relationship": "Spouse",
   "email": "jane.doe@example.com",
-  "mobile": "+61400000000"
+  "mobile": "+61400000000",
+  "birthday": "1970-06-01",
+  "privateNote": "Fictional example note."
 }
 ```
 
