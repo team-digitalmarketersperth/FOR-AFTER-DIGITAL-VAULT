@@ -44,6 +44,11 @@ Client -> DELETE ...                            (soft delete first, then DeleteO
 - Signed URLs are never stored in PostgreSQL and never logged. Logs contain only IDs and error categories.
 - There are no public URLs, no public ACLs and no permanent media links.
 - Media on a `SCHEDULED` message can be listed and viewed but not changed. Unschedule first; nothing is unscheduled automatically.
+- Step 8: uploads do not depend on the message's `contentType`; which media a message may have is checked when scheduling
+  (`docs/message-composition.md`). Upload-url, complete and delete run inside a transaction that first locks the message row
+  (conditional UPDATE requiring DRAFT), the same lock scheduling takes, so media cannot change while a schedule is being validated.
+  As a side effect, a media change updates `Message.updatedAt`.
+- No media URL fields on Message, and no external/Cloudinary URL import: all media goes through this private signed-URL flow.
 
 ### What Step 7 does not do
 - **MIME type and size are not content validation.** Headers can be spoofed. There is no antivirus or malware scanning, magic-byte or
