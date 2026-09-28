@@ -1,0 +1,350 @@
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  CUSTOMER
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  PASSED
+  DELETED
+}
+
+model User {
+  id           String @id @default(uuid()) @db.Uuid
+  email        String @unique
+  passwordHash String
+
+  firstName String?
+  lastName  String?
+
+  role   UserRole   @default(CUSTOMER)
+  status UserStatus @default(ACTIVE)
+
+  emailVerifiedAt  DateTime?
+  twoFactorEnabled Boolean   @default(false)
+  passedAt         DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  recipients      Recipient[]
+  trustedContacts TrustedContact[]
+  messages        Message[]
+  mediaAssets     MediaAsset[]
+
+  memoryVaultItems       MemoryVaultItem[]
+  memoryVaultMediaAssets MemoryVaultMediaAsset[]
+
+  myStoryResponses MyStoryResponse[]
+  myWishResponses  MyWishResponse[]
+}
+
+// "People I Love". A contact record owned by one customer, not a login account.
+model Recipient {
+  id          String @id @default(uuid()) @db.Uuid
+  ownerUserId String @db.Uuid
+  owner       User   @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+
+  firstName    String
+  lastName     String?
+  relationship String?
+  email        String?
+  mobile       String?
+  // Calendar date only (no time/timezone), so it cannot shift a day.
+  birthday     DateTime? @db.Date
+  privateNote  String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  messageRecipients MessageRecipient[]
+
+  @@index([ownerUserId])
+}
+
+// Nominated to help with post-death actions later. An owned contact record,
+// not a login account, and it grants no access to the owner's content.
+// The migration adds a CHECK that email or mobile is set.
+model TrustedContact {
+  id          String @id @default(uuid()) @db.Uuid
+  ownerUserId String @db.Uuid
+  owner       User   @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+
+  firstName    String
+  lastName     String?
+  relationship String?
+  email        String?
+  mobile       String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([ownerUserId])
+}
+
+// Future values are defined now; the API only accepts TEXT until media exists.
+enum MessageContentType {
+  TEXT
+  VIDEO
+  AUDIO
+  PHOTO
+  MIXED
+}
+
+// Server-controlled. Step 5 only creates DRAFT; scheduling/release sets the rest.
+enum MessageStatus {
+  DRAFT
+  SCHEDULED
+  RELEASED
+  CANCELLED
+}
+
+// Private content owned by one customer. Only RELEASED messages may ever be
+// shown to an assigned Recipient (recipient access is not built yet).
+model Message {
+  id          String @id @default(uuid()) @db.Uuid
+  ownerUserId String @db.Uuid
+  owner       User   @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+
+  title       String
+  contentType MessageContentType @default(TEXT)
+  textContent String?
+  status      MessageStatus      @default(DRAFT)
+
+  recipients  MessageRecipient[]
+  schedule    MessageSchedule?
+  mediaAssets MediaAsset[]
+  release     MessageRelease?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([ownerUserId])
+  @@index([ownerUserId, status])
+}
+
+// "This message is intended for this Recipient", not "may read it now".
+model MessageRecipient {
+  id          String    @id @default(uuid()) @db.Uuid
+  messageId   String    @db.Uuid
+  message     Message   @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  recipientId String    @db.Uuid
+  recipient   Recipient @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([messageId, recipientId])
+  @@index([recipientId])
+}
+
+// Product trigger types. The API accepts only FIXED_DATE, ON_DEATH and
+// AFTER_DEATH for now; the others are reserved (docs/scheduling.md).
+enum ReleaseTriggerType {
+  NOW
+  FIXED_DATE
+  BIRTHDAY
+  ANNIVERSARY
+  CUSTOM_EVENT
+  ON_DEATH
+  AFTER_DEATH
+  ANNUAL_AFTER_DEATH
+}
+
+// When a message is intended to become releasable. PostgreSQL is the source
+// of truth; Step 12 executes FIXED_DATE only (docs/message-release.md).
+// Hard-deleted on unschedule (the Message stays); kept after release. The
+// migration adds a CHECK that the fields match the trigger type.
+model MessageSchedule {
+  id        String  @id @default(uuid()) @db.Uuid
+  messageId String  @unique @db.Uuid
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  triggerType    ReleaseTriggerType
+  scheduledFor   DateTime? // FIXED_DATE only, UTC instant
+  afterDeathDays Int? // AFTER_DEATH only
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Durable evidence that a Message reached RELEASED (Step 12). Written in the
+// same transaction as the status change; at most one per Message, so retries
+// and concurrent workers cannot release twice. Release is not delivery: no
+// content, recipient data or URLs are copied here.
+model MessageRelease {
+  id        String  @id @default(uuid()) @db.Uuid
+  messageId String  @unique @db.Uuid
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  // Copied from the MessageSchedule that was executed.
+  triggerType  ReleaseTriggerType
+  scheduledFor DateTime?
+  releasedAt   DateTime
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// VIDEO is reserved; the API accepts PHOTO and AUDIO only.
+enum MediaKind {
+  PHOTO
+  AUDIO
+  VIDEO
+}
+
+enum MediaAssetStatus {
+  PENDING_UPLOAD
+  READY
+  FAILED
+}
+
+// A file attached to a draft Message. The bytes live in a private
+// S3-compatible bucket and never pass through the API; only this metadata is
+// stored. storageKey is server-generated and never leaves the API.
+model MediaAsset {
+  id          String  @id @default(uuid()) @db.Uuid
+  ownerUserId String  @db.Uuid
+  owner       User    @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  messageId   String  @db.Uuid
+  message     Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  kind       MediaKind
+  status     MediaAssetStatus @default(PENDING_UPLOAD)
+  storageKey String           @unique
+
+  originalFileName String // metadata only, never used as a path
+  mimeType         String
+  sizeBytes        Int // expected size, verified against storage on complete
+
+  uploadedAt DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([ownerUserId])
+  @@index([messageId, status])
+}
+
+// Fixed list; no custom categories yet.
+enum MemoryVaultCategory {
+  FAMILY
+  TRAVEL
+  CHILDHOOD
+  FUNNY_STORIES
+  LIFE_LESSONS
+  RECIPES
+  LOVE_STORIES
+  OTHER
+}
+
+// Private content kept by one customer. Not a Message: no status, recipients,
+// schedule or release; any mix of text, photos and audio is valid.
+model MemoryVaultItem {
+  id          String @id @default(uuid()) @db.Uuid
+  ownerUserId String @db.Uuid
+  owner       User   @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+
+  title       String
+  category    MemoryVaultCategory
+  textContent String?
+
+  mediaAssets MemoryVaultMediaAsset[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([ownerUserId])
+  @@index([ownerUserId, category])
+}
+
+// Same storage, rules and lifecycle as MediaAsset (Step 7), attached to a
+// Memory Vault item instead of a Message. storageKey never leaves the API.
+model MemoryVaultMediaAsset {
+  id                String          @id @default(uuid()) @db.Uuid
+  ownerUserId       String          @db.Uuid
+  owner             User            @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  memoryVaultItemId String          @db.Uuid
+  memoryVaultItem   MemoryVaultItem @relation(fields: [memoryVaultItemId], references: [id], onDelete: Cascade)
+
+  kind       MediaKind
+  status     MediaAssetStatus @default(PENDING_UPLOAD)
+  storageKey String           @unique
+
+  originalFileName String // metadata only, never used as a path
+  mimeType         String
+  sizeBytes        Int // expected size, verified against storage on complete
+
+  uploadedAt DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([ownerUserId])
+  @@index([memoryVaultItemId, status])
+}
+
+// A customer's private answer to one guided My Story prompt. The prompts
+// themselves are application content (src/my-story/my-story.prompts.ts), not
+// rows. One row per owner and prompt: a new save after a soft delete restores
+// the row. No recipients, schedule, release or media.
+model MyStoryResponse {
+  id          String @id @default(uuid()) @db.Uuid
+  ownerUserId String @db.Uuid
+  owner       User   @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+
+  promptKey          String
+  // Copied from the catalogue on save, never from the client.
+  promptTextSnapshot String
+  promptVersion      Int
+
+  textContent String
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@unique([ownerUserId, promptKey])
+}
+
+// A customer's private answer to one My Wishes prompt: personal preferences
+// and guidance only, never a will or any legal, medical or financial
+// instruction. Same shape and rules as MyStoryResponse, kept as its own table.
+// Prompts are application content (src/my-wishes/my-wishes.prompts.ts).
+model MyWishResponse {
+  id          String @id @default(uuid()) @db.Uuid
+  ownerUserId String @db.Uuid
+  owner       User   @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+
+  promptKey          String
+  // Copied from the catalogue on save, never from the client.
+  promptTextSnapshot String
+  promptVersion      Int
+
+  textContent String
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@unique([ownerUserId, promptKey])
+}
