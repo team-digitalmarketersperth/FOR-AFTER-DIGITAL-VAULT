@@ -1,4 +1,5 @@
 import type { UserRole } from '../generated/prisma/client.js';
+import type { RecipientPrincipal } from '../recipient-auth/recipient-auth.service.js';
 import type { SafeUser } from '../users/users.service.js';
 
 declare module 'express-session' {
@@ -13,6 +14,8 @@ declare global {
   namespace Express {
     interface Request {
       user?: SafeUser;
+      // Recipient Portal only (RecipientSessionAuthGuard); never a User.
+      recipient?: RecipientPrincipal;
     }
   }
 }
