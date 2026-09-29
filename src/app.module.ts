@@ -12,6 +12,8 @@ import { MessagesModule } from './messages/messages.module.js';
 import { MyStoryModule } from './my-story/my-story.module.js';
 import { MyWishesModule } from './my-wishes/my-wishes.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
+import { RecipientAuthModule } from './recipient-auth/recipient-auth.module.js';
+import { RecipientPortalModule } from './recipient-portal/recipient-portal.module.js';
 import { RecipientsModule } from './recipients/recipients.module.js';
 import { RedisModule } from './redis/redis.module.js';
 import { TrustedContactsModule } from './trusted-contacts/trusted-contacts.module.js';
@@ -33,6 +35,8 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
     MemoryVaultModule,
     MyStoryModule,
     MyWishesModule,
+    RecipientAuthModule,
+    RecipientPortalModule,
     // Distributed tracing, auto-correlated logs, request/job metrics, error
     // telemetry, alarms, and more — out of the box. Sign up at https://observe.nestjs.com
     // Only loaded when both keys are in .env; otherwise the collector rejects
