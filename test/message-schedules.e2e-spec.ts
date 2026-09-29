@@ -12,7 +12,8 @@ import { PrismaService } from '../src/prisma/prisma.service.js';
 import { RecipientsModule } from '../src/recipients/recipients.module.js';
 
 // Real HTTP, validation, guards and PostgreSQL (DATABASE_URL from .env).
-// Sessions use MemoryStore so Redis is not needed. Fictional data only; the
+// Sessions use MemoryStore; the Step 12 release queue uses the local Redis
+// (REDIS_URL, test queue name). Fictional data only; the
 // test users are removed afterwards (cascade removes everything they own).
 describe('Message schedules (e2e, PostgreSQL)', () => {
   let app: NestExpressApplication;
