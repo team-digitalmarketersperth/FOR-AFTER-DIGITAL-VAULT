@@ -51,6 +51,8 @@ model User {
 
   myStoryResponses MyStoryResponse[]
   myWishResponses  MyWishResponse[]
+
+  deathVerificationCase DeathVerificationCase?
 }
 
 // "People I Love". A contact record owned by one customer, not a login account.
@@ -78,8 +80,9 @@ model Recipient {
   @@index([ownerUserId])
 }
 
-// Nominated to help with post-death actions later. An owned contact record,
-// not a login account, and it grants no access to the owner's content.
+// Nominated to help with post-death actions. An owned contact record, never
+// a User: no password or role. Signs in by email OTP (Step 14) to report a
+// death, and gets no access to the owner's content.
 // The migration adds a CHECK that email or mobile is set.
 model TrustedContact {
   id          String @id @default(uuid()) @db.Uuid
@@ -89,14 +92,167 @@ model TrustedContact {
   firstName    String
   lastName     String?
   relationship String?
-  email        String?
+  email        String? // stored normalized (trim + lowercase)
   mobile       String?
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
+  deathReports DeathReport[]
+
   @@index([ownerUserId])
+  // Trusted Contact OTP eligibility and account lookup by signed-in email.
+  @@index([email])
+}
+
+// PENDING_VERIFICATION → SAFEGUARD_ACTIVE → READY_FOR_REVIEW → VERIFIED (Step 15).
+// CANCELLED (Customer confirmed alive, from any open state) and REJECTED
+// (admin, from READY_FOR_REVIEW) are terminal, like VERIFIED.
+enum DeathVerificationCaseStatus {
+  PENDING_VERIFICATION
+  SAFEGUARD_ACTIVE
+  READY_FOR_REVIEW
+  VERIFIED
+  REJECTED
+  CANCELLED
+}
+
+// One canonical case per Customer. A report is NOT proof of death. Only an
+// explicit admin verification (VERIFIED) activates death-triggered Messages;
+// nothing else changes the User, Messages, schedules, releases or grants.
+model DeathVerificationCase {
+  id          String @id @default(uuid()) @db.Uuid
+  ownerUserId String @unique @db.Uuid
+  owner       User   @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+
+  status     DeathVerificationCaseStatus @default(PENDING_VERIFICATION)
+  openedAt   DateTime                    @default(now())
+  // Set with every terminal status (VERIFIED, REJECTED, CANCELLED).
+  resolvedAt DateTime?
+
+  // Safety notice to the account holder; the safeguard starts only after a
+  // successful send. safeguardEndsAt is stored, so a later config change never
+  // moves a running window.
+  safetyNoticeSentAt        DateTime?
+  safetyNoticeLastAttemptAt DateTime?
+  safetyNoticeAttemptCount  Int       @default(0)
+  safeguardStartedAt        DateTime?
+  safeguardEndsAt           DateTime?
+
+  // verifiedDeathAt = the approved time of death (drives AFTER_DEATH);
+  // verifiedAt = when For After approved it (drives ON_DEATH).
+  verifiedAt      DateTime?
+  verifiedDeathAt DateTime?
+  // Admin ids are kept as plain history (no FK), like audit actors.
+  verifiedByUserId String?   @db.Uuid
+  rejectedAt       DateTime?
+  rejectedByUserId String?   @db.Uuid
+  cancelledAt      DateTime?
+  // Admin-only; never returned to Customers, Trusted Contacts or Recipients.
+  adminDecisionNote String?
+
+  // Activation rows were built for every then-scheduled death-trigger Message.
+  // Not proof that anything has been released.
+  deathTriggersActivatedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reports     DeathReport[]
+  auditEvents DeathVerificationAuditEvent[]
+  activations DeathTriggeredMessageActivation[]
+
+  @@index([status])
+}
+
+enum DeathVerificationAuditEventType {
+  REPORT_RECEIVED
+  SAFETY_NOTICE_SENT
+  SAFEGUARD_STARTED
+  SAFEGUARD_ELAPSED
+  CUSTOMER_CONFIRMED_ALIVE
+  ADMIN_VERIFIED
+  ADMIN_REJECTED
+  DEATH_TRIGGER_ACTIVATION_STARTED
+  DEATH_TRIGGER_ACTIVATION_COMPLETED
+}
+
+enum DeathVerificationActorType {
+  SYSTEM
+  CUSTOMER
+  TRUSTED_CONTACT
+  ADMIN
+}
+
+// Append-only history of a case. Written in the same transaction as the change
+// it records. No free text or JSON: notes live on the case/report only.
+model DeathVerificationAuditEvent {
+  id                      String                @id @default(uuid()) @db.Uuid
+  deathVerificationCaseId String                @db.Uuid
+  deathVerificationCase   DeathVerificationCase @relation(fields: [deathVerificationCaseId], references: [id], onDelete: Cascade)
+
+  eventType DeathVerificationAuditEventType
+  actorType DeathVerificationActorType
+  // Plain ids (no FK) so history survives a later account or contact deletion.
+  actorUserId           String? @db.Uuid
+  actorTrustedContactId String? @db.Uuid
+
+  createdAt DateTime @default(now())
+
+  @@index([deathVerificationCaseId, createdAt])
+}
+
+// Durable execution state for ON_DEATH / AFTER_DEATH Messages after a VERIFIED
+// case. MessageSchedule keeps its original meaning; dueAt lives here.
+model DeathTriggeredMessageActivation {
+  id        String  @id @default(uuid()) @db.Uuid
+  messageId String  @unique @db.Uuid
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  deathVerificationCaseId String                @db.Uuid
+  deathVerificationCase   DeathVerificationCase @relation(fields: [deathVerificationCaseId], references: [id], onDelete: Cascade)
+
+  triggerType ReleaseTriggerType
+  activatedAt DateTime
+  // ON_DEATH: verifiedAt. AFTER_DEATH: verifiedDeathAt + afterDeathDays.
+  dueAt       DateTime
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([deathVerificationCaseId])
+  @@index([dueAt])
+}
+
+// One report per Trusted Contact per case. Reporter details are snapshots
+// taken at submission, so later edits to the TrustedContact never change it.
+model DeathReport {
+  id                      String                @id @default(uuid()) @db.Uuid
+  deathVerificationCaseId String                @db.Uuid
+  deathVerificationCase   DeathVerificationCase @relation(fields: [deathVerificationCaseId], references: [id], onDelete: Cascade)
+
+  // Cascade, like RecipientMessageAccessGrant: Restrict/NoAction would block
+  // deleting the owner's account, because PostgreSQL checks them after the
+  // TrustedContact cascade and before the case cascade. The API only
+  // soft-deletes Trusted Contacts, so reports survive a contact's removal;
+  // the only hard delete is the owner's, which removes the case anyway.
+  reportedByTrustedContactId String         @db.Uuid
+  reportedByTrustedContact   TrustedContact @relation(fields: [reportedByTrustedContactId], references: [id], onDelete: Cascade)
+
+  reporterFirstNameSnapshot String
+  reporterLastNameSnapshot  String?
+  reporterEmailNormalized   String?
+  reporterMobileNormalized  String?
+
+  // Calendar date only (no time/timezone), so it cannot shift a day.
+  reportedDateOfDeath DateTime? @db.Date
+  note                String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([deathVerificationCaseId, reportedByTrustedContactId])
+  @@index([reportedByTrustedContactId])
 }
 
 // Future values are defined now; the API only accepts TEXT until media exists.
@@ -131,8 +287,9 @@ model Message {
   recipients   MessageRecipient[]
   schedule     MessageSchedule?
   mediaAssets  MediaAsset[]
-  release      MessageRelease?
-  accessGrants RecipientMessageAccessGrant[]
+  release         MessageRelease?
+  accessGrants    RecipientMessageAccessGrant[]
+  deathActivation DeathTriggeredMessageActivation?
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
