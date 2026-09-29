@@ -73,6 +73,7 @@ model Recipient {
   deletedAt DateTime?
 
   messageRecipients MessageRecipient[]
+  accessGrants      RecipientMessageAccessGrant[]
 
   @@index([ownerUserId])
 }
@@ -116,7 +117,7 @@ enum MessageStatus {
 }
 
 // Private content owned by one customer. Only RELEASED messages may ever be
-// shown to an assigned Recipient (recipient access is not built yet).
+// shown to a Recipient, and only through a RecipientMessageAccessGrant.
 model Message {
   id          String @id @default(uuid()) @db.Uuid
   ownerUserId String @db.Uuid
@@ -127,10 +128,11 @@ model Message {
   textContent String?
   status      MessageStatus      @default(DRAFT)
 
-  recipients  MessageRecipient[]
-  schedule    MessageSchedule?
-  mediaAssets MediaAsset[]
-  release     MessageRelease?
+  recipients   MessageRecipient[]
+  schedule     MessageSchedule?
+  mediaAssets  MediaAsset[]
+  release      MessageRelease?
+  accessGrants RecipientMessageAccessGrant[]
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -141,6 +143,7 @@ model Message {
 }
 
 // "This message is intended for this Recipient", not "may read it now".
+// Pre-release assignment only; Recipient Portal access uses the grant below.
 model MessageRecipient {
   id          String    @id @default(uuid()) @db.Uuid
   messageId   String    @db.Uuid
@@ -187,7 +190,8 @@ model MessageSchedule {
 // Durable evidence that a Message reached RELEASED (Step 12). Written in the
 // same transaction as the status change; at most one per Message, so retries
 // and concurrent workers cannot release twice. Release is not delivery: no
-// content, recipient data or URLs are copied here.
+// content, recipient data or URLs are copied here (contact snapshots live in
+// RecipientMessageAccessGrant).
 model MessageRelease {
   id        String  @id @default(uuid()) @db.Uuid
   messageId String  @unique @db.Uuid
@@ -198,8 +202,42 @@ model MessageRelease {
   scheduledFor DateTime?
   releasedAt   DateTime
 
+  accessGrants RecipientMessageAccessGrant[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// Post-release authorization (Step 13): this released Message was released to
+// this Recipient, reachable by these contact details. Written in the release
+// transaction and frozen: later Recipient edits or soft deletes do not move or
+// revoke it. Only contact details are copied, never notes, birthday or
+// relationship. Internal only; never returned by the API.
+model RecipientMessageAccessGrant {
+  id               String         @id @default(uuid()) @db.Uuid
+  messageReleaseId String         @db.Uuid
+  messageRelease   MessageRelease @relation(fields: [messageReleaseId], references: [id], onDelete: Cascade)
+  messageId        String         @db.Uuid
+  message          Message        @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  // Cascade, not Restrict: the API only soft-deletes Recipients, so a grant
+  // survives "remove from People I Love". A hard delete only happens when the
+  // owner account itself is deleted, which removes the Messages anyway;
+  // Restrict/NoAction would block that account deletion.
+  recipientId      String         @db.Uuid
+  recipient        Recipient      @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+
+  // Snapshots at release time. Email: trimmed + lowercased (same as the API).
+  // Mobile: as stored (no normalization exists yet; SMS OTP is deferred).
+  recipientEmailNormalized  String?
+  recipientMobileNormalized String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([messageReleaseId, recipientId])
+  @@index([messageId])
+  @@index([recipientId])
+  @@index([recipientEmailNormalized])
+  @@index([recipientMobileNormalized])
 }
 
 // VIDEO is reserved; the API accepts PHOTO and AUDIO only.
