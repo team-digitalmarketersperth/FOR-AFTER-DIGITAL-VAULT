@@ -53,6 +53,89 @@ model User {
   myWishResponses  MyWishResponse[]
 
   deathVerificationCase DeathVerificationCase?
+
+  // ADMIN / SUPER_ADMIN only (Step 16).
+  adminMfaCredential    AdminMfaCredential?
+  adminMfaRecoveryCodes AdminMfaRecoveryCode[]
+}
+
+// Admin TOTP (Step 16). Written by setup with enabledAt null; confirm sets
+// enabledAt. The secret is AES-256-GCM encrypted with ADMIN_TOTP_ENCRYPTION_KEY
+// and never leaves the API after enrollment.
+model AdminMfaCredential {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @unique @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  totpSecretEncrypted String
+  enabledAt           DateTime?
+  // RFC 6238 time step of the last accepted code; replays of it or older fail.
+  lastUsedTimeStep    BigInt?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// One-time admin recovery codes. Only a SHA-256 of each (80-bit) code is stored.
+model AdminMfaRecoveryCode {
+  id       String    @id @default(uuid()) @db.Uuid
+  userId   String    @db.Uuid
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash String    @unique
+  usedAt   DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+enum AuditEventType {
+  ADMIN_PASSWORD_AUTH_SUCCEEDED
+  ADMIN_MFA_SETUP_COMPLETED
+  ADMIN_MFA_VERIFIED
+  ADMIN_MFA_FAILED
+  ADMIN_RECOVERY_CODE_USED
+  ADMIN_LOGIN
+  ADMIN_LOGOUT
+  USER_SUSPENDED
+  USER_REACTIVATED
+  ADMIN_VIEWED_USER
+  ADMIN_VIEWED_DEATH_CASE
+  DEATH_VERIFICATION_VERIFIED
+  DEATH_VERIFICATION_REJECTED
+  FAILED_JOB_RETRIED
+}
+
+// Only admin actors write generic audit rows so far.
+enum AuditActorType {
+  ADMIN
+  SUPER_ADMIN
+}
+
+// Generic append-only audit trail (Step 16). The migration adds a trigger that
+// rejects UPDATE and DELETE. Plain ids, no FKs, so history outlives accounts.
+// Never holds secrets, codes, private content or raw IPs (ipPrefix is /24 or /48).
+model AuditLog {
+  id String @id @default(uuid()) @db.Uuid
+
+  eventType   AuditEventType
+  actorType   AuditActorType
+  actorUserId String?        @db.Uuid
+
+  subjectType String?
+  subjectId   String?
+
+  ipPrefix  String?
+  userAgent String?
+
+  metadata Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([eventType])
+  @@index([actorUserId])
+  @@index([subjectType, subjectId])
+  @@index([createdAt])
 }
 
 // "People I Love". A contact record owned by one customer, not a login account.
