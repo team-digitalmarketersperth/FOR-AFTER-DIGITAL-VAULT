@@ -2,8 +2,10 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { createObserveModule } from '@nestjs/observe';
 import { AppController } from './app.controller.js';
+import { AdminModule } from './admin/admin.module.js';
 import { AppService } from './app.service.js';
 import { AuthModule } from './auth/auth.module.js';
+import { DeathVerificationModule } from './death-verification/death-verification.module.js';
 import { HealthModule } from './health/health.module.js';
 import { MediaModule } from './media/media.module.js';
 import { MemoryVaultModule } from './memory-vault/memory-vault.module.js';
@@ -16,6 +18,8 @@ import { RecipientAuthModule } from './recipient-auth/recipient-auth.module.js';
 import { RecipientPortalModule } from './recipient-portal/recipient-portal.module.js';
 import { RecipientsModule } from './recipients/recipients.module.js';
 import { RedisModule } from './redis/redis.module.js';
+import { TrustedContactAuthModule } from './trusted-contact-auth/trusted-contact-auth.module.js';
+import { TrustedContactPortalModule } from './trusted-contact-portal/trusted-contact-portal.module.js';
 import { TrustedContactsModule } from './trusted-contacts/trusted-contacts.module.js';
 
 export const { ObserveModule, ObserveInstrument } = createObserveModule();
@@ -37,6 +41,10 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
     MyWishesModule,
     RecipientAuthModule,
     RecipientPortalModule,
+    TrustedContactAuthModule,
+    TrustedContactPortalModule,
+    DeathVerificationModule,
+    AdminModule,
     // Distributed tracing, auto-correlated logs, request/job metrics, error
     // telemetry, alarms, and more — out of the box. Sign up at https://observe.nestjs.com
     // Only loaded when both keys are in .env; otherwise the collector rejects
