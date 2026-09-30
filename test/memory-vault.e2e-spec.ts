@@ -3,6 +3,7 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import session from 'express-session';
 import request from 'supertest';
+import { adminSignIn } from './admin-sign-in.js';
 import { AuthModule } from '../src/auth/auth.module.js';
 import { configureApp } from '../src/config/app.setup.js';
 import { MediaStorage } from '../src/media/storage/media-storage.service.js';
@@ -99,7 +100,11 @@ describe('Memory Vault (e2e, PostgreSQL, mocked storage)', () => {
       .expect(401);
     for (const role of ['ADMIN', 'SUPER_ADMIN'] as const) {
       await prisma.user.update({ where: { email: emails[2] }, data: { role } });
-      const admin = await signIn(emails[2]);
+      // Step 16: each role enrolls MFA afresh (test reset only).
+      await prisma.adminMfaCredential.deleteMany({
+        where: { user: { email: emails[2] } },
+      });
+      const { agent: admin } = await adminSignIn(app, emails[2], password);
       await admin.get(root).expect(403);
       await admin
         .post(root)

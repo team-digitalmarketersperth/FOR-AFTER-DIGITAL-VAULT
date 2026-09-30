@@ -3,6 +3,7 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import session from 'express-session';
 import request from 'supertest';
+import { adminSignIn } from './admin-sign-in.js';
 import { AuthModule } from '../src/auth/auth.module.js';
 import { configureApp } from '../src/config/app.setup.js';
 import { MediaModule } from '../src/media/media.module.js';
@@ -313,7 +314,8 @@ describe('Message composition + schedule readiness (e2e)', () => {
       where: { email: emails[2] },
       data: { role: 'ADMIN' },
     });
-    const admin = await signIn(emails[2]);
+    // Step 16: an admin session needs password + TOTP.
+    const { agent: admin } = await adminSignIn(app, emails[2], password);
     await admin.post(schedule(id)).send(onDeath).expect(403);
     await admin.get(media(id)).expect(403);
   });

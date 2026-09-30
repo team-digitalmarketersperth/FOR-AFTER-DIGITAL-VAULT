@@ -3,6 +3,7 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import session from 'express-session';
 import request from 'supertest';
+import { adminSignIn } from './admin-sign-in.js';
 import { AuthModule } from '../src/auth/auth.module.js';
 import { configureApp } from '../src/config/app.setup.js';
 import { PrismaModule } from '../src/prisma/prisma.module.js';
@@ -23,7 +24,10 @@ describe('Recipients (e2e, PostgreSQL)', () => {
 
   const signIn = async (email: string) => {
     const agent = request.agent(app.getHttpServer());
-    await agent.post('/api/v1/auth/login').send({ email, password }).expect(200);
+    await agent
+      .post('/api/v1/auth/login')
+      .send({ email, password })
+      .expect(200);
     return agent;
   };
 
@@ -139,9 +143,7 @@ describe('Recipients (e2e, PostgreSQL)', () => {
     for (const res of responses) {
       expect(JSON.stringify(res.body)).not.toMatch(/owner|belongs|Sofia/i);
     }
-    expect((await john.get('/api/v1/recipients').expect(200)).body).toEqual(
-      [],
-    );
+    expect((await john.get('/api/v1/recipients').expect(200)).body).toEqual([]);
     // Untouched for Lisa.
     const still = await lisa.get(url).expect(200);
     expect(still.body.firstName).toBe('Sofia');
@@ -152,7 +154,8 @@ describe('Recipients (e2e, PostgreSQL)', () => {
       where: { email: emails[2] },
       data: { role: 'ADMIN' },
     });
-    const admin = await signIn(emails[2]);
+    // Step 16: an admin session needs password + TOTP.
+    const { agent: admin } = await adminSignIn(app, emails[2], password);
     await admin.get('/api/v1/recipients').expect(403);
   });
 

@@ -3,6 +3,7 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import session from 'express-session';
 import request from 'supertest';
+import { adminSignIn } from './admin-sign-in.js';
 import { AuthModule } from '../src/auth/auth.module.js';
 import { configureApp } from '../src/config/app.setup.js';
 import { MediaModule } from '../src/media/media.module.js';
@@ -119,7 +120,8 @@ describe('Media (e2e, PostgreSQL, mocked storage)', () => {
       where: { email: emails[2] },
       data: { role: 'ADMIN' },
     });
-    const admin = await signIn(emails[2]);
+    // Step 16: an admin session needs password + TOTP.
+    const { agent: admin } = await adminSignIn(app, emails[2], password);
     await admin.get(base).expect(403);
     await admin.post(`${base}/upload-url`).send(photo).expect(403);
     await lisa.get('/api/v1/messages/not-a-uuid/media').expect(400);
