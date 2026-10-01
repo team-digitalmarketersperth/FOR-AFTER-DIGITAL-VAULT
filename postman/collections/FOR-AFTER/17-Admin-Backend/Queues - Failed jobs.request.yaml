@@ -1,0 +1,22 @@
+$kind: http-request
+name: 'Queues - Failed jobs'
+order: 55000
+url: '{{baseUrl}}/api/v1/admin/system/queues/{{queueName}}/failed?limit=25'
+method: GET
+queryParams:
+  - key: 'limit'
+    value: '25'
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 200', function () {
+        pm.response.to.have.status(200);
+      });
+      const items = pm.response.json().items;
+      pm.test('sanitized fields only', function () {
+        items.forEach((j) => pm.expect(j).to.not.have.property('stacktrace'));
+      });
+      pm.collectionVariables.set('failedJobId', items.length ? items[0].jobId : '');

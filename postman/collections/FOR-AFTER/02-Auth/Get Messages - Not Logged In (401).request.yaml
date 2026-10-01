@@ -1,0 +1,14 @@
+$kind: http-request
+name: 'Get Messages - Not Logged In (401)'
+order: 13000
+url: '{{baseUrl}}/api/v1/messages'
+method: GET
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 401', function () {
+        pm.response.to.have.status(401);
+      });

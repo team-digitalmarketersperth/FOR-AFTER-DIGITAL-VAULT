@@ -1,0 +1,17 @@
+$kind: http-request
+name: 'Get Recipient by ID'
+order: 7000
+url: '{{baseUrl}}/api/v1/recipients/{{recipientId}}'
+method: GET
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 200', function () {
+        pm.response.to.have.status(200);
+      });
+      pm.test('Id matches', function () {
+        pm.expect(pm.response.json().id).to.eql(pm.collectionVariables.get('recipientId'));
+      });

@@ -1,0 +1,14 @@
+$kind: http-request
+name: 'Get Me - Not Logged In (401)'
+order: 11000
+url: '{{baseUrl}}/api/v1/auth/me'
+method: GET
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 401', function () {
+        pm.response.to.have.status(401);
+      });

@@ -1,0 +1,14 @@
+$kind: http-request
+name: 'Get Prompt - Bad Key Format (400)'
+order: 5000
+url: '{{baseUrl}}/api/v1/my-story/prompts/BAD KEY!'
+method: GET
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 400', function () {
+        pm.response.to.have.status(400);
+      });

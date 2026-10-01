@@ -1,0 +1,28 @@
+$kind: http-request
+name: 'Report - Oversized Note (400)'
+order: 8000
+url: '{{baseUrl}}/api/v1/trusted-contact/accounts/{{reportTrustedContactId}}/death-reports'
+method: POST
+auth:
+  type: noauth
+headers:
+  - key: Content-Type
+    value: 'application/json'
+body:
+  type: json
+  content: |-
+    {
+      "note": "{{longNote}}",
+      "confirmReport": true
+    }
+scripts:
+  - type: beforeRequest
+    language: text/javascript
+    code: |-
+      pm.variables.set('longNote', 'x'.repeat(2001));
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 400', function () {
+        pm.response.to.have.status(400);
+      });

@@ -1,0 +1,21 @@
+$kind: http-request
+name: 'Upload File to Storage (manual)'
+description: |-
+  Optional. PUTs the file straight to Backblaze B2 using the presigned {{uploadUrl}}.
+  Before sending: Body > binary > choose a JPEG whose size is exactly the sizeBytes sent in Get Upload URL (1048576),
+  or edit sizeBytes to match your file. Without this step, Complete Upload returns 409.
+order: 9000
+url: '{{uploadUrl}}'
+method: PUT
+auth:
+  type: noauth
+headers:
+  - key: Content-Type
+    value: 'image/jpeg'
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 200', function () {
+        pm.response.to.have.status(200);
+      });

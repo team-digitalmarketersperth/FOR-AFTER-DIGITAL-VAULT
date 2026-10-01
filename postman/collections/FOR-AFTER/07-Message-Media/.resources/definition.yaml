@@ -1,0 +1,5 @@
+$kind: collection
+name: '07-Message-Media'
+description: |-
+  Steps 7 and 8. PHOTO/AUDIO media on a DRAFT message. Needs object storage (Backblaze B2) configured in .env. The binary upload goes directly to storage via the presigned uploadUrl.
+order: 7

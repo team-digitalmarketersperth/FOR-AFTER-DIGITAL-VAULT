@@ -1,0 +1,14 @@
+$kind: http-request
+name: 'Admin - Get Case - Invalid UUID (400)'
+order: 23000
+url: '{{baseUrl}}/api/v1/admin/death-verifications/not-a-uuid'
+method: GET
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 400', function () {
+        pm.response.to.have.status(400);
+      });

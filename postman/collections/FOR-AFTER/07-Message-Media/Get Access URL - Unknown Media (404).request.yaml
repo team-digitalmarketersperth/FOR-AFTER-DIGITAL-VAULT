@@ -1,0 +1,14 @@
+$kind: http-request
+name: 'Get Access URL - Unknown Media (404)'
+order: 12000
+url: '{{baseUrl}}/api/v1/messages/{{messageId}}/media/00000000-0000-4000-8000-000000000000/access-url'
+method: GET
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 404', function () {
+        pm.response.to.have.status(404);
+      });

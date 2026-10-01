@@ -1,0 +1,6 @@
+$kind: collection
+name: '11-Message-Release'
+description: |-
+  Step 12. There is no public release endpoint: BullMQ releases FIXED_DATE messages when they fall due, creating a MessageRelease and a RecipientMessageAccessGrant for each recipient.
+  Run "Schedule Release - Fixed Date in 1 Minute", wait about 60-90 seconds, then run "Get Release Message - RELEASED". The worker must be running (npm run start:dev).
+order: 11

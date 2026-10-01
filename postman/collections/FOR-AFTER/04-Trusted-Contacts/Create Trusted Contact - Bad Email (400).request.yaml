@@ -1,0 +1,24 @@
+$kind: http-request
+name: 'Create Trusted Contact - Bad Email (400)'
+order: 3000
+url: '{{baseUrl}}/api/v1/trusted-contacts'
+method: POST
+auth:
+  type: noauth
+headers:
+  - key: Content-Type
+    value: 'application/json'
+body:
+  type: json
+  content: |-
+    {
+      "firstName": "Arjun",
+      "email": "bad-email"
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 400', function () {
+        pm.response.to.have.status(400);
+      });

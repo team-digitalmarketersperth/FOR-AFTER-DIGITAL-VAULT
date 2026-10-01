@@ -1,0 +1,18 @@
+[
+  {
+    "corsRuleName": "forAfterLocalUpload",
+    "allowedOrigins": [
+      "http://localhost:3000"
+    ],
+    "allowedHeaders": [
+      "content-type"
+    ],
+    "allowedOperations": [
+      "s3_put"
+    ],
+    "exposeHeaders": [
+      "etag"
+    ],
+    "maxAgeSeconds": 3600
+  }
+]

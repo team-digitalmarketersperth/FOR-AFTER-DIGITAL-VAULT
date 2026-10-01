@@ -1,0 +1,26 @@
+$kind: http-request
+name: 'Users - Find folder 16 PASSED Customer'
+description: |-
+  Skipped unless folder 16 ran in this session (its Customer is verified deceased → PASSED).
+order: 46000
+url: '{{baseUrl}}/api/v1/admin/users?search={{dvCustomerEmail}}'
+method: GET
+queryParams:
+  - key: 'search'
+    value: '{{dvCustomerEmail}}'
+auth:
+  type: noauth
+scripts:
+  - type: beforeRequest
+    language: text/javascript
+    code: |-
+      if (!pm.collectionVariables.get('dvCustomerEmail')) pm.execution.skipRequest();
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 200', function () {
+        pm.response.to.have.status(200);
+      });
+      const u = pm.response.json().items[0];
+      pm.test('PASSED', function () { pm.expect(u.status).to.eql('PASSED'); });
+      pm.collectionVariables.set('dvPassedUserId', u.id);

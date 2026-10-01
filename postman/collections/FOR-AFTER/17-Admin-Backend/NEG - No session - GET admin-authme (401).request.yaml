@@ -1,0 +1,14 @@
+$kind: http-request
+name: 'NEG - No session - GET /admin-auth/me (401)'
+order: 14000
+url: '{{baseUrl}}/api/v1/admin-auth/me'
+method: GET
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 401', function () {
+        pm.response.to.have.status(401);
+      });

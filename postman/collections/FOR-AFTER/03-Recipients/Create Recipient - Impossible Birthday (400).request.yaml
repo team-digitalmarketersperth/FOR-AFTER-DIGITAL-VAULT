@@ -1,0 +1,24 @@
+$kind: http-request
+name: 'Create Recipient - Impossible Birthday (400)'
+order: 5000
+url: '{{baseUrl}}/api/v1/recipients'
+method: POST
+auth:
+  type: noauth
+headers:
+  - key: Content-Type
+    value: 'application/json'
+body:
+  type: json
+  content: |-
+    {
+      "firstName": "Sofia",
+      "birthday": "2023-02-30"
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 400', function () {
+        pm.response.to.have.status(400);
+      });

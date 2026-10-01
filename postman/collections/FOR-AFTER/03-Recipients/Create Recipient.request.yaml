@@ -1,0 +1,36 @@
+$kind: http-request
+name: 'Create Recipient'
+description: |-
+  recipientEmail is also used later to sign in to the Recipient Portal.
+order: 1000
+url: '{{baseUrl}}/api/v1/recipients'
+method: POST
+auth:
+  type: noauth
+headers:
+  - key: Content-Type
+    value: 'application/json'
+body:
+  type: json
+  content: |-
+    {
+      "firstName": "Sofia",
+      "lastName": "Singh",
+      "relationship": "Daughter",
+      "email": "{{recipientEmail}}",
+      "mobile": "+61400000001",
+      "birthday": "2005-05-15",
+      "privateNote": "My daughter"
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 201', function () {
+        pm.response.to.have.status(201);
+      });
+      const json = pm.response.json();
+      pm.test('Response has id', function () {
+        pm.expect(json).to.have.property('id');
+      });
+      pm.collectionVariables.set('recipientId', json.id);

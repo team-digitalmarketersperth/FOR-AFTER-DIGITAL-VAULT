@@ -1,0 +1,20 @@
+$kind: http-request
+name: 'Get Case Status'
+order: 16000
+url: '{{baseUrl}}/api/v1/trusted-contact/accounts/{{reportTrustedContactId}}/death-verification'
+method: GET
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 200', function () {
+        pm.response.to.have.status(200);
+      });
+      pm.test('open case (Step 15: SAFEGUARD_ACTIVE once the notice is sent), reportedByYou, no counts', function () {
+        const json = pm.response.json();
+        pm.expect(json.status).to.be.oneOf(['PENDING_VERIFICATION', 'SAFEGUARD_ACTIVE', 'READY_FOR_REVIEW']);
+        pm.expect(json.reportedByYou).to.eql(true);
+        pm.expect(Object.keys(json).sort()).to.eql(['openedAt', 'reportedByYou', 'status']);
+      });

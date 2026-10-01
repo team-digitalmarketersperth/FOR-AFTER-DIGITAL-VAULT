@@ -1,0 +1,17 @@
+$kind: http-request
+name: 'NEG - Users - limit over 100 (400)'
+order: 32000
+url: '{{baseUrl}}/api/v1/admin/users?limit=101'
+method: GET
+queryParams:
+  - key: 'limit'
+    value: '101'
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 400', function () {
+        pm.response.to.have.status(400);
+      });

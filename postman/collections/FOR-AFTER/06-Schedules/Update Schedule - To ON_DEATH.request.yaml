@@ -1,0 +1,23 @@
+$kind: http-request
+name: 'Update Schedule - To ON_DEATH'
+order: 14000
+url: '{{baseUrl}}/api/v1/messages/{{messageId}}/schedule'
+method: PATCH
+auth:
+  type: noauth
+headers:
+  - key: Content-Type
+    value: 'application/json'
+body:
+  type: json
+  content: |-
+    {
+      "triggerType": "ON_DEATH"
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 200', function () {
+        pm.response.to.have.status(200);
+      });

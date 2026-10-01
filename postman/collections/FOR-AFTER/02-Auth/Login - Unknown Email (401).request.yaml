@@ -1,0 +1,24 @@
+$kind: http-request
+name: 'Login - Unknown Email (401)'
+order: 7000
+url: '{{baseUrl}}/api/v1/auth/login'
+method: POST
+auth:
+  type: noauth
+headers:
+  - key: Content-Type
+    value: 'application/json'
+body:
+  type: json
+  content: |-
+    {
+      "email": "nobody.here@example.com",
+      "password": "StrongPassword123!"
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 401', function () {
+        pm.response.to.have.status(401);
+      });

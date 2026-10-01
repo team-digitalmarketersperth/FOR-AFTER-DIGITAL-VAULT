@@ -1,0 +1,14 @@
+$kind: http-request
+name: 'Get Me - No Trusted Contact Session (401)'
+order: 6000
+url: '{{baseUrl}}/api/v1/trusted-contact-auth/me'
+method: GET
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 401', function () {
+        pm.response.to.have.status(401);
+      });

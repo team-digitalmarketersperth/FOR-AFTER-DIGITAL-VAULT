@@ -1,0 +1,29 @@
+$kind: http-request
+name: 'Alive - Confirm Alive'
+order: 48000
+url: '{{baseUrl}}/api/v1/death-verification/me/confirm-alive'
+method: POST
+auth:
+  type: noauth
+headers:
+  - key: Content-Type
+    value: 'application/json'
+body:
+  type: json
+  content: |-
+    {
+      "confirmAlive": true
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 200', function () {
+        pm.response.to.have.status(200);
+      });
+      pm.test('case status is CANCELLED', function () {
+        pm.expect(pm.response.json().status).to.eql('CANCELLED');
+      });
+      pm.test('can no longer confirm', function () {
+        pm.expect(pm.response.json().canConfirmAlive).to.eql(false);
+      });

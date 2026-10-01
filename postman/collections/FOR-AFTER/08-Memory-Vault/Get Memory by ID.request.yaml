@@ -1,0 +1,14 @@
+$kind: http-request
+name: 'Get Memory by ID'
+order: 8000
+url: '{{baseUrl}}/api/v1/memory-vault/{{memoryVaultItemId}}'
+method: GET
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 200', function () {
+        pm.response.to.have.status(200);
+      });

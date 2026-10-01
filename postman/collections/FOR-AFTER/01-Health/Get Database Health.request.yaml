@@ -1,0 +1,19 @@
+$kind: http-request
+name: 'Get Database Health'
+order: 2000
+url: '{{baseUrl}}/health/database'
+method: GET
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 200', function () {
+        pm.response.to.have.status(200);
+      });
+      pm.test('Response has status, database', function () {
+        const json = pm.response.json();
+        pm.expect(json).to.have.property('status');
+        pm.expect(json).to.have.property('database');
+      });

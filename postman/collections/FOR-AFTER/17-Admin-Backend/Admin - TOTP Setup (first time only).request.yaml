@@ -1,0 +1,40 @@
+$kind: http-request
+name: 'Admin - TOTP Setup (first time only)'
+description: |-
+  First enrollment only (409 once the admin is enrolled, which is fine).
+
+  On 200: add the returned secret (or otpauthUri as a QR code) to an authenticator app
+  (Google Authenticator, 1Password, Authy, ...). For automated runs you may also set
+  adminTotpSecret as a CURRENT value (not initial; never save/commit it). The secret
+  is shown only now and is stored encrypted by the API.
+order: 17000
+url: '{{baseUrl}}/api/v1/admin-auth/totp/setup'
+method: POST
+auth:
+  type: noauth
+headers:
+  - key: Content-Type
+    value: 'application/json'
+body:
+  type: json
+  content: |-
+    {
+      "challengeId": "{{adminMfaChallengeId}}"
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 200 or 409', function () {
+        pm.expect([200,409]).to.include(pm.response.code);
+      });
+      if (pm.response.code === 200) {
+        const j = pm.response.json();
+        pm.test('secret + otpauth URI returned once', function () {
+          pm.expect(j.secret).to.match(/^[A-Z2-7]{32}$/);
+          pm.expect(j.otpauthUri).to.match(/^otpauth:\/\/totp\//);
+        });
+        // Current value only; Postman does not sync current values.
+        pm.collectionVariables.set('adminTotpSecret', j.secret);
+        console.log('Add to your authenticator app: ' + j.otpauthUri);
+      }

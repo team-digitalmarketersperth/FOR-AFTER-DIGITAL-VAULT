@@ -1,0 +1,13 @@
+$kind: collection
+name: '16-Death-Verification'
+description: |-
+  Step 15. Report → safety notice → safeguard → READY_FOR_REVIEW → admin VERIFIED → ON_DEATH/AFTER_DEATH release.
+
+  Before running:
+  1. .env: DEATH_VERIFICATION_NOTICE_DELIVERY_MODE=console and DEATH_VERIFICATION_SAFEGUARD_SECONDS=60 (development only), then restart the API.
+  2. Create the admin once (there is no admin sign-up API): register {{adminEmail}} with POST /auth/register, then in PostgreSQL:
+     UPDATE "User" SET role = 'ADMIN' WHERE email = 'admin.dev@example.test';
+  3. Folder 16 registers fresh fictional customers each run. Never point it at a real account: VERIFIED blocks that customer's login for good.
+  4. Trusted Contact code: copy the [DEV ONLY] Trusted Contact OTP from the API terminal into tcOtpCode2 before "TC Verify OTP".
+  Requests marked "Wait 65 s" pause 65 s so the safeguard can end.
+order: 16

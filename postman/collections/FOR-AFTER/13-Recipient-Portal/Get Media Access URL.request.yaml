@@ -1,0 +1,21 @@
+$kind: http-request
+name: 'Get Media Access URL'
+description: |-
+  Only works when the released message has READY media (portalMediaAssetId is set by the previous request).
+order: 7000
+url: '{{baseUrl}}/api/v1/recipient/messages/{{releaseMessageId}}/media/{{portalMediaAssetId}}/access-url'
+method: GET
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 200', function () {
+        pm.response.to.have.status(200);
+      });
+      pm.test('Response has url, expiresAt', function () {
+        const json = pm.response.json();
+        pm.expect(json).to.have.property('url');
+        pm.expect(json).to.have.property('expiresAt');
+      });

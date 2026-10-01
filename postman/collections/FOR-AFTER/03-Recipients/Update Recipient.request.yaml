@@ -1,0 +1,27 @@
+$kind: http-request
+name: 'Update Recipient'
+order: 10000
+url: '{{baseUrl}}/api/v1/recipients/{{recipientId}}'
+method: PATCH
+auth:
+  type: noauth
+headers:
+  - key: Content-Type
+    value: 'application/json'
+body:
+  type: json
+  content: |-
+    {
+      "relationship": "Beloved daughter",
+      "privateNote": "Updated note"
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 200', function () {
+        pm.response.to.have.status(200);
+      });
+      pm.test('relationship updated', function () {
+        pm.expect(pm.response.json().relationship).to.eql('Beloved daughter');
+      });

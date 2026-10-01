@@ -1,0 +1,17 @@
+$kind: http-request
+name: 'NEG - Audit - unknown eventType (400)'
+order: 51000
+url: '{{baseUrl}}/api/v1/admin/audit-logs?eventType=NOPE'
+method: GET
+queryParams:
+  - key: 'eventType'
+    value: 'NOPE'
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 400', function () {
+        pm.response.to.have.status(400);
+      });

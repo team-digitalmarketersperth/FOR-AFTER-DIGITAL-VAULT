@@ -1,0 +1,73 @@
+$kind: http-request
+name: 'Admin - TOTP Verify'
+description: |-
+  Step 16: an admin password only returns an MFA challenge. This completes sign-in with TOTP.
+  Enroll once first with folder 17 ("Admin - TOTP Setup" / "Confirm"), then set adminTotpSecret
+  as a CURRENT value (or type adminTotpCode from your authenticator app).
+order: 19500
+url: '{{baseUrl}}/api/v1/admin-auth/totp/verify'
+method: POST
+auth:
+  type: noauth
+headers:
+  - key: Content-Type
+    value: 'application/json'
+body:
+  type: json
+  content: |-
+    {
+      "challengeId": "{{adminMfaChallengeId}}",
+      "code": "{{adminTotpCode}}"
+    }
+scripts:
+  - type: beforeRequest
+    language: text/javascript
+    code: |-
+      (function () {
+      // Admin TOTP. Set adminTotpSecret as a CURRENT value only (never save or
+      // commit it). Without it, type the 6 digits from your authenticator app
+      // into adminTotpCode before sending.
+      const secret = pm.collectionVariables.get('adminTotpSecret') || pm.environment.get('adminTotpSecret');
+      if (!secret) {
+        console.log('adminTotpSecret not set: using adminTotpCode as typed.');
+        return;
+      }
+      function hexOf(b32) {
+        const abc = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+        let bits = '';
+        for (const c of b32.replace(/=+$/, '').toUpperCase()) {
+          const v = abc.indexOf(c);
+          if (v < 0) throw new Error('adminTotpSecret is not base32');
+          bits += v.toString(2).padStart(5, '0');
+        }
+        let hex = '';
+        for (let i = 0; i + 8 <= bits.length; i += 8) {
+          hex += parseInt(bits.slice(i, i + 8), 2).toString(16).padStart(2, '0');
+        }
+        return hex;
+      }
+      function codeFor(step) {
+        const counter = CryptoJS.enc.Hex.parse(step.toString(16).padStart(16, '0'));
+        const mac = CryptoJS.HmacSHA1(counter, CryptoJS.enc.Hex.parse(hexOf(secret))).toString();
+        const o = parseInt(mac.slice(-1), 16);
+        const n = (parseInt(mac.substr(o * 2, 8), 16) & 0x7fffffff) % 1000000;
+        return String(n).padStart(6, '0');
+      }
+      const now = () => Math.floor(Date.now() / 30000);
+      const last = Number(pm.collectionVariables.get('adminTotpLastStep') || 0);
+      const step = Math.max(now(), last + 1);
+      const use = () => {
+        pm.collectionVariables.set('adminTotpCode', codeFor(step));
+        pm.collectionVariables.set('adminTotpLastStep', String(step));
+      };
+      // The API accepts the current step +-1. Wait if we already used both.
+      const waitMs = (step - 1 - now()) * 30000;
+      if (waitMs > 0) setTimeout(use, waitMs + 1000);
+      else use();
+      })();
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 200', function () {
+        pm.response.to.have.status(200);
+      });

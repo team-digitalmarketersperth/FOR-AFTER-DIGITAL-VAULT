@@ -1,0 +1,141 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+/*
+ * For After design tokens — the only place colours, radii and fonts are defined.
+ * Source of truth: the live WordPress site (see docs/frontend-design-system.md).
+ * "verified" = read from the site's CSS variables / computed styles.
+ * "inferred" = not on the site; chosen to fit it. Replace freely.
+ * Light only: the site has no dark mode.
+ */
+:root {
+  /* Brand palette (verified: Elementor/Blocksy globals on the WordPress site) */
+  --brand-aubergine: #483a4f; /* --Aubergine, primary buttons + dark bands */
+  --brand-semi-black: #2b2230; /* --Semi-Black, body text */
+  --brand-petal: #f3ecef; /* --Petal, soft buttons + blush sections */
+  --brand-lilac: #c0aec8; /* --Lilac */
+  --brand-lilac-grey: #dbd6de; /* section background */
+  --brand-bronze: #9a8067; /* --Antique-Bronze */
+  --brand-gold: #b0803c; /* palette colour 1: logo dot, social icons */
+  --brand-off-white: #fafbfc; /* body background */
+  --brand-hairline: rgb(90 92 84 / 0.14); /* --Line-ThinDark, input/card lines */
+
+  /* Semantic tokens: components use these, never the brand values directly */
+  --background: var(--brand-off-white);
+  --surface: #ffffff;
+  --surface-muted: #f6f4f6; /* inferred: between off-white and petal */
+  --foreground: var(--brand-semi-black);
+  --foreground-secondary: #4b4151; /* inferred */
+  --foreground-muted: #6b6271; /* inferred; 5.6:1 on --background */
+  --border: var(--brand-hairline);
+  --border-strong: #908595; /* inferred: 3.5:1 on white, form controls need 3:1 (WCAG 1.4.11) */
+  --primary: var(--brand-aubergine);
+  --primary-hover: #3a2e40; /* inferred */
+  --primary-foreground: var(--brand-petal);
+  --primary-soft: var(--brand-petal);
+  --success: #3d6b50; /* inferred */
+  --warning: #8a5a14; /* inferred */
+  --danger: #9f2f3a; /* inferred */
+  --sidebar-background: var(--surface);
+  --sidebar-active: var(--brand-petal);
+  --sidebar-border: var(--border);
+
+  /* shadcn/ui names, mapped onto the semantic tokens */
+  --card: var(--surface);
+  --card-foreground: var(--foreground);
+  --popover: var(--surface);
+  --popover-foreground: var(--foreground);
+  --secondary: var(--primary-soft);
+  --secondary-foreground: var(--primary);
+  --muted: var(--surface-muted);
+  --muted-foreground: var(--foreground-muted);
+  --accent: var(--primary-soft);
+  --accent-foreground: var(--primary);
+  --destructive: var(--danger);
+  --input: var(--border-strong);
+  --ring: var(--brand-aubergine);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-foreground: var(--foreground);
+  --color-foreground-secondary: var(--foreground-secondary);
+  --color-foreground-muted: var(--foreground-muted);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-soft: var(--primary-soft);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-sidebar: var(--sidebar-background);
+  --color-sidebar-active: var(--sidebar-active);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-brand-gold: var(--brand-gold);
+  --color-brand-bronze: var(--brand-bronze);
+  --color-brand-lilac-grey: var(--brand-lilac-grey);
+
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* Figtree (body/UI) + Cormorant (display): verified site fonts */
+  --font-sans: var(--font-body), ui-sans-serif, system-ui, sans-serif;
+  --font-heading: var(--font-display), ui-serif, Georgia, serif;
+
+  /* Shadows (inferred): only for floating things (menus, hovered controls) */
+  --shadow-soft: 0 6px 20px -12px rgb(43 34 48 / 0.35);
+  --shadow-menu: 0 18px 50px -20px rgb(43 34 48 / 0.35);
+
+  /* Radii: inputs 7px and panels 20px are verified; the rest inferred */
+  --radius-sm: 7px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-2xl: 24px;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    @apply font-sans;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+  /* Site headings: Cormorant 400 with tight tracking; italics carry the accent. */
+  h1,
+  h2,
+  h3 {
+    @apply font-heading font-normal tracking-tight text-foreground;
+  }
+  h1 em,
+  h2 em,
+  h3 em {
+    @apply italic;
+  }
+}
+
+@layer components {
+  /* Small uppercase label above headings and nav groups (site "eyebrow" style). */
+  .eyebrow {
+    @apply text-xs font-medium tracking-[0.14em] text-foreground-muted uppercase;
+  }
+}

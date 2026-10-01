@@ -1,0 +1,18 @@
+$kind: http-request
+name: 'Get Response'
+order: 11000
+url: '{{baseUrl}}/api/v1/my-wishes/prompts/{{wishPromptKey}}/response'
+method: GET
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 200', function () {
+        pm.response.to.have.status(200);
+      });
+      pm.test('Response has textContent', function () {
+        const json = pm.response.json();
+        pm.expect(json).to.have.property('textContent');
+      });

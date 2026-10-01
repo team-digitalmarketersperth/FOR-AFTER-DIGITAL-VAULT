@@ -1,0 +1,17 @@
+$kind: http-request
+name: 'NEG - Users - unknown query field (400)'
+order: 34000
+url: '{{baseUrl}}/api/v1/admin/users?passwordHash=x'
+method: GET
+queryParams:
+  - key: 'passwordHash'
+    value: 'x'
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 400', function () {
+        pm.response.to.have.status(400);
+      });

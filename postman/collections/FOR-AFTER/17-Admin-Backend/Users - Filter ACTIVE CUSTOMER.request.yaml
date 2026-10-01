@@ -1,0 +1,21 @@
+$kind: http-request
+name: 'Users - Filter ACTIVE CUSTOMER'
+order: 31000
+url: '{{baseUrl}}/api/v1/admin/users?status=ACTIVE&role=CUSTOMER&limit=5'
+method: GET
+queryParams:
+  - key: 'status'
+    value: 'ACTIVE'
+  - key: 'role'
+    value: 'CUSTOMER'
+  - key: 'limit'
+    value: '5'
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 200', function () {
+        pm.response.to.have.status(200);
+      });

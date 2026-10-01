@@ -1,0 +1,34 @@
+$kind: http-request
+name: 'Create Message'
+order: 1000
+url: '{{baseUrl}}/api/v1/messages'
+method: POST
+auth:
+  type: noauth
+headers:
+  - key: Content-Type
+    value: 'application/json'
+body:
+  type: json
+  content: |-
+    {
+      "title": "A message for Sofia",
+      "contentType": "TEXT",
+      "textContent": "Happy birthday my daughter, I am so proud of you.",
+      "recipientIds": ["{{recipientId}}"]
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 201', function () {
+        pm.response.to.have.status(201);
+      });
+      const json = pm.response.json();
+      pm.test('Response has id', function () {
+        pm.expect(json).to.have.property('id');
+      });
+      pm.collectionVariables.set('messageId', json.id);
+      pm.test('New message is DRAFT', function () {
+        pm.expect(json.status).to.eql('DRAFT');
+      });

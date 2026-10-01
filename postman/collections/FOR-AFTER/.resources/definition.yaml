@@ -1,0 +1,77 @@
+$kind: collection
+name: FOR-AFTER API
+description: |-
+  For After backend API, Steps 1-16 (see docs/for-after-api-endpoints-step-1-to-13.md).
+
+  Auth is cookie based, not Bearer tokens:
+  - Customer routes use the for_after_session cookie set by POST /api/v1/auth/login.
+  - Recipient routes use the for_after_recipient_session cookie set by POST /api/v1/recipient-auth/verify-otp.
+  - Admin routes need MFA: /auth/login returns a challenge; /admin-auth/totp/verify creates the for_after_session (folder 17).
+  Postman's cookie jar stores and resends them automatically for localhost.
+
+  Run folders top to bottom; requests save ids into collection variables for later requests.
+  Register and login are throttled to 5 requests per minute each; wait 60 s between full runs.
+auth:
+  type: noauth
+variables:
+  failedJobId: ""
+  queueName: message-release
+  auditLogId: ""
+  dvPassedUserId: ""
+  customerUserId: ""
+  s16CustomerEmail: ""
+  adminUserId: ""
+  adminRecoveryCode: ""
+  adminTotpLastStep: ""
+  adminTotpSecret: ""
+  adminTotpCode: ""
+  adminMfaSetupRequired: ""
+  adminMfaChallengeId: ""
+  baseUrl: http://localhost:4000
+  customerEmail: jiya@gmail.com
+  customerPassword: Jiya@1234562026
+  customerFirstName: Jiya
+  customerLastName: singh
+  recipientEmail: sofia.recipient@example.com
+  recipientId: ""
+  tempRecipientId: ""
+  trustedContactId: ""
+  messageId: ""
+  tempMessageId: ""
+  mediaAssetId: ""
+  uploadUrl: ""
+  memoryVaultItemId: ""
+  memoryMediaAssetId: ""
+  memoryUploadUrl: ""
+  scheduledFor: ""
+  releaseAt: ""
+  storyPromptKey: childhood.earliest-memory
+  wishPromptKey: ceremony.style
+  releaseMessageId: ""
+  challengeId: ""
+  otpCode: ""
+  portalMediaAssetId: ""
+  trustedContactEmail: david.trusted@example.com
+  reportTrustedContactId: ""
+  otherTrustedContactId: ""
+  onDeathMessageId: ""
+  tcChallengeId: ""
+  tcOtpCode: ""
+  adminEmail: admin.dev@example.test
+  adminPassword: Admin-Dev-Password-2026
+  dvCustomerEmail: ""
+  dvCustomer2Email: ""
+  dvCustomer3Email: ""
+  dvCustomerPassword: Step15-Fictional-Password
+  dvRecipientId: ""
+  dvTcId: ""
+  dvTc2Id: ""
+  dvTc3Id: ""
+  dvCaseId: ""
+  dvCase2Id: ""
+  dvCase3Id: ""
+  dvOnDeathMessageId: ""
+  dvAfterOverdueMessageId: ""
+  dvAfterFutureMessageId: ""
+  verifiedDeathAt: ""
+  tcOtpCode2: ""

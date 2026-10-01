@@ -1,0 +1,24 @@
+$kind: http-request
+name: 'Death Verification - List (paginated)'
+order: 59000
+url: '{{baseUrl}}/api/v1/admin/death-verifications?page=1&limit=25'
+method: GET
+queryParams:
+  - key: 'page'
+    value: '1'
+  - key: 'limit'
+    value: '25'
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 200', function () {
+        pm.response.to.have.status(200);
+      });
+      pm.test('items + pagination', function () {
+        const j = pm.response.json();
+        pm.expect(j.items).to.be.an('array');
+        pm.expect(j.pagination.limit).to.eql(25);
+      });

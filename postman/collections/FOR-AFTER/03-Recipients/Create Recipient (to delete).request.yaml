@@ -1,0 +1,29 @@
+$kind: http-request
+name: 'Create Recipient (to delete)'
+order: 2000
+url: '{{baseUrl}}/api/v1/recipients'
+method: POST
+auth:
+  type: noauth
+headers:
+  - key: Content-Type
+    value: 'application/json'
+body:
+  type: json
+  content: |-
+    {
+      "firstName": "Temp",
+      "lastName": "Person"
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 201', function () {
+        pm.response.to.have.status(201);
+      });
+      const json = pm.response.json();
+      pm.test('Response has id', function () {
+        pm.expect(json).to.have.property('id');
+      });
+      pm.collectionVariables.set('tempRecipientId', json.id);

@@ -1,0 +1,14 @@
+$kind: http-request
+name: 'NEG - Customer - GET /admin-auth/me (403)'
+order: 9000
+url: '{{baseUrl}}/api/v1/admin-auth/me'
+method: GET
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 403', function () {
+        pm.response.to.have.status(403);
+      });

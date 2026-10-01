@@ -1,0 +1,23 @@
+$kind: http-request
+name: 'TC - Report Again After VERIFIED (409)'
+order: 38000
+url: '{{baseUrl}}/api/v1/trusted-contact/accounts/{{dvTcId}}/death-reports'
+method: POST
+auth:
+  type: noauth
+headers:
+  - key: Content-Type
+    value: 'application/json'
+body:
+  type: json
+  content: |-
+    {
+      "confirmReport": true
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 409', function () {
+        pm.response.to.have.status(409);
+      });

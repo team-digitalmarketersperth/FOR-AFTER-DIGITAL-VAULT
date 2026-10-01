@@ -1,0 +1,23 @@
+$kind: http-request
+name: 'Update Trusted Contact'
+order: 8000
+url: '{{baseUrl}}/api/v1/trusted-contacts/{{trustedContactId}}'
+method: PATCH
+auth:
+  type: noauth
+headers:
+  - key: Content-Type
+    value: 'application/json'
+body:
+  type: json
+  content: |-
+    {
+      "relationship": "Older brother"
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 200', function () {
+        pm.response.to.have.status(200);
+      });

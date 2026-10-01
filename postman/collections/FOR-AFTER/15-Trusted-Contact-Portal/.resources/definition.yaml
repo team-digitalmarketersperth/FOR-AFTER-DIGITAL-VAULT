@@ -1,0 +1,7 @@
+$kind: collection
+name: '15-Trusted-Contact-Portal'
+description: |-
+  Step 14. Accounts, death report and case status. Needs the Trusted Contact session from folder 14.
+  A report is NOT verification: the ON_DEATH message stays SCHEDULED and nothing is released.
+  Note: Postman sends every localhost cookie, so the Customer cookie is also present here; the Trusted Contact routes ignore it.
+order: 15

@@ -1,0 +1,24 @@
+$kind: http-request
+name: 'Save Response - Extra Fields (400)'
+order: 8000
+url: '{{baseUrl}}/api/v1/my-wishes/prompts/{{wishPromptKey}}/response'
+method: PUT
+auth:
+  type: noauth
+headers:
+  - key: Content-Type
+    value: 'application/json'
+body:
+  type: json
+  content: |-
+    {
+      "textContent": "A small, simple gathering with close family.",
+      "userId": "00000000-0000-4000-8000-000000000000"
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 400', function () {
+        pm.response.to.have.status(400);
+      });

@@ -1,0 +1,24 @@
+$kind: http-request
+name: 'Alive - Confirm Alive - Injection (400)'
+order: 47000
+url: '{{baseUrl}}/api/v1/death-verification/me/confirm-alive'
+method: POST
+auth:
+  type: noauth
+headers:
+  - key: Content-Type
+    value: 'application/json'
+body:
+  type: json
+  content: |-
+    {
+      "confirmAlive": true,
+      "status": "VERIFIED"
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 400', function () {
+        pm.response.to.have.status(400);
+      });

@@ -1,0 +1,28 @@
+$kind: http-request
+name: 'Create Trusted Contact - Extra Field (400)'
+order: 4000
+url: '{{baseUrl}}/api/v1/trusted-contacts'
+method: POST
+auth:
+  type: noauth
+headers:
+  - key: Content-Type
+    value: 'application/json'
+body:
+  type: json
+  content: |-
+    {
+      "firstName": "Arjun",
+      "email": "arjun2@example.com",
+      "isAdmin": true
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 400', function () {
+        pm.response.to.have.status(400);
+      });
+      pm.test('Error mentions "isAdmin"', function () {
+        pm.expect(JSON.stringify(pm.response.json())).to.include('isAdmin');
+      });

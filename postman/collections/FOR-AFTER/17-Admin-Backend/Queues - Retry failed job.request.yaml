@@ -1,0 +1,20 @@
+$kind: http-request
+name: 'Queues - Retry failed job'
+description: |-
+  Skipped when there is no failed job. Only re-queues it: the worker still re-checks PostgreSQL and never releases an ineligible Message.
+order: 56000
+url: '{{baseUrl}}/api/v1/admin/system/queues/{{queueName}}/jobs/{{failedJobId}}/retry'
+method: POST
+auth:
+  type: noauth
+scripts:
+  - type: beforeRequest
+    language: text/javascript
+    code: |-
+      if (!pm.collectionVariables.get('failedJobId')) pm.execution.skipRequest();
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 200', function () {
+        pm.response.to.have.status(200);
+      });

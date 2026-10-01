@@ -1,0 +1,27 @@
+$kind: http-request
+name: 'Audit - List USER_SUSPENDED for Customer'
+order: 48000
+url: '{{baseUrl}}/api/v1/admin/audit-logs?eventType=USER_SUSPENDED&subjectId={{customerUserId}}'
+method: GET
+queryParams:
+  - key: 'eventType'
+    value: 'USER_SUSPENDED'
+  - key: 'subjectId'
+    value: '{{customerUserId}}'
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 200', function () {
+        pm.response.to.have.status(200);
+      });
+      const e = pm.response.json().items[0];
+      pm.test('actor admin, subject customer, no secrets', function () {
+        pm.expect(e.actorUserId).to.eql(pm.collectionVariables.get('adminUserId'));
+        pm.expect(e.subjectId).to.eql(pm.collectionVariables.get('customerUserId'));
+        pm.expect(e.metadata.newStatus).to.eql('SUSPENDED');
+        pm.expect(JSON.stringify(e)).to.not.match(/password|secret|otp/i);
+      });
+      pm.collectionVariables.set('auditLogId', e.id);

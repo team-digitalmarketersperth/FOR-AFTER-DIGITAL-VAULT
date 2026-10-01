@@ -1,0 +1,17 @@
+$kind: http-request
+name: 'Get Message - Now SCHEDULED'
+order: 10000
+url: '{{baseUrl}}/api/v1/messages/{{messageId}}'
+method: GET
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 200', function () {
+        pm.response.to.have.status(200);
+      });
+      pm.test('status is SCHEDULED', function () {
+        pm.expect(pm.response.json().status).to.eql('SCHEDULED');
+      });

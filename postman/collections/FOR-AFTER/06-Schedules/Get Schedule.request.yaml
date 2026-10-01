@@ -1,0 +1,17 @@
+$kind: http-request
+name: 'Get Schedule'
+order: 9000
+url: '{{baseUrl}}/api/v1/messages/{{messageId}}/schedule'
+method: GET
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 200', function () {
+        pm.response.to.have.status(200);
+      });
+      pm.test('triggerType is FIXED_DATE', function () {
+        pm.expect(pm.response.json().triggerType).to.eql('FIXED_DATE');
+      });

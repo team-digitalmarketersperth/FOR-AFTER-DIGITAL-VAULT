@@ -1,0 +1,24 @@
+$kind: http-request
+name: 'Verify OTP - Bad Challenge ID (400)'
+order: 5000
+url: '{{baseUrl}}/api/v1/recipient-auth/verify-otp'
+method: POST
+auth:
+  type: noauth
+headers:
+  - key: Content-Type
+    value: 'application/json'
+body:
+  type: json
+  content: |-
+    {
+      "challengeId": "short",
+      "code": "123456"
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 400', function () {
+        pm.response.to.have.status(400);
+      });

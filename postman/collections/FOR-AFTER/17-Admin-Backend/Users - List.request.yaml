@@ -1,0 +1,24 @@
+$kind: http-request
+name: 'Users - List'
+order: 29000
+url: '{{baseUrl}}/api/v1/admin/users?page=1&limit=25'
+method: GET
+queryParams:
+  - key: 'page'
+    value: '1'
+  - key: 'limit'
+    value: '25'
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 200', function () {
+        pm.response.to.have.status(200);
+      });
+      pm.test('paginated, safe fields', function () {
+        const j = pm.response.json();
+        pm.expect(j.pagination.limit).to.eql(25);
+        pm.expect(JSON.stringify(j)).to.not.match(/passwordHash|argon2/);
+      });

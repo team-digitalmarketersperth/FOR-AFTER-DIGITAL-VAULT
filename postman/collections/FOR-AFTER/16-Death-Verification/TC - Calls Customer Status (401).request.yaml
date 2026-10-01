@@ -1,0 +1,14 @@
+$kind: http-request
+name: 'TC - Calls Customer Status (401)'
+order: 41000
+url: '{{baseUrl}}/api/v1/death-verification/me'
+method: GET
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 401', function () {
+        pm.response.to.have.status(401);
+      });

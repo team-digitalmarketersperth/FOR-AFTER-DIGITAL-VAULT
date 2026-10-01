@@ -1,0 +1,17 @@
+$kind: http-request
+name: 'Admin - List Unknown Status (400)'
+order: 22000
+url: '{{baseUrl}}/api/v1/admin/death-verifications?status=DEAD'
+method: GET
+queryParams:
+  - key: 'status'
+    value: 'DEAD'
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 400', function () {
+        pm.response.to.have.status(400);
+      });

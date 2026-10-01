@@ -1,0 +1,5 @@
+$kind: collection
+name: '02-Auth'
+description: |-
+  Step 2. Customer register/login/logout/me. Login sets the for_after_session cookie; there is no token in the response.
+order: 2

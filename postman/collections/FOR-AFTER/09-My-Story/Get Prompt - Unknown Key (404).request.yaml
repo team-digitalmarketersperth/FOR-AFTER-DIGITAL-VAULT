@@ -1,0 +1,14 @@
+$kind: http-request
+name: 'Get Prompt - Unknown Key (404)'
+order: 6000
+url: '{{baseUrl}}/api/v1/my-story/prompts/unknown.prompt-key'
+method: GET
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 404', function () {
+        pm.response.to.have.status(404);
+      });

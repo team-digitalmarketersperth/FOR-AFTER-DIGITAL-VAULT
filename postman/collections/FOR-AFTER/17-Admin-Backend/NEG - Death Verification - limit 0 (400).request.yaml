@@ -1,0 +1,17 @@
+$kind: http-request
+name: 'NEG - Death Verification - limit 0 (400)'
+order: 60000
+url: '{{baseUrl}}/api/v1/admin/death-verifications?limit=0'
+method: GET
+queryParams:
+  - key: 'limit'
+    value: '0'
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 400', function () {
+        pm.response.to.have.status(400);
+      });

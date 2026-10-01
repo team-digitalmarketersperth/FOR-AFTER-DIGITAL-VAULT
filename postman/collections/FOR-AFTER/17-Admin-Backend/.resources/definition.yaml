@@ -1,0 +1,17 @@
+$kind: collection
+name: '17-Admin-Backend'
+description: |-
+  Step 16. Admin MFA sign-in, dashboard, users (search, detail, suspend, reactivate), audit log, queues and the Step 15 death-verification admin routes.
+
+  Before running:
+  1. .env has ADMIN_TOTP_ENCRYPTION_KEY (32 random bytes, base64: `openssl rand -base64 32`). Restart the API.
+  2. The admin exists (no admin sign-up API): register {{adminEmail}}, then in PostgreSQL:
+     UPDATE "User" SET role = 'ADMIN' WHERE email = 'admin.dev@example.test';
+  3. First run: "Admin - TOTP Setup" returns the secret and otpauth URI once. Add it to an authenticator app.
+     For Collection Runner automation, also set adminTotpSecret as a CURRENT value (never an initial value; never commit it).
+     Without it, type the app's 6 digits into adminTotpCode just before "TOTP Confirm" / "TOTP Verify".
+  4. Codes are single use per 30 s step (replay protection). The pre-request script waits for a new step when needed.
+  5. Run folder 16 before 17 to also exercise the PASSED (verified death) reactivation refusal.
+
+  Admin sessions end after 30 minutes without a request (ADMIN_SESSION_IDLE_TIMEOUT_SECONDS).
+order: 17

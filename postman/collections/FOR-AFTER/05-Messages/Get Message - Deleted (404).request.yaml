@@ -1,0 +1,14 @@
+$kind: http-request
+name: 'Get Message - Deleted (404)'
+order: 14000
+url: '{{baseUrl}}/api/v1/messages/{{tempMessageId}}'
+method: GET
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 404', function () {
+        pm.response.to.have.status(404);
+      });

@@ -1,0 +1,17 @@
+$kind: http-request
+name: 'Get All Media'
+order: 6000
+url: '{{baseUrl}}/api/v1/messages/{{messageId}}/media'
+method: GET
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 200', function () {
+        pm.response.to.have.status(200);
+      });
+      pm.test('Response is an array', function () {
+        pm.expect(pm.response.json()).to.be.an('array');
+      });

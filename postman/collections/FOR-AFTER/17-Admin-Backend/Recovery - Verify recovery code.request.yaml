@@ -1,0 +1,31 @@
+$kind: http-request
+name: 'Recovery - Verify recovery code'
+description: |-
+  Optional: set adminRecoveryCode (current value only) to one of your codes. It is consumed; clear the variable afterwards. Audited as ADMIN_RECOVERY_CODE_USED.
+order: 64000
+url: '{{baseUrl}}/api/v1/admin-auth/recovery/verify'
+method: POST
+auth:
+  type: noauth
+headers:
+  - key: Content-Type
+    value: 'application/json'
+body:
+  type: json
+  content: |-
+    {
+      "challengeId": "{{adminMfaChallengeId}}",
+      "recoveryCode": "{{adminRecoveryCode}}"
+    }
+scripts:
+  - type: beforeRequest
+    language: text/javascript
+    code: |-
+      if (!pm.collectionVariables.get('adminRecoveryCode')) pm.execution.skipRequest();
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 200', function () {
+        pm.response.to.have.status(200);
+      });
+      pm.collectionVariables.set('adminRecoveryCode', '');

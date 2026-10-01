@@ -1,0 +1,30 @@
+$kind: http-request
+name: 'Customer - Login'
+order: 4000
+url: '{{baseUrl}}/api/v1/auth/login'
+method: POST
+auth:
+  type: noauth
+headers:
+  - key: Content-Type
+    value: 'application/json'
+body:
+  type: json
+  content: |-
+    {
+      "email": "{{s16CustomerEmail}}",
+      "password": "{{dvCustomerPassword}}"
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 200', function () {
+        pm.response.to.have.status(200);
+      });
+      pm.test('Customer login unchanged: user returned, no MFA challenge', function () {
+        const j = pm.response.json();
+        pm.expect(j.role).to.eql('CUSTOMER');
+        pm.expect(j).to.not.have.property('challengeId');
+        pm.expect(j).to.not.have.property('mfaRequired');
+      });

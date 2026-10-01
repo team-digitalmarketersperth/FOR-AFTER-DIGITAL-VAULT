@@ -1,0 +1,14 @@
+$kind: http-request
+name: 'Get Recipient - Invalid ID (400)'
+order: 8000
+url: '{{baseUrl}}/api/v1/recipients/not-a-uuid'
+method: GET
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 400', function () {
+        pm.response.to.have.status(400);
+      });

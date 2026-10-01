@@ -1,0 +1,17 @@
+$kind: http-request
+name: 'TC - Status (minimal)'
+order: 18000
+url: '{{baseUrl}}/api/v1/trusted-contact/accounts/{{dvTcId}}/death-verification'
+method: GET
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 200', function () {
+        pm.response.to.have.status(200);
+      });
+      pm.test('status only, no admin data', function () {
+        pm.expect(Object.keys(pm.response.json()).sort()).to.eql(['openedAt', 'reportedByYou', 'status']);
+      });

@@ -1,0 +1,5 @@
+$kind: collection
+name: '01-Health'
+description: |-
+  Step 1. No session needed. Health checks live outside the /api/v1 prefix.
+order: 1

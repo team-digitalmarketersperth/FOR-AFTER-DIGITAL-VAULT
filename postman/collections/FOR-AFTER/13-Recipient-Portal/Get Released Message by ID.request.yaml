@@ -1,0 +1,19 @@
+$kind: http-request
+name: 'Get Released Message by ID'
+order: 2000
+url: '{{baseUrl}}/api/v1/recipient/messages/{{releaseMessageId}}'
+method: GET
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 200', function () {
+        pm.response.to.have.status(200);
+      });
+      pm.test('Response has id, title', function () {
+        const json = pm.response.json();
+        pm.expect(json).to.have.property('id');
+        pm.expect(json).to.have.property('title');
+      });

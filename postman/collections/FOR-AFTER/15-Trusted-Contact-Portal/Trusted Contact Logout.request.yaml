@@ -1,0 +1,14 @@
+$kind: http-request
+name: 'Trusted Contact Logout'
+order: 20000
+url: '{{baseUrl}}/api/v1/trusted-contact-auth/logout'
+method: POST
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 204', function () {
+        pm.response.to.have.status(204);
+      });

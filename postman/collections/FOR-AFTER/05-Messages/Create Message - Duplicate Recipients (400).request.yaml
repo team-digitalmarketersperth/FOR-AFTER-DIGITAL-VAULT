@@ -1,0 +1,28 @@
+$kind: http-request
+name: 'Create Message - Duplicate Recipients (400)'
+order: 6000
+url: '{{baseUrl}}/api/v1/messages'
+method: POST
+auth:
+  type: noauth
+headers:
+  - key: Content-Type
+    value: 'application/json'
+body:
+  type: json
+  content: |-
+    {
+      "title": "Dupes",
+      "textContent": "Hello",
+      "recipientIds": ["{{recipientId}}", "{{recipientId}}"]
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 400', function () {
+        pm.response.to.have.status(400);
+      });
+      pm.test('Error mentions "duplicates"', function () {
+        pm.expect(JSON.stringify(pm.response.json())).to.include('duplicates');
+      });

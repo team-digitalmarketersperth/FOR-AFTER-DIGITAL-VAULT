@@ -1,0 +1,5 @@
+$kind: collection
+name: '03-Recipients'
+description: |-
+  Step 3. People I Love. recipientId is kept for Messages; tempRecipientId is created and deleted here.
+order: 3

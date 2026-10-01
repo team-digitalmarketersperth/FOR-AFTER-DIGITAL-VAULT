@@ -1,0 +1,27 @@
+$kind: http-request
+name: 'Report - VERIFIED Injection (400)'
+order: 12000
+url: '{{baseUrl}}/api/v1/trusted-contact/accounts/{{reportTrustedContactId}}/death-reports'
+method: POST
+auth:
+  type: noauth
+headers:
+  - key: Content-Type
+    value: 'application/json'
+body:
+  type: json
+  content: |-
+    {
+      "reportedDateOfDeath": "2026-09-28",
+      "note": "Fictional test report.",
+      "confirmReport": true,
+      "status": "VERIFIED",
+      "verified": true
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 400', function () {
+        pm.response.to.have.status(400);
+      });

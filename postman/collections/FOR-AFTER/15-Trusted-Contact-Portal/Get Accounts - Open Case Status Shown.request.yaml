@@ -1,0 +1,18 @@
+$kind: http-request
+name: 'Get Accounts - Open Case Status Shown'
+order: 17000
+url: '{{baseUrl}}/api/v1/trusted-contact/accounts'
+method: GET
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test('Status is 200', function () {
+        pm.response.to.have.status(200);
+      });
+      pm.test('deathVerificationStatus is an open status', function () {
+        const account = pm.response.json().find((a) => a.trustedContactId === pm.collectionVariables.get('reportTrustedContactId'));
+        pm.expect(account.deathVerificationStatus).to.be.oneOf(['PENDING_VERIFICATION', 'SAFEGUARD_ACTIVE', 'READY_FOR_REVIEW']);
+      });
