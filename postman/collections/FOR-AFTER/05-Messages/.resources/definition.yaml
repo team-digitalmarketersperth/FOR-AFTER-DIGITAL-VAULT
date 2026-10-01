@@ -1,5 +1,0 @@
-$kind: collection
-name: '05-Messages'
-description: |-
-  Steps 5 and 8. Messages (TEXT, PHOTO, AUDIO, MIXED; VIDEO is rejected). messageId stays DRAFT for the Schedules and Media folders.
-order: 5

@@ -1,5 +1,0 @@
-$kind: collection
-name: '06-Schedules'
-description: |-
-  Step 6. One schedule per message: FIXED_DATE, ON_DEATH or AFTER_DEATH. Scheduling moves the message to SCHEDULED; unscheduling returns it to DRAFT. The folder ends with messageId back in DRAFT.
-order: 6

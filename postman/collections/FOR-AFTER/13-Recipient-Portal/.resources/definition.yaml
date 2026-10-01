@@ -1,5 +1,0 @@
-$kind: collection
-name: '13-Recipient-Portal'
-description: |-
-  Step 13. Read-only Recipient Portal. Needs the recipient session from 12-Recipient-Auth and a released message from 11-Message-Release.
-order: 13

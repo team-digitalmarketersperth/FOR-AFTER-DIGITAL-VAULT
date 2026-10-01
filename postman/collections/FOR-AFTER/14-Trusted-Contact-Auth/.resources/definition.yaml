@@ -1,6 +1,0 @@
-$kind: collection
-name: '14-Trusted-Contact-Auth'
-description: |-
-  Step 14. Trusted Contact email OTP. A Trusted Contact is not a User: no password, own cookie for_after_trusted_contact_session.
-  Setup requests run as the Customer (Jiya). With TRUSTED_CONTACT_OTP_DELIVERY_MODE=console the code is printed in the API terminal as "[DEV ONLY] Trusted Contact OTP for d***@example.com: 123456": copy it into the collection variable tcOtpCode, then run "Verify OTP".
-order: 14

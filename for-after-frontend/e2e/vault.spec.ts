@@ -57,7 +57,7 @@ async function upload(page: Page, button: 'Add a photo' | 'Upload audio', file: 
 
 async function schedule(page: Page, trigger: 'On a date you choose' | 'After my passing' | 'Some time after my passing') {
   await page.getByRole('radio', { name: new RegExp(trigger) }).check();
-  if (trigger === 'On a date you choose') await page.getByLabel('Date').fill('2031-06-01');
+  if (trigger === 'On a date you choose') await page.getByLabel('Date', { exact: true }).fill('2031-06-01');
   await page.getByRole('button', { name: 'Schedule message' }).click();
   await expect(page.getByText('Locked while scheduled')).toBeVisible();
   await expect(page.getByText('Scheduled', { exact: true })).toBeVisible();

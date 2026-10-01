@@ -1,6 +1,0 @@
-$kind: collection
-name: '12-Recipient-Auth'
-description: |-
-  Step 13. Recipient email OTP sign-in. Separate from Customer auth: no password, own cookie (for_after_recipient_session).
-  The OTP is only sent when recipientEmail has a released message. With RECIPIENT_OTP_DELIVERY_MODE=console the code is printed in the API log: copy it into the collection variable otpCode, then run "Verify OTP".
-order: 12
