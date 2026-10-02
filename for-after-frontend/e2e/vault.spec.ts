@@ -2,7 +2,8 @@ import { expect, test, type Page } from '@playwright/test';
 import { API } from './helpers';
 
 // Customer A's session (from vault.setup.ts). Runs against the real local API,
-// PostgreSQL, Redis and the development storage bucket.
+// PostgreSQL, Redis and the development storage bucket. Uploads are real browser
+// PUTs to the bucket (its CORS rule allows PUT + content-type from localhost:3000).
 test.use({ storageState: 'e2e/.auth/a.json' });
 
 // 1×1 PNG and a tiny WAV header: the backend verifies size and type, not pixels.
@@ -11,25 +12,6 @@ const PNG = Buffer.from(
   'base64',
 );
 const WAV = Buffer.concat([Buffer.from('RIFF$\0\0\0WAVEfmt '), Buffer.alloc(28)]);
-
-/**
- * The development bucket has no CORS rule for localhost:3000 yet, so a real
- * browser PUT is refused. Playwright relays the same signed PUT (unchanged URL,
- * headers and bytes) to storage and adds the CORS headers to the answer.
- * Remove this once the bucket CORS rule is in place.
- */
-async function relayStorage(page: Page) {
-  await page.route(/backblazeb2\.com/, async (route) => {
-    const cors = {
-      'Access-Control-Allow-Origin': 'http://localhost:3000',
-      'Access-Control-Allow-Methods': 'GET, PUT',
-      'Access-Control-Allow-Headers': 'content-type',
-    };
-    if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
-    const response = await route.fetch();
-    await route.fulfill({ response, headers: { ...response.headers(), ...cors } });
-  });
-}
 
 async function addPerson(page: Page, firstName: string) {
   const res = await page.request.post(`${API}/recipients`, { data: { firstName, relationship: 'Daughter' } });
@@ -42,7 +24,7 @@ async function newDraft(page: Page, type: 'Written' | 'Photos' | 'Voice' | 'Mixe
   await page.getByRole('checkbox', { name: new RegExp(person) }).check();
   await page.getByRole('radio', { name: new RegExp(`^${type}`) }).check();
   await page.getByLabel('Title').fill(`${type} message for ${person}`);
-  if (text) await page.getByLabel(/^Message/).fill(text);
+  if (text) await page.getByRole('textbox', { name: /^Message/ }).fill(text);
   await page.getByRole('button', { name: 'Save draft' }).click();
   await expect(page).toHaveURL(/\/messages\/[0-9a-f-]{36}$/);
   await expect(page.getByText('Draft', { exact: true })).toBeVisible();
@@ -110,13 +92,16 @@ test('TEXT message: draft → edit → FIXED_DATE → locked → unschedule → 
   const url = page.url();
 
   await page.getByRole('link', { name: 'Edit' }).click();
-  await page.getByLabel(/^Message/).fill('Dear Tess, happy birthday.');
+  // The detail page also has a region named "Message": wait for the form, then target its textbox.
+  await expect(page).toHaveURL(/\/edit$/);
+  await page.getByRole('textbox', { name: /^Message/ }).fill('Dear Tess, happy birthday.');
   await page.getByRole('button', { name: 'Save changes' }).click();
   await expect(page.getByText('Dear Tess, happy birthday.')).toBeVisible();
 
   await expect(page.getByText('Ready to schedule.')).toBeVisible();
   await schedule(page, 'On a date you choose');
-  await expect(page.getByText(/On Sunday 1 June 2031, 9:00/)).toBeVisible();
+  // Intl joins date and time with ", " or " at " depending on the browser's ICU version.
+  await expect(page.getByText(/On Sunday 1 June 2031(,| at) 9:00/)).toBeVisible();
 
   // Editing is refused with an explanation, never a silent unschedule.
   await page.goto(`${url}/edit`);
@@ -131,7 +116,6 @@ test('TEXT message: draft → edit → FIXED_DATE → locked → unschedule → 
 });
 
 test('PHOTO, AUDIO and MIXED messages upload to storage, reach READY and schedule', async ({ page }) => {
-  await relayStorage(page);
   await addPerson(page, 'Pia');
 
   await newDraft(page, 'Photos', 'Pia');
@@ -149,6 +133,44 @@ test('PHOTO, AUDIO and MIXED messages upload to storage, reach READY and schedul
   await schedule(page, 'On a date you choose');
 });
 
+test('a failed upload stays unfinished and blocks scheduling; retry and the browser recorder reach READY', async ({ page }) => {
+  await addPerson(page, 'Rory');
+  await newDraft(page, 'Voice', 'Rory');
+  const id = page.url().split('/').pop();
+  const media = async () => (await (await page.request.get(`${API}/messages/${id}/media`)).json()) as { status: string }[];
+
+  // The storage PUT fails (as with a dropped connection): the asset never looks READY.
+  await page.route(/backblazeb2\.com/, (route) => (route.request().method() === 'PUT' ? route.abort() : route.fallback()));
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: 'Upload audio' }).click();
+  await (await chooser).setFiles({ name: 'hello.wav', mimeType: 'audio/wav', buffer: WAV });
+  const failed = page.getByRole('alert').filter({ hasText: 'Upload failed' });
+  await expect(failed).toBeVisible();
+  expect((await media()).map((m) => m.status)).toEqual(['PENDING_UPLOAD']);
+  expect((await page.request.post(`${API}/messages/${id}/schedule`, { data: { triggerType: 'ON_DEATH' } })).status()).toBe(409);
+  await page.unroute(/backblazeb2\.com/);
+  await failed.getByRole('button', { name: 'Try again' }).click();
+  await expect(page.getByText('Audio added')).toBeVisible();
+
+  // The unfinished attempt is shown as such and can be removed; the Draft is untouched.
+  await page.reload();
+  await page
+    .getByRole('listitem')
+    .filter({ hasText: 'Upload not finished' })
+    .getByRole('button', { name: 'Remove hello.wav' })
+    .click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Remove' }).click();
+  await expect.poll(async () => (await media()).map((m) => m.status)).toEqual(['READY']);
+
+  // Browser recording (Chromium's fake microphone, see playwright.config.ts).
+  await page.getByRole('button', { name: 'Record your voice' }).click();
+  await expect(page.getByText(/Recording \d/)).toBeVisible();
+  await page.getByRole('button', { name: 'Stop' }).click();
+  await page.getByRole('button', { name: 'Use this recording' }).click();
+  await expect.poll(async () => (await media()).map((m) => m.status)).toEqual(['READY', 'READY']);
+  await schedule(page, 'After my passing');
+});
+
 test('invalid composition: a PHOTO message without a photo is refused with the API message', async ({ page }) => {
   await addPerson(page, 'Ivo');
   await newDraft(page, 'Photos', 'Ivo');
@@ -160,7 +182,6 @@ test('invalid composition: a PHOTO message without a photo is refused with the A
 });
 
 test('Memory Vault: create → filter → view → edit → photo + audio → delete', async ({ page }) => {
-  await relayStorage(page);
   const title = `Road trip ${Date.now()}`;
   await page.goto('/memory-vault/new');
   await page.getByLabel('Title').fill(title);

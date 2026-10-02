@@ -5,13 +5,13 @@
 
 | | |
 |---|---|
-| **Last updated** | 2026-09-30 |
-| **Latest step** | Step 19: Recipient portal, Trusted Contact portal, Customer death-verification safety banner |
-| **Tasks** | **25 of 30** built (FE-1–8, FE-10–19, FE-21–27) |
-| **Open** | FE-9 profile (no backend yet), FE-20 billing, FE-28 admin portal, FE-29/30 WordPress login |
-| **Unit / component tests** | **134 passing** (12 files, Vitest + React Testing Library) |
-| **Playwright** | 6 passing (Step 17) · 13 written for Steps 18–19, **not yet run** |
-| **Blocker** | Storage bucket CORS rule missing: real browser uploads fail (see [Open items](#-open-items)) |
+| **Last updated** | 2026-10-02 |
+| **Latest step** | Step 21: stabilisation, real-backend verification, git baseline (no new features) |
+| **Tasks** | **26 of 30** built and verified ✅ (FE-1–8, FE-10–19, FE-21–28) |
+| **Open** | FE-9 profile (no backend yet), FE-20 billing (no backend yet), FE-29/30 WordPress login |
+| **Unit / component tests** | **185 passing** (13 files, Vitest + React Testing Library) |
+| **Playwright** | **31 passing, 0 failing, 0 skipped** (2026-10-02, real local API + PostgreSQL + Redis + development bucket, OTP log and a fictional admin): Step 17 4 · Steps 18–20 23 + 2 setup · production build 2 |
+| **Blocker** | None for the built scope |
 | **Design system** | [`frontend-design-system.md`](frontend-design-system.md) |
 
 ## 📖 How to read this file
@@ -19,7 +19,7 @@
 | Symbol | Meaning |
 |:--:|---|
 | ✅ | Built, and verified by passing tests |
-| 🧪 | Built and component-tested; its Playwright (real backend) run is still pending |
+| 🧪 | Built and component-tested; its Playwright (real backend) run is still pending (none today) |
 | 🟡 | Partly built |
 | ⬜ | Not started |
 
@@ -31,12 +31,12 @@
 |---|:--:|---|
 | A. Foundation (FE-1–6) | 6 | ✅ 6 of 6 |
 | B. Customer account (FE-7–9) | 3 | ✅ 2 of 3 · ⬜ FE-9 |
-| C. Customer vault (FE-10–20) | 11 | 🧪 10 of 11 · ⬜ FE-20 |
-| D. Recipient portal (FE-21–23) | 3 | 🧪 3 of 3 |
-| E. Trusted Contact portal (FE-24–27) | 4 | 🧪 4 of 4 |
-| F. Admin portal (FE-28) | 1 | ⬜ next step |
+| C. Customer vault (FE-10–20) | 11 | ✅ 10 of 11 · ⬜ FE-20 |
+| D. Recipient portal (FE-21–23) | 3 | ✅ 3 of 3 |
+| E. Trusted Contact portal (FE-24–27) | 4 | ✅ 4 of 4 |
+| F. Admin portal (FE-28) | 1 | ✅ 1 of 1 |
 | G. WordPress (FE-29–30) | 2 | ⬜ |
-| **Total** | **30** | **25 built** |
+| **Total** | **30** | **26 built and verified** |
 
 ## ✅ All tasks
 
@@ -51,25 +51,25 @@
 | FE-7 | `/dev-login`, real 404 in production builds | ✅ | 17 | `app/(auth)/dev-login`, `src/proxy.ts` |
 | FE-8 | Register / login pages | ✅ | 17 | `app/(auth)` |
 | FE-9 | Profile and account settings | ⬜ | — | Backend not built (phase 08) |
-| FE-10 | People I Love: list, add, view, edit, remove | 🧪 | 18 | `components/people/recipients.tsx` |
-| FE-11 | Trusted Contacts (Customer side): list, add, edit, remove | 🧪 | 18 | `components/people/trusted-contacts.tsx` |
-| FE-12 | Messages: drafts, content type, recipients | 🧪 | 18 | `components/messages/` |
-| FE-13 | Message media: direct upload with progress + cancel, previews, delete | 🧪 ⚠️ | 18 | `components/media/media-manager.tsx` (needs bucket CORS) |
-| FE-14 | Browser audio recorder | 🧪 | 18 | `components/media/audio-recorder.tsx` |
-| FE-15 | Schedule picker: FIXED_DATE (+ timezone offset), ON_DEATH, AFTER_DEATH; change; unschedule | 🧪 | 18 | `components/messages/schedule-panel.tsx` |
-| FE-16 | Status views + explicit "unschedule to edit" | 🧪 | 18 | `message-detail.tsx`, `LockedNotice` |
-| FE-17 | Memory Vault: category filter, CRUD, photo/audio | 🧪 | 18 | `components/memory-vault/memories.tsx` |
-| FE-18 | My Story: prompts by category, answer/edit/delete | 🧪 | 18 | `components/prompts/prompts.tsx` |
-| FE-19 | My Wishes: same, with the exact non-legal disclaimer | 🧪 | 18 | `components/prompts/prompts.tsx` |
+| FE-10 | People I Love: list, add, view, edit, remove | ✅ | 18 | `components/people/recipients.tsx` |
+| FE-11 | Trusted Contacts (Customer side): list, add, edit, remove | ✅ | 18 | `components/people/trusted-contacts.tsx` |
+| FE-12 | Messages: drafts, content type, recipients | ✅ | 18 | `components/messages/` |
+| FE-13 | Message media: direct upload with progress + cancel, previews, delete | ✅ | 18 | `components/media/media-manager.tsx` |
+| FE-14 | Browser audio recorder | ✅ | 18 | `components/media/audio-recorder.tsx` (E2E with Chromium's fake microphone) |
+| FE-15 | Schedule picker: FIXED_DATE (+ timezone offset), ON_DEATH, AFTER_DEATH; change; unschedule | ✅ | 18 | `components/messages/schedule-panel.tsx` |
+| FE-16 | Status views + explicit "unschedule to edit" | ✅ | 18 | `message-detail.tsx`, `LockedNotice` |
+| FE-17 | Memory Vault: category filter, CRUD, photo/audio | ✅ | 18 | `components/memory-vault/memories.tsx` |
+| FE-18 | My Story: prompts by category, answer/edit/delete | ✅ | 18 | `components/prompts/prompts.tsx` |
+| FE-19 | My Wishes: same, with the exact non-legal disclaimer | ✅ | 18 | `components/prompts/prompts.tsx` |
 | FE-20 | Plan / billing pages (Stripe) | ⬜ | — | Backend not built (phase 21) |
-| FE-21 | Recipient sign-in: email → 6-digit code | 🧪 | 19 | `components/portals/otp-sign-in.tsx`, `recipient.tsx` |
-| FE-22 | Released messages list + message page | 🧪 | 19 | `components/portals/recipient.tsx` |
-| FE-23 | Photo/audio via short-lived signed URLs | 🧪 | 19 | `MediaManager` (view-only scope) |
-| FE-24 | Trusted Contact sign-in: email → 6-digit code | 🧪 | 19 | `components/portals/trusted-contact.tsx` |
-| FE-25 | Accounts list (name, preserved-content flag, case status) | 🧪 | 19 | `AccountList` |
-| FE-26 | Death report form (date, note, summary, explicit confirmation, 409 states) | 🧪 | 19 | `ReportForm` |
-| FE-27 | Case status page (all six statuses) | 🧪 | 19 | `AccountStatus`, `lib/death-verification.ts` |
-| FE-28 | Admin portal: TOTP sign-in, users, death-verification review, audit log, queues | ⬜ | 20 | Backend ready (Step 16) |
+| FE-21 | Recipient sign-in: email → 6-digit code | ✅ | 19 | `components/portals/otp-sign-in.tsx`, `recipient.tsx` |
+| FE-22 | Released messages list + message page | ✅ | 19 | `components/portals/recipient.tsx` |
+| FE-23 | Photo/audio via short-lived signed URLs | ✅ | 19 | `MediaManager` (view-only scope) |
+| FE-24 | Trusted Contact sign-in: email → 6-digit code | ✅ | 19 | `components/portals/trusted-contact.tsx` |
+| FE-25 | Accounts list (name, preserved-content flag, case status) | ✅ | 19 | `AccountList` |
+| FE-26 | Death report form (date, note, summary, explicit confirmation, 409 states) | ✅ | 19 | `ReportForm` |
+| FE-27 | Case status page (all six statuses) | ✅ | 19 | `AccountStatus`, `lib/death-verification.ts` |
+| FE-28 | Admin portal: password + mandatory TOTP sign-in/enrolment (+ recovery codes), users, death-verification review, audit log, queues | ✅ | 20 | `components/admin/`, `app/admin/` |
 | FE-29 | WordPress login/signup forms | ⬜ | — | WordPress side |
 | FE-30 | Shared `.forafter.com.au` cookie + redirect to the app | ⬜ | — | Deployment config |
 
@@ -107,16 +107,56 @@ Also built, outside the FE list: the Customer death-verification **safety banner
 - Bug found by tests and fixed: a pasted "123 456" code was truncated by `maxLength` before spaces were stripped.
 - Tests: 134 unit/component passing. Playwright `e2e/portals.spec.ts` (4 tests; 2 need `E2E_BACKEND_LOG`) written, **not run**.
 
+### Step 20 — Admin Portal (FE-28)
+- Separate portal under `/admin` with its own gate (`GET /admin-auth/me`), shell, navigation (Overview · Users · Death
+  verification · Audit logs · Queues) and `['admin', …]` query namespace. No Customer navigation, no invented sections.
+- Sign-in: password → in-memory challenge → first-time enrolment (setup key + locally drawn QR via `qrcode.react` →
+  first code → 10 recovery codes shown once) or TOTP / recovery-code verification → `/admin-auth/me` → portal. A 401
+  goes to `/admin/login` (never `/login`), a 403 shows "Access denied" without signing out, the server's idle timeout
+  shows "Your admin session expired".
+- Users (server search/filter/paging, metadata + counts only, suspend with reason, reactivate, no action for PASSED,
+  DELETED, self, other admins as ADMIN, or SUPER_ADMIN), death-verification review (reports, real event timeline,
+  verify with an explicit offset timestamp + confirmation, reject, 409 "case changed" + refetch, terminal read-only),
+  audit log list/detail (URL filters, secret-looking metadata keys never rendered), queue summary, failed jobs, retry.
+- Shared: `CodeField` (extracted from the portal OTP step), `ConfirmDialog` takes form fields and scrolls on phones.
+- Tests: 43 new component tests (184 total). Live run against the real API with fictional data: enrolment, wrong code,
+  refresh, suspend → Customer session 401 → reactivate → login, confirm-alive race → 409 → CANCELLED, verify → PASSED +
+  ON_DEATH release by the backend, reject, audit events, idle timeout (server set to 30 s on a second local instance),
+  logout, Customer → Access denied; reviewed at 375/768/1440 px. `e2e/admin.spec.ts` passing.
+
+### Step 21 — Stabilisation, real-backend verification, git baseline
+- No new features. Everything built through Step 20 verified against the real local API, PostgreSQL, Redis and the
+  `for-after-dev` bucket, with the dev OTP log and fictional data only.
+- **Selector issue:** `getByLabel(/^Message/)` also matched the detail page's `<section aria-label="Message">`; the spec
+  uses `getByRole('textbox', { name: /^Message/ })` and waits for the edit URL (test bug; the app's labels are right).
+- **Bucket CORS** was already in place (`../backblaze/cors-rules.json`: `http://localhost:3000`, `s3_put`,
+  `content-type`; bucket private). Verified in a real browser: preflight 200/204, `PUT` 200, `complete` 200, READY,
+  photo preview decoded, audio file and recorded webm play, an unsigned GET is refused (401).
+- **Bug found and fixed (FE-26):** after a successful death report the confirmation and the redirect to the status page
+  were sometimes lost, and the page said "You've already submitted a report". `useDeathReport` awaited its refetch, the
+  refreshed status unmounted the form, and TanStack Query skips a `mutate()` callback after an unmount. The refetch is no
+  longer awaited (`hooks/use-portals.ts`); regression test in `portals.test.tsx`.
+- **New E2E:** a failed storage PUT stays `PENDING_UPLOAD`, scheduling is refused (409), retry → READY, the unfinished
+  attempt can be removed, and the browser recorder (fake microphone) uploads to READY (`vault.spec.ts`).
+- **Other failures seen were environment, not app:** `next dev` first compiles (21 s–77 s per route) and HMR rebuilds
+  aborting navigations, one Turbopack panic (`restoring failed`), one Backblaze `500` on a PUT. The real-backend suites
+  now run against a production build (see the README).
+- Verified live outside the specs: network unavailable (API unreachable → "We couldn't load your account", not a
+  `401`, cookie kept, Try again recovers); verify → owner `PASSED` → ON_DEATH message `RELEASED` with a
+  `RecipientMessageAccessGrant`; reject → `REJECTED`.
+- Tests: 185 unit/component, 31 Playwright, all passing. Lint, typecheck and production build pass.
+
 ---
 
 ## ⚠️ Open items
 
-**Blocking or needed soon**
-- [ ] **Bucket CORS rule** on `for-after-dev` for `http://localhost:3000` (`PUT`, header `content-type`). Without it,
-  real browser uploads fail (preflight 403). Later the same for `https://app.forafter.com.au`.
-- [ ] **Run the Playwright suites for Steps 18–19** against the local backend (commands below). Until then FE-10–19
-  and FE-21–27 stay 🧪, not ✅.
-- [ ] **Put the frontend under git.** It is not in any repository yet (the root repo has no commits).
+**Follow-ups found in Step 21 (not blocking the built scope)**
+- [ ] **Separate admin session cookie.** Admins and Customers share `for_after_session`, so one browser profile cannot
+  hold both: an admin sign-in in another tab replaces the Customer session. Proposed: a `for_after_admin_session`
+  (backend change + `AdminGate`). Documented, not redesigned in Step 21.
+- [ ] Failed-job **retry** is component-tested only: the local queues had no failed job to retry in E2E.
+- [ ] The backend's local `.env` sets `DEATH_VERIFICATION_SAFEGUARD_SECONDS` twice (14 days, then 60 s; the last wins).
+  Fine for development, but worth tidying so nobody copies it.
 
 **Before production**
 - [ ] Content-Security-Policy (needs the API and storage domains).
@@ -135,12 +175,14 @@ Also built, outside the FE list: the Customer death-verification **safety banner
 
 ```bash
 # Unit / component (no backend needed)
-npm test                       # 134 tests
+npm test                       # 185 tests
 npm run lint && npm run typecheck && npm run build
 
 # Playwright (needs PostgreSQL, Redis and the NestJS API on :4000)
-npx playwright test                                   # everything
-npx playwright test --project=vault                   # Steps 18–19 only
+npx playwright test --project=development             # Step 17, against `npm run dev`
+npx playwright test --project=vault --project=production-build   # Steps 18–20, against a production build on :3000
+# Admin signed-in flows: a fictional local admin (backend docs/admin.md §11), see the README "Admin Portal" section
+#   E2E_ADMIN_EMAIL=… E2E_ADMIN_PASSWORD=… [E2E_ADMIN_TOTP_SECRET=…] npx playwright test e2e/admin.spec.ts
 # Portal OTP flows: tee the backend output, then point the tests at it
 #   backend:  npm run start:dev | tee backend.log
 #   frontend: E2E_BACKEND_LOG=../for-after-backend/backend.log npx playwright test --project=vault
@@ -160,11 +202,15 @@ npx playwright test --project=vault                   # Steps 18–19 only
    → account → submit a fictional report → status "Report received".
 4. **Safety banner:** sign in as the Customer → banner → "I'm still alive" → confirm → the banner disappears and the case
    is `CANCELLED`.
+5. **Admin:** register a fictional account, promote it (`docs/admin.md` §11), sign in at `/admin/login`, enrol an
+   authenticator, save the recovery codes, then: users → suspend/reactivate; a READY_FOR_REVIEW case → verify or reject;
+   audit logs; queues. Sign out and confirm `/admin` returns to `/admin/login`.
 
 ---
 
-## ⏭️ Next: Step 20 — Admin portal (FE-28)
+## ⏭️ Next: Step 22 (proposal, not started)
 
-Admin TOTP sign-in and enrolment (password → `mfaRequired` challenge), user list with suspend/reactivate,
-death-verification review queue (verify/reject with confirmations), audit log viewer, and queue monitoring/retry, all on
-the Step 16 admin API. Separate from the Customer app, with its own layout, gate and idle-timeout handling.
+FE-9 (profile and account settings) has no backend yet. Build that first: profile read/update (name, contact details,
+timezone), password change (current password + re-authentication, sessions revoked), email change with verification,
+and their audit events, with backend tests. Then FE-9 on top of it. The separate admin session cookie is a good
+companion item.

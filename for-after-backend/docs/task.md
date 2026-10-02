@@ -5,12 +5,12 @@
 
 | | |
 |---|---|
-| **Last updated** | 2026-09-30 |
+| **Last updated** | 2026-10-02 |
 | **Latest backend step** | Step 16: admin backend + mandatory admin TOTP + generic audit log + queue operations |
-| **Latest frontend step** | Step 19: Recipient portal, Trusted Contact portal, Customer death-verification safety banner (`for-after-frontend`) |
-| **Backend** | Steps 1–16 built and tested (615 unit tests, 162 e2e tests); unchanged by frontend Steps 17–19 (docs only) |
-| **Frontend** | **25 of 30 tasks** built (FE-1–8, FE-10–19, FE-21–27); 134 unit/component tests passing; Playwright: 6 passing (Step 17), 13 more written for Steps 18–19 but **not yet run**. Frontend tracker: `for-after-frontend/docs/tasks.md` |
-| **Checklist (phases 02–27)** | **134 of 214** items done |
+| **Latest frontend step** | Step 21: stabilisation + real-backend verification + git baseline (`for-after-frontend`; no new features) |
+| **Backend** | Steps 1–16 built and tested (615 unit tests, 162 e2e tests); unchanged by frontend Steps 17–20 (docs only) |
+| **Frontend** | **26 of 30 tasks** built and verified (FE-1–8, FE-10–19, FE-21–28); 185 unit/component tests and 31 Playwright tests passing against the real local API, PostgreSQL, Redis and the development bucket (2026-10-02). Frontend tracker: `for-after-frontend/docs/tasks.md` |
+| **Checklist (phases 02–27)** | **137 of 214** items done |
 
 ---
 
@@ -65,16 +65,16 @@ Each phase lists **Done** items first, then **To do**. "Backend ready" means the
 | 16 | Scheduling | 🟡 FIXED_DATE, ON_DEATH, AFTER_DEATH executed + schedule UI (Step 18); recurring triggers open | 10 / 11 |
 | 17 | Redis + BullMQ | 🟡 Release + death-verification queues, admin failed-job view/retry done; delivery, DLQ/alerts open | 7 (+1 partly) / 10 |
 | 18 | Recipient portal | 🟡 Backend (Step 13) + UI (Step 19) done; SMS, email provider open | 4 / 7 |
-| 19 | Death verification | 🟡 Workflow (Steps 14–15) + Trusted Contact portal and Customer safety UI (Step 19) done; admin UI, evidence, second confirmation open | 12 (+1 partly) / 15 |
+| 19 | Death verification | 🟡 Workflow (Steps 14–15) + Trusted Contact portal, Customer safety UI (Step 19) and admin review UI (Step 20) done; evidence, second confirmation open | 13 / 15 |
 | 20 | Notifications | ⬜ Not started | 0 / 3 |
 | 21 | Stripe billing | ⬜ Not started | 0 / 6 |
-| 22 | Admin portal | 🟡 Admin backend done (Step 16); subscriptions/deliveries wait for Stripe/delivery; UI open | 5 (+1 partly) / 7 |
+| 22 | Admin portal | 🟡 Admin backend (Step 16) + Admin Portal UI (Step 20) done; subscriptions/deliveries wait for Stripe/delivery | 6 (+1 partly) / 7 |
 | 23 | Audit + security | 🟡 `AuditLog` foundation + admin events (Step 16); customer events, export, deletion open | 1 (+1 partly) / 6 |
-| 24 | Testing | 🟡 Backend tests + Postman done; frontend 134 component tests, Playwright for Steps 18–19 not yet run | 4 (+1 partly) / 7 |
+| 24 | Testing | 🟡 Backend tests + Postman done; frontend 185 component + 31 Playwright tests green (Step 21); §50 security cases, load test open | 5 / 7 |
 | 25 | WordPress integration | ⬜ Not started | 0 / 3 |
 | 26 | Staging | ⬜ Not started | 0 / 6 |
 | 27 | Production | ⬜ Not started | 0 / 9 |
-| FE | **Frontend (all apps)** | 🟡 Customer app + vault + Recipient/Trusted Contact portals (Steps 17–19); profile, billing, admin, WordPress open | **25 / 30** |
+| FE | **Frontend (all apps)** | 🟡 Customer app + vault + Recipient/Trusted Contact portals (Steps 17–19) + Admin Portal (Step 20); profile, billing, WordPress open | **26 / 30** |
 
 ### What the backend already does
 
@@ -86,7 +86,7 @@ Recipient ──email code──► read released Messages + media              
 Trusted Contact ──email code──► see accounts ──► file death report (PENDING)       (Step 14)
                                                   └─ verifies nothing, releases nothing
 Report ──safety notice──► safeguard ──► admin verifies ──► PASSED + ON_DEATH/AFTER_DEATH release   (Step 15)
-Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · audit log · queues · death review (Step 16)
+Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · audit log · queues · death review (Step 16; UI Step 20)
 ```
 
 ---
@@ -269,7 +269,7 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 **To do**
 - [ ] Pagination on the list endpoint (when needed)
 - [ ] Recipient photo (after Media, phase 12)
-- [x] Frontend: list, add, view, edit, remove "People I Love" → **FE-10** (Step 18) (component-tested; Playwright written, not yet run)
+- [x] Frontend: list, add, view, edit, remove "People I Love" → **FE-10** (Step 18) (Playwright verified, Step 21)
 
 ### 10 · Trusted Contacts — 🟡 8 of 13
 
@@ -290,7 +290,7 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 - [ ] SMS OTP for mobile-only Trusted Contacts
 - [ ] Production email provider for OTP delivery (provider-neutral `TrustedContactOtpDelivery` in place)
 - [ ] Permission model (waiting on product decision)
-- [x] Frontend: manage Trusted Contacts → **FE-11** (Step 18; their own portal is FE-24 to FE-27, Step 19) (component-tested; Playwright written, not yet run)
+- [x] Frontend: manage Trusted Contacts → **FE-11** (Step 18; their own portal is FE-24 to FE-27, Step 19) (Playwright verified, Step 21)
 
 ### 11 · Messages — 🟡 11 of 14
 
@@ -315,7 +315,7 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 - [ ] VIDEO content type (after the video pipeline, phase 12)
 - [ ] Pagination / summary list (list currently returns full text)
 - [ ] Soft-deleting a message should also clean up its media (currently left for reconciliation)
-- [x] Frontend: create/edit message flow, assign recipients, status views, unschedule-to-edit → **FE-12**, **FE-16** (Step 18) (component-tested; Playwright written, not yet run)
+- [x] Frontend: create/edit message flow, assign recipients, status views, unschedule-to-edit → **FE-12**, **FE-16** (Step 18) (Playwright verified, Step 21)
 
 ### 12 · Media — 🟡 8 (+1 partly) of 15
 
@@ -342,7 +342,7 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 - [ ] Storage usage tracking and quota enforcement (80/90/100% warnings)
 - [ ] Separate production bucket and credentials
 - [~] Frontend: upload with progress + cancel, browser audio recorder, signed previews, delete → **FE-13**, **FE-14**
-  (Step 18) (component-tested; Playwright written, not yet run). Video recorder waits for the video pipeline
+  (Step 18) (Playwright verified, Step 21). Video recorder waits for the video pipeline
 
 ### 13 · Memory Vault — 🟡 5 of 7
 
@@ -356,7 +356,7 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 **To do**
 - [ ] Sharing / recipient assignment / scheduling / create a message from a memory (product decision)
 - [ ] Search, tags, pagination; orphaned-object cleanup after soft delete
-- [x] Frontend: Memory Vault pages, category filter, photo/audio → **FE-17** (Step 18) (component-tested; Playwright written, not yet run)
+- [x] Frontend: Memory Vault pages, category filter, photo/audio → **FE-17** (Step 18) (Playwright verified, Step 21)
 
 ### 14 · My Story — 🟡 4 of 6
 
@@ -370,7 +370,7 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 **To do**
 - [ ] Final prompt set and categories approved in discovery (V1 catalogue is a development placeholder)
 - [ ] Audio/video/photo answers, linking Memory Vault items, sharing, release, create a message from an answer (product decision)
-- [x] Frontend: My Story prompts + editor → **FE-18** (Step 18) (component-tested; Playwright written, not yet run)
+- [x] Frontend: My Story prompts + editor → **FE-18** (Step 18) (Playwright verified, Step 21)
 
 ### 15 · My Wishes — 🟡 5 of 7
 
@@ -385,7 +385,7 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 **To do**
 - [ ] Disclaimer shown in the UI; acknowledgement/consent record if legal review requires it
 - [ ] Release to family after verified death, media, AI help (product decision; AI must never present output as legal advice)
-- [x] Frontend: My Wishes pages with the exact non-legal disclaimer → **FE-19** (Step 18) (component-tested; Playwright written, not yet run)
+- [x] Frontend: My Wishes pages with the exact non-legal disclaimer → **FE-19** (Step 18) (Playwright verified, Step 21)
 
 ---
 
@@ -411,7 +411,7 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 **To do**
 - [ ] NOW, BIRTHDAY, ANNIVERSARY, CUSTOM_EVENT, ANNUAL_AFTER_DEATH (waiting on product decisions); per-recipient
   release/delivery records
-- [x] Frontend: schedule picker (FIXED_DATE with timezone offset, ON_DEATH, AFTER_DEATH), change timing, unschedule → **FE-15** (Step 18) (component-tested; Playwright written, not yet run)
+- [x] Frontend: schedule picker (FIXED_DATE with timezone offset, ON_DEATH, AFTER_DEATH), change timing, unschedule → **FE-15** (Step 18) (Playwright verified, Step 21)
 
 ### 17 · Redis + BullMQ — 🟡 7 (+1 partly) of 10
 
@@ -455,9 +455,9 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 - [ ] Production email provider for OTP delivery (provider-neutral `RecipientOtpDelivery` in place; one provider can serve
   Recipient and Trusted Contact OTP)
 - [ ] Grant revocation, sender display name, read receipts (product decisions open)
-- [x] Frontend: calm, simple recipient experience → **FE-21** to **FE-23** (Step 19) (component-tested; Playwright written, not yet run)
+- [x] Frontend: calm, simple recipient experience → **FE-21** to **FE-23** (Step 19) (Playwright verified, Step 21)
 
-### 19 · Death verification — 🟡 12 (+1 partly) of 15
+### 19 · Death verification — 🟡 13 of 15
 
 > ⚠️ **Report ≠ verification ≠ release.** Only an admin, after the safety notice and the safeguard window, can verify.
 
@@ -486,18 +486,20 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 **To do**
 - [ ] Evidence upload (death certificate etc.) to private storage
 - [ ] Second confirmation when a second Trusted Contact exists (today: supporting report only)
-- [~] Frontend: Trusted Contact portal → **FE-24** to **FE-27** and Customer safety banner + confirm-alive done (Step 19)
-  (component-tested; Playwright written, not yet run); admin review UI open (FE-28)
+- [x] Frontend: Trusted Contact portal → **FE-24** to **FE-27** and Customer safety banner + confirm-alive (Step 19,
+  component-tested); admin review UI → **FE-28** (Step 20: list, detail with the case's event timeline, verify with an
+  explicit offset `verifiedDeathAt` + confirmation, reject, 409 "case changed" + refetch; verified live: VERIFIED →
+  PASSED → ON_DEATH release by the backend, reject, confirm-alive race)
 
 ---
 
 ## 🎨 Part 6 — Frontend
 
-> The frontend lives in `D:\FOR-AFTER-DIGITAL-VAULT\for-after-frontend` (Steps 17–19; its own tracker is `docs/tasks.md`), next to `for-after-backend` and
+> The frontend lives in `D:\FOR-AFTER-DIGITAL-VAULT\for-after-frontend` (Steps 17–20; its own tracker is `docs/tasks.md`), next to `for-after-backend` and
 > `postman`. See its README for setup, the auth architecture and tests. The backend for 25 of the 30 tasks below is
 > already built and tested.
 
-### Frontend summary — 🟡 25 of 30 done
+### Frontend summary — 🟡 26 of 30 done
 
 | Group | Tasks | Done | Backend ready |
 |---|:--:|:--:|:--:|
@@ -506,9 +508,9 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 | C. Customer vault features | 11 | 🟡 10 of 11 | 10 of 11 |
 | D. Recipient portal | 3 | ✅ 3 of 3 | 3 of 3 |
 | E. Trusted Contact portal | 4 | ✅ 4 of 4 | 4 of 4 |
-| F. Admin portal | 1 | 0 of 1 | 1 of 1 |
+| F. Admin portal | 1 | ✅ 1 of 1 | 1 of 1 |
 | G. WordPress | 2 | 0 of 2 | 1 of 2 |
-| **Total** | **30** | **25 of 30** | **26 of 30** (FE-1 needs no backend) |
+| **Total** | **30** | **26 of 30** | **26 of 30** (FE-1 needs no backend) |
 
 **Stack (phase 07, built in Step 17):** Next.js 16 (App Router) · React 19 · TypeScript · Tailwind CSS 4 · shadcn/ui
 (Radix) · TanStack Query 5 · React Hook Form + Zod 4 · Lucide · Vitest + RTL · Playwright. All API calls use cookies
@@ -536,7 +538,7 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 | FE-8 | ✅ Register / login pages in the app (WordPress forms are FE-29). Register → `/login` (backend creates no session) | 04 | ✅ ready |
 | FE-9 | ⬜ Profile and account settings pages | 08 | ⬜ not built |
 
-### C. Customer vault features — 🟡 10 of 11 (Step 18; Playwright written, not yet run)
+### C. Customer vault features — 🟡 10 of 11 (Step 18; Playwright verified, Step 21)
 
 | # | Task | Phase | Backend |
 |:--:|---|:--:|:--:|
@@ -552,7 +554,7 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 | FE-19 | ✅ My Wishes: prompts by category, answer/edit/delete, exact non-legal disclaimer | 15 | ✅ ready |
 | FE-20 | ⬜ Plan/billing pages (Stripe checkout and portal) | 21 | ⬜ not built |
 
-### D. Recipient portal — ✅ 3 of 3 (Step 19; Playwright written, not yet run)
+### D. Recipient portal — ✅ 3 of 3 (Step 19; Playwright verified, Step 21)
 
 | # | Task | Phase | Backend |
 |:--:|---|:--:|:--:|
@@ -560,7 +562,7 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 | FE-22 | ✅ Released messages list and message page: calm, simple, distraction-free | 18 | ✅ ready |
 | FE-23 | ✅ Photo/audio viewing through short-lived signed URLs (lightbox, per-item retry) | 18 | ✅ ready |
 
-### E. Trusted Contact portal — ✅ 4 of 4 (Step 19; Playwright written, not yet run)
+### E. Trusted Contact portal — ✅ 4 of 4 (Step 19; Playwright verified, Step 21)
 
 | # | Task | Phase | Backend |
 |:--:|---|:--:|:--:|
@@ -569,11 +571,11 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 | FE-26 | ✅ Death report form: optional date (not in future), optional note, summary, required confirmation; "report ≠ verification" wording; 409 states | 19 | ✅ ready |
 | FE-27 | ✅ Case status page: all six statuses in plain words, "reported by you", opened date | 19 | ✅ ready |
 
-### F. Admin portal — ⬜ 0 of 1
+### F. Admin portal — ✅ 1 of 1
 
 | # | Task | Phase | Backend |
 |:--:|---|:--:|:--:|
-| FE-28 | ⬜ Admin portal: TOTP sign-in/enrollment, users, death-verification review queue, audit log viewer, queues | 22 | ✅ ready (Step 16) |
+| FE-28 | ✅ Admin portal (Step 20): password + mandatory TOTP sign-in, first-time enrolment with recovery codes, recovery-code sign-in, users (search/filter/suspend/reactivate), death-verification review (verify/reject), audit log viewer, queues (failed jobs, retry). Component-tested, Playwright + live run against the real API | 22 | ✅ ready (Step 16) |
 
 ### G. WordPress — ⬜ 0 of 2
 
@@ -605,7 +607,7 @@ Frontend testing (component + Playwright E2E) is tracked in phase 24 and applies
 - [ ] Plan limits (storage, recipients, trusted contacts)
 - [ ] Subscription-after-death behaviour (per product decision)
 
-### 22 · Admin portal — 🟡 5 (+1 partly) of 7
+### 22 · Admin portal — 🟡 6 (+1 partly) of 7
 
 - [x] Death-verification review + decision API (Step 15): `/admin/death-verifications` list, detail, verify, reject;
   paginated and audited since Step 16
@@ -617,7 +619,8 @@ Frontend testing (component + Playwright E2E) is tracked in phase 24 and applies
   (Phase 17/20). No billing or delivery data was invented
 - [x] Audit log viewer: `GET /admin/audit-logs` (event, actor, subject, date filters, paginated) + detail (Step 16)
 - [x] Admin 2FA required (Step 16): mandatory TOTP + recovery codes, admin idle timeout
-- [ ] Frontend: admin portal → **FE-28**
+- [x] Frontend: admin portal → **FE-28** (Step 20, `for-after-frontend/src/components/admin/`); no billing, delivery,
+  role-editing, deletion or force-release UI (no such APIs)
 
 Open (not checklist items yet): admin MFA reset / recovery-code regeneration API, re-authentication for sensitive
 actions, role management (deliberately no API).
@@ -640,7 +643,7 @@ actions, role management (deliberately no API).
 
 > Phases 24–27. Testing, WordPress hand-off, staging and production.
 
-### 24 · Testing — 🟡 4 (+1 partly) of 7
+### 24 · Testing — 🟡 5 of 7
 
 **Done**
 - [x] Unit tests: **615 passing** (31 files)
@@ -656,13 +659,13 @@ actions, role management (deliberately no API).
   e2e hook/test timeouts are now 60 s / 30 s
 
 **To do**
-- [~] Frontend component and E2E tests: foundation done in Step 17 (`for-after-frontend`: Vitest + RTL, **50 passing**
-  for the API client, auth forms, route gates, `/dev-login` flag; Playwright, **6 passing** against the real local API:
-  register → login → refresh/second tab → logout, protected-route redirect, wrong password, `/dev-login` in dev and
-  `404` in a production build, 375/768/1280 px shell). Steps 18–19 bring component tests to **134 passing** (12 files:
-  vault CRUD, media upload/recorder, scheduling, prompts, portals, safety banner). Their Playwright specs
-  (`e2e/vault.spec.ts`, `e2e/portals.spec.ts`, 13 tests) are written but **not yet run**; the portal OTP flows need
-  `E2E_BACKEND_LOG` (see the frontend README)
+- [x] Frontend component and E2E tests (`for-after-frontend`): Vitest + RTL **185 passing** (13 files); Playwright
+  **31 passing** against the real local API, PostgreSQL, Redis and the development bucket (Step 21, 2026-10-02):
+  Customer auth and `/dev-login` (dev and production build), vault CRUD, real browser photo/audio/recorded uploads to
+  READY, failed upload → retry, scheduling, Recipient OTP → real FIXED_DATE release → read, Trusted Contact OTP → death
+  report → Customer "I'm still alive", admin password + TOTP enrolment, suspend/reactivate, verify/reject, queues,
+  cross-portal session isolation. Step 21 fixed one frontend bug (lost death-report confirmation, FE-26); no backend
+  code changed
 - [ ] Critical security test cases from overview §50 (recipient reading unreleased messages/media is covered by
   `test/recipient-portal.e2e-spec.ts` since Step 13)
 - [ ] Load test for delivery workers

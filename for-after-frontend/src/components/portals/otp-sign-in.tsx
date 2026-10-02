@@ -8,11 +8,10 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { PORTALS } from '@/components/portals/portal-shell';
+import { CodeField } from '@/components/shared/code-field';
 import { FormError, TextField } from '@/components/shared/form-field';
 import { Spinner } from '@/components/shared/states';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { useRequestCode, useVerifyCode } from '@/hooks/use-portals';
 import type { Portal } from '@/lib/query/query-client';
 
@@ -153,35 +152,15 @@ function CodeStep({
         className="grid gap-5"
       >
         <FormError error={verify.error ?? resendError} />
-        <div className="grid gap-2">
-          <Label htmlFor="code">6-digit code</Label>
-          <Input
-            id="code"
-            name="code"
-            // One field (not six boxes): paste, autofill and screen readers just work.
-            inputMode="numeric"
-            autoComplete="one-time-code"
-            // No maxLength: it would cut a pasted "123 456" before the spaces are
-            // stripped. onChange keeps the first 6 digits instead.
-            pattern="\d{6}"
-            autoFocus
-            value={code}
-            aria-invalid={invalid ? true : undefined}
-            aria-describedby={invalid ? 'code-error' : undefined}
-            disabled={verify.isPending}
-            onChange={(e) => {
-              setInvalid(false);
-              // Keep digits only, so "123 456" or "123-456" pastes cleanly.
-              setCode(e.target.value.replace(/\D/g, '').slice(0, 6));
-            }}
-            className="h-14 text-center font-mono text-2xl tracking-[0.5em]"
-          />
-          {invalid && (
-            <p id="code-error" className="text-sm text-danger">
-              Enter the 6 digits from the email.
-            </p>
-          )}
-        </div>
+        <CodeField
+          value={code}
+          disabled={verify.isPending}
+          error={invalid ? 'Enter the 6 digits from the email.' : undefined}
+          onChange={(digits) => {
+            setInvalid(false);
+            setCode(digits);
+          }}
+        />
         <Button type="submit" size="lg" className="w-full" disabled={verify.isPending}>
           {verify.isPending && <Spinner />}
           Sign in

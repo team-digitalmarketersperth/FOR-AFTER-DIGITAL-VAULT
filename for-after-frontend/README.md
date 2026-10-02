@@ -1,17 +1,17 @@
 # 🕊️ For After — Frontend
 
 > The web app for **For After**, a secure digital legacy and posthumous messaging platform: the Customer app and vault,
-> plus the Recipient and Trusted Contact portals. Talks to the NestJS API in [`../for-after-backend`](../for-after-backend)
+> the Recipient and Trusted Contact portals, and the Admin Portal. Talks to the NestJS API in [`../for-after-backend`](../for-after-backend)
 > using HttpOnly session cookies (one per kind of user).
 
 | | |
 |---|---|
 | **Built** | Step 17: foundation, Customer auth, `/dev-login`, dashboard shell (FE-1 to FE-8). Step 18: the Customer vault: People I Love, Trusted Contacts, Messages with photo/audio upload, browser recording and scheduling, Memory Vault, My Story, My Wishes (FE-10 to FE-19) |
-| **Also built** | Step 19: Recipient portal (FE-21 to FE-23), Trusted Contact portal (FE-24 to FE-27), Customer death-verification safety banner + "I'm still alive" |
-| **Not built yet** | Profile (FE-9, no backend), billing (FE-20), admin (FE-28), WordPress (FE-29/30) |
+| **Also built** | Step 19: Recipient portal (FE-21 to FE-23), Trusted Contact portal (FE-24 to FE-27), Customer death-verification safety banner + "I'm still alive". Step 20: Admin Portal (FE-28): password + mandatory TOTP sign-in and enrolment, users, death-verification review, audit log, queues |
+| **Not built yet** | Profile (FE-9, no backend), billing (FE-20), WordPress (FE-29/30) |
 | **Stack** | Next.js 16 (App Router, Turbopack) · React 19 · TypeScript · Tailwind CSS 4 · shadcn/ui (Radix) · TanStack Query 5 · React Hook Form + Zod 4 · Lucide |
-| **Tests** | Vitest + React Testing Library: **134 passing** · Playwright against the real local API: 6 passing (Step 17), 13 for Steps 18–19 written but not yet run |
-| **Progress** | [`docs/tasks.md`](docs/tasks.md) (frontend tracker, 25 of 30 tasks) · full roadmap: [`../for-after-backend/docs/task.md`](../for-after-backend/docs/task.md) Part 6 |
+| **Tests** | Vitest + React Testing Library: **185 passing** · Playwright against the real local API, PostgreSQL, Redis and the development bucket (Step 21, 2026-10-02): **31 passing**, 0 failing, 0 skipped (Steps 17–20, with the OTP log and a fictional admin) |
+| **Progress** | [`docs/tasks.md`](docs/tasks.md) (frontend tracker, 26 of 30 tasks, all verified) · full roadmap: [`../for-after-backend/docs/task.md`](../for-after-backend/docs/task.md) Part 6 |
 
 ## Requirements
 
@@ -67,6 +67,12 @@ First run of Playwright: `npx playwright install chromium`. The API throttles lo
 and the E2E suite uses 3 of each, so wait a minute between runs. E2E accounts are throwaway
 `e2e-<timestamp>@example.com` users in your local database.
 
+On a slow machine, `next dev` compiles each route on first visit (20 s to over a minute here) and its HMR rebuilds can
+abort a navigation mid-test, so the first run of a spec can time out for reasons that have nothing to do with the app.
+For the real-backend suites, serve a production build on :3000 instead (`npm run build && npx next start -p 3000`, it
+is reused) and run `npx playwright test --project=vault --project=production-build`; run `--project=development`
+(`/dev-login`) against `npm run dev`. The vault project gives Chromium a fake microphone for the recorder test.
+
 ## How authentication works
 
 ```text
@@ -87,8 +93,8 @@ and the E2E suite uses 3 of each, so wait a minute between runs. E2E accounts ar
   admin MFA) on every request. A suspended or `PASSED` Customer's next `/auth/me` returns `401` and the app returns
   them to `/login`; the login form shows the backend's "This account cannot sign in." (`403`).
 - **Register does not sign in.** The backend creates no session, so the app goes to `/login?registered=1`.
-- **Admins are not Customers.** An admin's password only opens a TOTP challenge (`mfaRequired`). The login form says
-  "This account requires administrator sign-in" and goes no further; the admin UI is FE-28.
+- **Admins are not Customers.** An admin's password only opens a TOTP challenge (`mfaRequired`). The Customer login
+  form says "This account requires administrator sign-in" and links to `/admin/login`; admins use the Admin Portal.
 - **Logout** calls `POST /auth/logout` (the backend destroys the session and clears the cookie), then drops every
   cached query and sets `['auth', 'me']` to `null`. Login also drops the previous cache, so nothing from one person
   survives into another's session on a shared browser.
@@ -105,7 +111,7 @@ and the E2E suite uses 3 of each, so wait a minute between runs. E2E accounts ar
 | `/my-wishes[?category=]`, `/my-wishes/[promptKey]` | Same, with the non-legal disclaimer |
 
 - **Uploads** go straight from the browser to private storage: `upload-url` → `PUT` (XHR, for progress and cancel) → `complete` → READY. Previews use short-lived signed URLs, kept in memory only and fetched only when shown.
-- **Browser uploads need a CORS rule on the bucket.** The development bucket `for-after-dev` has none yet, so a real browser PUT from `http://localhost:3000` is refused (the preflight returns 403). Add one rule allowing origin `http://localhost:3000` (and later `https://app.forafter.com.au`), method `PUT` and header `content-type`. Photos and audio still display without it.
+- **Browser uploads need a CORS rule on the bucket.** `for-after-dev` (still private) has one, `forAfterLocalUpload` (`../backblaze/cors-rules.json`): origin `http://localhost:3000`, operation `s3_put`, header `content-type`. Production needs the same for `https://app.forafter.com.au`. Signed GETs (previews) need no CORS rule.
 - **Session expiry:** any `401` from a feature call drops private cached data and returns to `/login`.
 
 ## Portals (Step 19)
@@ -120,6 +126,45 @@ and the E2E suite uses 3 of each, so wait a minute between runs. E2E accounts ar
 - **Codes in development** are printed only in the API terminal (`[DEV ONLY] Recipient OTP for s***@example.com: 123456`). The UI never shows or fetches them.
 - **E2E:** the OTP flows in `e2e/portals.spec.ts` run only when the backend output is teed to a file and `E2E_BACKEND_LOG` points at it:
   `npm run start:dev | tee backend.log` (backend), then `E2E_BACKEND_LOG=../for-after-backend/backend.log npx playwright test --project=vault` (frontend). The Recipient test waits about 2 minutes for a real FIXED_DATE release.
+
+## Admin Portal (Step 20)
+
+| Route | What |
+|---|---|
+| `/admin/login` | Email + password. For an admin the API returns only a TOTP challenge (no session) |
+| `/admin/mfa/setup` | First sign-in: setup key + QR (drawn in the browser, never by a QR service) → first code → 10 recovery codes, shown once |
+| `/admin/mfa/verify` | Later sign-ins: 6-digit TOTP, or one recovery code (lost device) |
+| `/admin` | Overview: only the API's numbers; ready-for-review cases and failed jobs first |
+| `/admin/users[?search=&status=&role=&page=]`, `/admin/users/[id]` | Server-side search/filter/paging; account metadata and counts only; suspend (reason required) / reactivate |
+| `/admin/death-verifications[?status=&page=]`, `/[caseId]` | Review queue, reports, the case's own event timeline, verify / reject (READY_FOR_REVIEW only) |
+| `/admin/audit-logs[?eventType=&actorUserId=&subjectType=&subjectId=&from=&to=&page=]`, `/[id]` | Read-only audit trail |
+| `/admin/system/queues[?queue=&page=]` | Queue counts, failed jobs (sanitized by the API), retry |
+
+- **Password ≠ access.** The portal opens only after `POST /admin-auth/totp/confirm|verify` or `/recovery/verify`
+  succeeds **and** `GET /admin-auth/me` confirms the session. `AdminGate` (`components/admin/admin-shell.tsx`) checks
+  `/admin-auth/me` (never `/auth/me`): `401` → `/admin/login` (never the Customer `/login`), `403` (a Customer) →
+  "Access denied" without signing anyone out.
+- **The challenge id lives in memory only** (the query cache, never storage or the URL). A refresh during the second
+  step asks you to sign in again; the challenge expires after 5 minutes anyway. The TOTP secret and recovery codes
+  exist only in component memory while shown; nothing admin-related is written to `localStorage`/`sessionStorage`.
+- **Same cookie as Customers.** Admins use `for_after_session`, so an admin sign-in, sign-out or expiry drops Customer
+  and admin cached data (`resetAdminCache`); Recipient and Trusted Contact data are left alone. Queries live under
+  `['admin', …]`. Consequence: one browser profile holds either a Customer or an admin session, never both (signing
+  in as an admin in another tab replaces the Customer session). A separate admin cookie is an open follow-up.
+- **Idle timeout is the server's.** After `ADMIN_SESSION_IDLE_TIMEOUT_SECONDS` (30 min) the next admin call is `401`;
+  the app clears admin data and shows "Your admin session expired. Please sign in again." on `/admin/login`. There is
+  no client-side timer.
+- **Privacy:** admins see account metadata and counts, never Message, Memory Vault, My Story or My Wishes content.
+  Retry re-runs a job through the worker's normal checks; there is no "release now". There is no role editor, no
+  account deletion and no "force" decision.
+- **Verify death** needs the case page, an explicit verified time of death (date + time in your timezone, sent with its
+  offset, never copied from the reported date), a ticked confirmation and a final button. A `409` (e.g. the account
+  holder confirmed alive meanwhile) shows "This case changed while you were reviewing it" and refetches.
+- **Provisioning:** there is no admin sign-up. Register normally, then promote (backend `docs/admin.md` §11).
+- **E2E:** `e2e/admin.spec.ts` always checks signed-out and Customer access. The signed-in flows run with a fictional
+  local admin: `E2E_ADMIN_EMAIL`, `E2E_ADMIN_PASSWORD` (and `E2E_ADMIN_TOTP_SECRET` once enrolled; a not-yet-enrolled
+  admin is enrolled by the test), plus optional `E2E_ADMIN_SUSPEND_EMAIL`, `E2E_ADMIN_READY_CASE`,
+  `E2E_ADMIN_REJECT_CASE` (fictional Customer / READY_FOR_REVIEW case ids).
 
 ## Security notes
 
@@ -143,6 +188,7 @@ src/
 │   ├── (dashboard)/       dashboard, people, trusted-contacts, messages, memory-vault, my-story, my-wishes (CustomerGate)
 │   ├── recipient/         sign-in + (signed-in)/messages          (Recipient portal, own gate)
 │   ├── trusted-contact/   sign-in + (signed-in)/accounts          (Trusted Contact portal, own gate)
+│   ├── admin/             (auth)/login, mfa/setup, mfa/verify + (portal)/… (Admin Portal, AdminGate)
 │   ├── layout.tsx         fonts, metadata, providers (QueryClient + toasts)
 │   ├── page.tsx           / → /dashboard
 │   └── error.tsx, not-found.tsx, icon.svg
@@ -155,20 +201,22 @@ src/
 │   ├── memory-vault/      Memory Vault
 │   ├── prompts/           My Story + My Wishes (shared)
 │   ├── portals/           portal shell/gates, OTP sign-in, Recipient + Trusted Contact pages
-│   ├── shared/            page header, confirm dialog, states, form fields, feature card
+│   ├── admin/             admin shell/gates, sign-in + MFA, overview, users, death verification, audit, queues
+│   ├── shared/            page header, confirm dialog, states, form fields, code field, feature card
 │   └── ui/                shadcn/ui primitives (restyled)
-├── hooks/                 use-auth, use-vault, use-media, use-portals, use-unsaved-changes
+├── hooks/                 use-auth, use-vault, use-media, use-portals, use-admin, use-unsaved-changes
 ├── lib/
-│   ├── api/               client, errors, auth, people, messages, media, memory-vault, prompts, portals
+│   ├── api/               client, errors, auth, people, messages, media, memory-vault, prompts, portals, admin
 │   ├── query/             QueryClient, query keys, per-principal 401 handling
 │   ├── format.ts          dates (calendar dates never shift), labels
 │   ├── composition.ts     message readiness guidance (mirrors the backend rules)
-│   ├── death-verification.ts  the one status → wording table
+│   ├── death-verification.ts  the one status → wording table (reporter and admin wording)
+│   ├── admin.ts           admin labels, URL-param parsing, canManage mirror, audit metadata filter
 │   └── env.ts             the only place env vars are read
 ├── schemas/               Zod form schemas (mirror the backend DTOs; the backend stays authoritative)
 └── proxy.ts               404s /dev-login in production
 docs/                      tasks.md (progress tracker), frontend-design-system.md
-e2e/                       Playwright specs (auth, vault, portals, production)
+e2e/                       Playwright specs (auth, vault, portals, admin, production)
 ```
 
 ## Design system

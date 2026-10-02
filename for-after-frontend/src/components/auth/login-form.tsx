@@ -1,6 +1,7 @@
 'use client';
 
 import { zodResolver } from '@hookform/resolvers/zod';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { FormError, PasswordField, TextField } from '@/components/shared/form-field';
@@ -36,8 +37,10 @@ export function LoginForm() {
         <Alert>
           <AlertTitle>Administrator account</AlertTitle>
           <AlertDescription>
-            This account requires administrator sign-in, which isn&apos;t
-            available here.
+            This account requires administrator sign-in.{' '}
+            <Link href="/admin/login" className="font-semibold text-primary underline underline-offset-4">
+              Go to the Admin Portal
+            </Link>
           </AlertDescription>
         </Alert>
       )}

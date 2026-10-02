@@ -2,6 +2,7 @@ import { MutationCache, QueryCache, QueryClient } from '@tanstack/react-query';
 import type { PromptArea } from '@/lib/api/prompts';
 import type { MediaScope } from '@/lib/api/media';
 import type { MemoryCategory } from '@/lib/api/memory-vault';
+import type { AuditFilters, CaseFilters, UserFilters } from '@/lib/api/admin';
 import { isApiError } from '@/lib/api/errors';
 
 /**
@@ -57,7 +58,51 @@ export async function resetPortalCache(client: QueryClient, portal: Portal, me: 
   client.setQueryData(meKey, me);
 }
 
+/**
+ * Admin portal. Everything lives under ['admin', …]; key[1] === 'sign-in' holds
+ * the in-memory MFA challenge and the "session expired" flag, never fetched.
+ */
+export const adminKeys = {
+  me: ['admin', 'me'] as const,
+  challenge: ['admin', 'sign-in', 'challenge'] as const,
+  expired: ['admin', 'sign-in', 'expired'] as const,
+  dashboard: ['admin', 'dashboard'] as const,
+  users: ['admin', 'users'] as const,
+  userList: (f: UserFilters) => ['admin', 'users', 'list', f] as const,
+  user: (id: string) => ['admin', 'users', id] as const,
+  cases: ['admin', 'death-verifications'] as const,
+  caseList: (f: CaseFilters) => ['admin', 'death-verifications', 'list', f] as const,
+  case: (id: string) => ['admin', 'death-verifications', id] as const,
+  auditLogs: ['admin', 'audit-logs'] as const,
+  auditList: (f: AuditFilters) => ['admin', 'audit-logs', 'list', f] as const,
+  auditLog: (id: string) => ['admin', 'audit-logs', id] as const,
+  queues: ['admin', 'queues'] as const,
+  failedJobs: (queue: string, page: number) => ['admin', 'queues', queue, 'failed', page] as const,
+};
+
 const isMe = (key: readonly unknown[]) => key[0] === 'auth' && key[1] === 'me';
+const isAdminMe = (key: readonly unknown[]) => key[0] === 'admin' && key[1] === 'me';
+
+/**
+ * Admins sign in with the Customer cookie (for_after_session), so an admin
+ * sign-in, sign-out or expiry replaces that one session: Customer and admin
+ * data both go. Recipient and Trusted Contact sessions are separate and stay.
+ */
+export function dropAdminData(client: QueryClient) {
+  client.removeQueries({ predicate: ({ queryKey }) => !isPortal(queryKey[0]) && !isAdminMe(queryKey) });
+}
+
+export async function resetAdminCache(client: QueryClient, me: unknown = null) {
+  await client.cancelQueries({ queryKey: adminKeys.me });
+  dropAdminData(client);
+  client.setQueryData(adminKeys.me, me);
+}
+
+/** Server ended the admin session (idle timeout, suspension, …): sign-in explains why. */
+export async function endAdminSession(client: QueryClient) {
+  await resetAdminCache(client, null);
+  client.setQueryData(adminKeys.expired, true);
+}
 
 /** Drops every private query; auth/me is written in place so gates react. */
 export async function resetPrivateCache(client: QueryClient, user: unknown) {
@@ -78,7 +123,8 @@ export function makeQueryClient() {
   const onError = (error: unknown, key: readonly unknown[] | undefined) => {
     if (!isApiError(error) || error.kind !== 'unauthenticated') return;
     if (key?.[0] === 'login' || key?.[1] === 'sign-in') return;
-    if (isPortal(key?.[0])) void resetPortalCache(client, key[0]);
+    if (key?.[0] === 'admin') void endAdminSession(client);
+    else if (isPortal(key?.[0])) void resetPortalCache(client, key[0]);
     else void resetPrivateCache(client, null);
   };
   const client: QueryClient = new QueryClient({

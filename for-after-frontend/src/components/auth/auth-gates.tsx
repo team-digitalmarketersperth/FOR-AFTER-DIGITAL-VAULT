@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, type ReactNode } from 'react';
 import { DashboardShell } from '@/components/layout/dashboard-shell';
@@ -37,8 +38,8 @@ export function CustomerGate({ children }: { children: ReactNode }) {
     );
   }
 
-  // Admin sessions exist only after TOTP (Step 16). The admin portal is a later
-  // step, and the Customer dashboard must not render for an admin.
+  // Admin sessions exist only after TOTP (Step 16). The Customer dashboard
+  // must not render for an admin; they have their own portal (/admin).
   if (user.role !== 'CUSTOMER') return <NotACustomer />;
 
   return <DashboardShell user={user}>{children}</DashboardShell>;
@@ -50,17 +51,22 @@ function NotACustomer() {
   return (
     <ErrorState
       title="This area is for Customer accounts"
-      message="You're signed in with an administrator account. Administrator tools aren't available in this app yet."
+      message="You're signed in with an administrator account. Administrator tools are in the Admin Portal."
       action={
-        <Button
-          variant="outline"
-          disabled={logout.isPending}
-          onClick={() =>
-            logout.mutate(undefined, { onSuccess: () => router.replace('/login') })
-          }
-        >
-          Log out
-        </Button>
+        <>
+          <Button asChild>
+            <Link href="/admin">Open the Admin Portal</Link>
+          </Button>
+          <Button
+            variant="outline"
+            disabled={logout.isPending}
+            onClick={() =>
+              logout.mutate(undefined, { onSuccess: () => router.replace('/login') })
+            }
+          >
+            Log out
+          </Button>
+        </>
       }
     />
   );

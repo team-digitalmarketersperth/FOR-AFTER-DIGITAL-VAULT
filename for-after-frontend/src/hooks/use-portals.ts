@@ -108,7 +108,11 @@ export function useDeathReport(trustedContactId: string) {
     mutationFn: (input) => trustedContactApi.report(trustedContactId, input),
     // Refresh after a success or a 409 (someone else's report may have opened
     // the case, or it closed): the status on screen must match the server.
-    onSettled: () => qc.invalidateQueries({ queryKey: portalKeys.accounts }),
+    // Not awaited: the refreshed status unmounts the form, and the caller's
+    // mutate() callbacks (confirmation + redirect) never run after an unmount.
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: portalKeys.accounts });
+    },
     gcTime: 0,
   });
 }

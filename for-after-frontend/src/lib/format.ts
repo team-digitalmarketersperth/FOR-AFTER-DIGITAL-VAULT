@@ -40,6 +40,10 @@ export function formatCalendarDate(date: string) {
   );
 }
 
+/** → "30 Sep 2026, 2:15 pm" in the viewer's timezone (dense admin lists). */
+export const formatTimestamp = (iso: string) =>
+  new Intl.DateTimeFormat('en-AU', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(iso));
+
 export const timeZoneName = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 /**

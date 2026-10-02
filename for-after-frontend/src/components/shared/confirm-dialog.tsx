@@ -28,6 +28,9 @@ export function ConfirmDialog({
   pending,
   error,
   tone = 'danger',
+  children,
+  confirmDisabled,
+  onOpenChange,
 }: {
   trigger: ReactNode;
   title: string;
@@ -37,18 +40,32 @@ export function ConfirmDialog({
   pending: boolean;
   error?: ApiError | null;
   tone?: 'danger' | 'default';
+  /** Optional form fields (a reason, a confirmation checkbox) between text and buttons. */
+  children?: ReactNode;
+  confirmDisabled?: boolean;
+  /** E.g. to clear the fields when the dialog closes. */
+  onOpenChange?: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpenState] = useState(false);
+  const setOpen = (next: boolean) => {
+    setOpenState(next);
+    onOpenChange?.(next);
+  };
   return (
     <Dialog open={open} onOpenChange={(next) => !pending && setOpen(next)}>
       <DialogTrigger asChild>{trigger}</DialogTrigger>
-      <DialogContent className="gap-6 rounded-xl bg-surface p-7 sm:max-w-md" showCloseButton={false}>
+      <DialogContent
+        // Tall dialogs (forms) scroll inside the viewport instead of clipping on phones.
+        className="max-h-[calc(100dvh-2rem)] gap-6 overflow-y-auto rounded-xl bg-surface p-7 sm:max-w-md"
+        showCloseButton={false}
+      >
         <DialogHeader className="gap-3">
           <DialogTitle className="text-[28px] leading-tight font-normal">{title}</DialogTitle>
           <DialogDescription className="text-[15px] leading-relaxed text-foreground-muted">
             {description}
           </DialogDescription>
         </DialogHeader>
+        {children}
         {error && (
           <p role="alert" className="rounded-md bg-danger/8 px-4 py-3 text-sm text-danger">
             {error.message}
@@ -60,7 +77,7 @@ export function ConfirmDialog({
           </Button>
           <Button
             variant={tone === 'danger' ? 'destructive' : 'default'}
-            disabled={pending}
+            disabled={pending || confirmDisabled}
             onClick={() => onConfirm().then(() => setOpen(false), () => undefined)}
           >
             {pending && <Spinner />}

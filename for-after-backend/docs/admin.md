@@ -1,8 +1,8 @@
 # 🛡️ For After — Admin Backend (Step 16)
 
 > The admin API: mandatory TOTP sign-in, hardened admin sessions, user search and suspension, a generic append-only
-> audit log, queue monitoring with failed-job retry, and the Step 15 death-verification review. Backend only; the admin
-> UI is **FE-28**.
+> audit log, queue monitoring with failed-job retry, and the Step 15 death-verification review. The admin UI
+> (**FE-28**) is the Admin Portal in `for-after-frontend` (Step 20, `/admin`; see its README).
 
 | | |
 |---|---|

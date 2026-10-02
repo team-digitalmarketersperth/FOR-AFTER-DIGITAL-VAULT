@@ -281,6 +281,33 @@ describe('Trusted Contact portal (FE-24 to FE-27)', () => {
     });
   });
 
+  it('still confirms and opens the status page when the refetched status hides the form', async () => {
+    // As the real API answers: after the report the case is open and reported by you,
+    // so ReportForm swaps the form for "already submitted" once the status refetches.
+    // The accounts refetch answers last, so the status update renders while the
+    // mutation is still settling (the order seen in a real browser).
+    let reported = false;
+    const api = routeFetch({
+      'GET /trusted-contact/accounts': (() =>
+        reported
+          ? new Promise((r) => setTimeout(() => r(json(200, [account()])), 100))
+          : json(200, [account()])) as unknown as Response,
+      'GET /trusted-contact/accounts/t1/death-verification': () =>
+        json(200, reported
+          ? { status: 'PENDING_VERIFICATION', reportedByYou: true, openedAt: '2026-09-30T00:00:00Z' }
+          : { status: null, reportedByYou: false, openedAt: null }),
+      'POST /trusted-contact/accounts/t1/death-reports': () => {
+        reported = true;
+        return json(201, { caseId: 'c', reportId: 'r', status: 'PENDING_VERIFICATION', reportedAt: '2026-09-30T00:00:00Z', message: 'ok' });
+      },
+    });
+    renderWithClient(<ReportForm id="t1" />);
+    await userEvent.click(await screen.findByRole('checkbox'));
+    await userEvent.click(screen.getByRole('button', { name: 'Submit report' }));
+    await waitFor(() => expect(api.called('GET', '/trusted-contact/accounts/t1/death-verification')).toHaveLength(2));
+    await waitFor(() => expect(router.push).toHaveBeenCalledWith('/trusted-contact/accounts/t1'));
+  });
+
   it('the date is optional', async () => {
     const api = reportRoutes(json(201, { caseId: 'c', reportId: 'r', status: 'PENDING_VERIFICATION', reportedAt: '2026-09-30T00:00:00Z', message: 'ok' }));
     renderWithClient(<ReportForm id="t1" />);

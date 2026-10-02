@@ -22,7 +22,7 @@ export default defineConfig({
   projects: [
     {
       name: 'development',
-      testIgnore: /production\.spec|vault\.|portals\./,
+      testIgnore: /production\.spec|vault\.|portals\.|admin\./,
       use: { ...devices['Desktop Chrome'], baseURL: 'http://localhost:3000' },
     },
     {
@@ -33,10 +33,16 @@ export default defineConfig({
     },
     {
       name: 'vault',
-      // Vault (Step 18) and portals (Step 19); both use the Customers from vault-setup.
-      testMatch: /(vault|portals)\.spec\.ts/,
+      // Vault (Step 18), portals (Step 19) and admin (Step 20) use the Customers from vault-setup.
+      testMatch: /(vault|portals|admin)\.spec\.ts/,
       dependencies: ['vault-setup'],
-      use: { ...devices['Desktop Chrome'], baseURL: 'http://localhost:3000' },
+      use: {
+        ...devices['Desktop Chrome'],
+        baseURL: 'http://localhost:3000',
+        // A fake microphone for the browser recorder test; no real audio is captured.
+        permissions: ['microphone'],
+        launchOptions: { args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] },
+      },
     },
     {
       name: 'production-build',

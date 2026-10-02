@@ -46,3 +46,33 @@ export const REPORTER_STATUS: Record<CaseStatus | 'NONE', Copy> = {
 };
 
 export const reporterStatus = (status: CaseStatus | null) => REPORTER_STATUS[status ?? 'NONE'];
+
+/** What the For After team sees in the admin portal: operational, exact. */
+export const ADMIN_STATUS: Record<CaseStatus, Copy> = {
+  PENDING_VERIFICATION: {
+    label: 'Pending verification',
+    description: 'Report received. The safety notice to the account holder has not been sent yet.',
+    tone: 'open',
+  },
+  SAFEGUARD_ACTIVE: {
+    label: 'Safeguard active',
+    description: 'The account holder has been notified. Review opens when the safeguard period ends.',
+    tone: 'open',
+  },
+  READY_FOR_REVIEW: {
+    label: 'Ready for review',
+    description: 'The safeguard period has ended without the account holder responding. A decision is needed.',
+    tone: 'open',
+  },
+  VERIFIED: {
+    label: 'Verified',
+    description: 'The death was verified. The account is marked as passed.',
+    tone: 'done',
+  },
+  REJECTED: { label: 'Rejected', description: 'The report was not verified. Nothing was released.', tone: 'closed' },
+  CANCELLED: {
+    label: 'Cancelled',
+    description: 'The account holder confirmed they are alive. Nothing was released.',
+    tone: 'closed',
+  },
+};
