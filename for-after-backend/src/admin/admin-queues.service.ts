@@ -14,6 +14,7 @@ import {
   writeAuditLog,
 } from '../audit/audit-log.service.js';
 import { DeathVerificationQueue } from '../death-verification/death-verification-queue.service.js';
+import { ReleaseNotificationQueue } from '../release-notifications/release-notification-queue.service.js';
 import { AuditEventType } from '../generated/prisma/client.js';
 import {
   MessageReleaseQueue,
@@ -30,7 +31,8 @@ const COUNT_STATES = [
   'completed',
 ] as const;
 
-// Our job ids: message-release-<uuid>, death-verification-safeguard-<uuid>.
+// Our job ids: message-release-<uuid>, death-verification-safeguard-<uuid>,
+// release-notification-<uuid>.
 const JOB_ID = /^[A-Za-z0-9_-]{1,200}$/;
 
 /**
@@ -44,14 +46,13 @@ export const sanitizeFailedReason = (reason?: string | null) =>
     .replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, '[email]')
     .slice(0, 200) || null;
 
-// Payloads are id-only by design; only a valid UUID is echoed back.
+// Payloads are id-only by design; only a valid UUID is echoed back. An email
+// job carries only its ReleaseNotification id: never an address or content.
+const PAYLOAD_KEYS = new Set(['messageId', 'caseId', 'notificationId']);
 const payloadIds = (data: unknown) =>
   Object.fromEntries(
     Object.entries((data ?? {}) as Record<string, unknown>).filter(
-      ([k, v]) =>
-        (k === 'messageId' || k === 'caseId') &&
-        typeof v === 'string' &&
-        isUUID(v),
+      ([k, v]) => PAYLOAD_KEYS.has(k) && typeof v === 'string' && isUUID(v),
     ),
   );
 
@@ -70,10 +71,12 @@ export class AdminQueuesService {
     private readonly prisma: PrismaService,
     releases: MessageReleaseQueue,
     deaths: DeathVerificationQueue,
+    emails: ReleaseNotificationQueue,
   ) {
     this.queues = new Map<string, Queue>([
       ['message-release', releases.queue],
       ['death-verification', deaths.queue],
+      ['email-delivery', emails.queue],
     ]);
   }
 

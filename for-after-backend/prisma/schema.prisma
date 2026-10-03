@@ -476,13 +476,44 @@ model RecipientMessageAccessGrant {
   recipientEmailNormalized  String?
   recipientMobileNormalized String?
 
-  createdAt DateTime @default(now())
+  // Step 24: the "a message is waiting for you" email, if the grant has an email.
+  notification ReleaseNotification?
+  createdAt    DateTime             @default(now())
 
   @@unique([messageReleaseId, recipientId])
   @@index([messageId])
   @@index([recipientId])
   @@index([recipientEmailNormalized])
   @@index([recipientMobileNormalized])
+}
+
+enum ReleaseNotificationStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+// Step 24. One "a message is waiting for you" email per access grant that has
+// an email snapshot, created in the release transaction. The unique grantId is
+// the idempotency key: retries, reconciliation and a second worker can never
+// make a second row. Operational fields only: no subject, body or content.
+model ReleaseNotification {
+  id      String                      @id @default(uuid()) @db.Uuid
+  grantId String                      @unique @db.Uuid
+  grant   RecipientMessageAccessGrant @relation(fields: [grantId], references: [id], onDelete: Cascade)
+
+  status            ReleaseNotificationStatus @default(PENDING)
+  attemptCount      Int                       @default(0)
+  // A safe category (e.g. rate_limit_exceeded), never a provider response.
+  lastErrorCode     String?
+  providerMessageId String?
+  sentAt            DateTime?
+  failedAt          DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, createdAt])
 }
 
 // VIDEO is reserved; the API accepts PHOTO and AUDIO only.

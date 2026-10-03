@@ -137,6 +137,11 @@ const Related = ({ job }: { job: FailedJob }) =>
     <span className="font-mono text-xs" title={job.payload.messageId}>
       Message {shortId(job.payload.messageId)}
     </span>
+  ) : job.payload.notificationId ? (
+    // A Recipient email; its address and content are never sent to the admin UI.
+    <span className="font-mono text-xs" title={job.payload.notificationId}>
+      Email {shortId(job.payload.notificationId)}
+    </span>
   ) : (
     '—'
   );

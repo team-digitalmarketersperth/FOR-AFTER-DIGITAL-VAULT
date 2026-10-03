@@ -1,5 +1,6 @@
 import { Logger } from '@nestjs/common';
 import { DelayedError, type Job } from 'bullmq';
+import type { ReleaseNotificationQueue } from '../release-notifications/release-notification-queue.service.js';
 import type { MessageReleaseQueue } from './message-release-queue.service.js';
 import { MessageReleaseProcessor } from './message-release.processor.js';
 import type {
@@ -14,6 +15,7 @@ const setup = (outcome?: ReleaseOutcome | Error) => {
   const release = vi.fn();
   if (outcome instanceof Error) release.mockRejectedValue(outcome);
   else release.mockResolvedValue(outcome);
+  const notifications = { enqueueForMessage: vi.fn().mockResolvedValue(1) };
   const job = {
     id: `message-release-${ID}`,
     data: { messageId: ID },
@@ -23,19 +25,47 @@ const setup = (outcome?: ReleaseOutcome | Error) => {
   return {
     release,
     job,
+    notifications,
     processor: new MessageReleaseProcessor(
       { release } as unknown as MessageReleaseService,
       {} as MessageReleaseQueue,
+      notifications as unknown as ReleaseNotificationQueue,
     ),
     run: (j: object = job) =>
       new MessageReleaseProcessor(
         { release } as unknown as MessageReleaseService,
         {} as MessageReleaseQueue,
+        notifications as unknown as ReleaseNotificationQueue,
       ).process(j as unknown as Job<{ messageId: string }>, 'token'),
   };
 };
 
 describe('MessageReleaseProcessor', () => {
+  it('queues the Recipient emails after a release; a queue failure never fails the release (Step 24)', async () => {
+    const released = {
+      result: 'released',
+      triggerType: 'FIXED_DATE',
+      scheduledFor: DUE,
+      grants: 1,
+    } as const;
+    const ok = setup(released);
+    expect(await ok.run()).toBe('released');
+    expect(ok.notifications.enqueueForMessage).toHaveBeenCalledWith(ID);
+    const down = setup(released);
+    down.notifications.enqueueForMessage.mockRejectedValue(
+      new Error('redis down'),
+    );
+    const warn = vi
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+    expect(await down.run()).toBe('released');
+    warn.mockRestore();
+    // Nothing to email when the release did not happen now.
+    const again = setup({ result: 'already_released' });
+    await again.run();
+    expect(again.notifications.enqueueForMessage).not.toHaveBeenCalled();
+  });
+
   it.each([
     [
       {

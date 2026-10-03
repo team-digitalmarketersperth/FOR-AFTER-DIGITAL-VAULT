@@ -216,7 +216,8 @@ export type FailedJob = {
   failedReasonSanitized: string | null;
   createdAt: string;
   failedAt: string | null;
-  payload: { messageId?: string; caseId?: string };
+  // email-delivery jobs (Step 24) carry only their notification id.
+  payload: { messageId?: string; caseId?: string; notificationId?: string };
 };
 
 // ─── Requests ───────────────────────────────────────────────────────────────

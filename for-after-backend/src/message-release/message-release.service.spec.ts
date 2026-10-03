@@ -46,6 +46,13 @@ const setup = (status: string | null = 'SCHEDULED', row = message()) => {
       createMany: vi.fn(async ({ data }: { data: unknown[] }) => ({
         count: data.length,
       })),
+      // Grants of this release that have an email snapshot.
+      findMany: vi.fn().mockResolvedValue([{ id: 'grant-with-email' }]),
+    },
+    releaseNotification: {
+      createMany: vi.fn(async ({ data }: { data: unknown[] }) => ({
+        count: data.length,
+      })),
     },
   };
   // Like PostgreSQL: if the callback throws, nothing it wrote is kept.
@@ -68,6 +75,7 @@ const setup = (status: string | null = 'SCHEDULED', row = message()) => {
 const noWrites = (tx: ReturnType<typeof setup>['tx']) => {
   expect(tx.messageRelease.create).not.toHaveBeenCalled();
   expect(tx.recipientMessageAccessGrant.createMany).not.toHaveBeenCalled();
+  expect(tx.releaseNotification.createMany).not.toHaveBeenCalled();
   expect(tx.message.update).not.toHaveBeenCalled();
 };
 
@@ -92,6 +100,22 @@ describe('MessageReleaseService', () => {
     expect(tx.message.update).toHaveBeenCalledWith({
       where: { id: ID },
       data: { status: 'RELEASED' },
+    });
+  });
+
+  it('queues one notification per grant with an email, inside the release transaction (Step 24)', async () => {
+    const { tx, service } = setup();
+    await service.release(ID, NOW);
+    expect(tx.recipientMessageAccessGrant.findMany).toHaveBeenCalledWith({
+      where: {
+        messageReleaseId: RELEASE_ID,
+        recipientEmailNormalized: { not: null },
+      },
+      select: { id: true },
+    });
+    expect(tx.releaseNotification.createMany).toHaveBeenCalledWith({
+      data: [{ grantId: 'grant-with-email' }],
+      skipDuplicates: true,
     });
   });
 

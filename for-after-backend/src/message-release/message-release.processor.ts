@@ -7,6 +7,7 @@ import {
 import { DelayedError, type Job, Worker } from 'bullmq';
 import { isUUID } from 'class-validator';
 import { errorCode } from '../prisma/prisma.service.js';
+import { ReleaseNotificationQueue } from '../release-notifications/release-notification-queue.service.js';
 import {
   MessageReleaseQueue,
   type ReleaseJobData,
@@ -29,6 +30,7 @@ export class MessageReleaseProcessor implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly releases: MessageReleaseService,
     private readonly queue: MessageReleaseQueue,
+    private readonly notifications: ReleaseNotificationQueue,
   ) {}
 
   onModuleInit(): void {
@@ -85,6 +87,15 @@ export class MessageReleaseProcessor implements OnModuleInit, OnModuleDestroy {
         this.logger.log(
           `recipient_release_grants_created ${ctx} count ${outcome.grants}`,
         );
+        // Step 24: email the Recipients now. Never fails the release: a miss
+        // is picked up by the notification reconciler.
+        await this.notifications
+          .enqueueForMessage(messageId)
+          .catch((err) =>
+            this.logger.warn(
+              `release_notification_enqueue_failed ${ctx} (code: ${errorCode(err)})`,
+            ),
+          );
         break;
       case 'already_released':
         this.logger.log(`release_already_completed ${ctx}`);

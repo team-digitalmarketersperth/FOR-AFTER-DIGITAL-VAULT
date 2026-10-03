@@ -716,6 +716,30 @@ describe('Queues', () => {
     expect(api.called('POST', `/admin/system/queues/message-release/jobs/${JOB.jobId}/retry`)).toHaveLength(1);
   });
 
+  it('an email-delivery job shows only its notification id (Step 24)', async () => {
+    const id = '00000000-0000-4000-8000-0000000e4a11';
+    const emailJob = {
+      ...JOB,
+      jobId: `release-notification-${id}`,
+      queue: 'email-delivery',
+      name: 'message-released',
+      attemptsMade: 5,
+      failedReasonSanitized: 'email_send_failed: rate_limit_exceeded',
+      payload: { notificationId: id },
+    };
+    routeFetch({
+      'GET /admin/system/queues': json(200, [
+        ...QUEUES.map((q) => ({ ...q, failed: 0 })),
+        { name: 'email-delivery', waiting: 0, active: 0, delayed: 0, prioritized: 0, failed: 1, completed: 9 },
+      ]),
+      'GET /admin/system/queues/email-delivery/failed': json(200, page([emailJob])),
+    });
+    renderAdmin(<Queues filters={{ page: 1 }} />);
+    expect(await screen.findByText('email_send_failed: rate_limit_exceeded')).toBeInTheDocument();
+    expect(screen.getByText('Email 00000000…')).toHaveAttribute('title', id);
+    expect(screen.queryByText(/@/)).not.toBeInTheDocument();
+  });
+
   it('retry success refreshes the queue data', async () => {
     const api = routeFetch({
       'GET /admin/system/queues': json(200, QUEUES),

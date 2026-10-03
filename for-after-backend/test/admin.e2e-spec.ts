@@ -804,6 +804,7 @@ describe('Admin backend (e2e)', () => {
       expect(res.body.map((q: { name: string }) => q.name)).toEqual([
         'message-release',
         'death-verification',
+        'email-delivery',
       ]);
       expect(res.body[0]).toEqual({
         name: 'message-release',

@@ -186,6 +186,20 @@ export class MessageReleaseService {
           id: release.id,
           messageId,
         });
+        // Step 24: one "a message is waiting" email per grant with an email,
+        // committed with the release (an outbox). Not in createAccessGrants:
+        // the backfill script must never email past releases.
+        const reachable = await tx.recipientMessageAccessGrant.findMany({
+          where: {
+            messageReleaseId: release.id,
+            recipientEmailNormalized: { not: null },
+          },
+          select: { id: true },
+        });
+        await tx.releaseNotification.createMany({
+          data: reachable.map(({ id }) => ({ grantId: id })),
+          skipDuplicates: true,
+        });
         await tx.message.update({
           where: { id: messageId },
           data: { status: MessageStatus.RELEASED },

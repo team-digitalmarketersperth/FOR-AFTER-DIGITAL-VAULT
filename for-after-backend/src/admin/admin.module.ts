@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AuditModule } from '../audit/audit.module.js';
 import { DeathVerificationModule } from '../death-verification/death-verification.module.js';
 import { MessageReleaseModule } from '../message-release/message-release.module.js';
+import { ReleaseNotificationModule } from '../release-notifications/release-notification.module.js';
 import { UsersModule } from '../users/users.module.js';
 import {
   AdminAuditController,
@@ -22,6 +23,7 @@ import { AdminService } from './admin.service.js';
     AuditModule,
     MessageReleaseModule,
     DeathVerificationModule,
+    ReleaseNotificationModule,
   ],
   controllers: [
     AdminDashboardController,

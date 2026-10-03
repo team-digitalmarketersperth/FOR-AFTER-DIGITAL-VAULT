@@ -4,6 +4,7 @@ import {
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import type { ReleaseNotificationQueue } from '../release-notifications/release-notification-queue.service.js';
 import type { DeathVerificationQueue } from '../death-verification/death-verification-queue.service.js';
 import type { MessageReleaseQueue } from '../message-release/message-release-queue.service.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
@@ -51,6 +52,7 @@ const fakeQueue = (job?: ReturnType<typeof fakeJob>) => ({
 const setup = (job = fakeJob()) => {
   const release = fakeQueue(job);
   const death = fakeQueue();
+  const email = fakeQueue();
   const audit: Record<string, unknown>[] = [];
   const prisma = {
     auditLog: {
@@ -64,6 +66,7 @@ const setup = (job = fakeJob()) => {
     prisma as unknown as PrismaService,
     { queue: release } as unknown as MessageReleaseQueue,
     { queue: death } as unknown as DeathVerificationQueue,
+    { queue: email } as unknown as ReleaseNotificationQueue,
   );
   return { service, release, death, job, audit };
 };
@@ -75,6 +78,7 @@ describe('AdminQueuesService', () => {
     expect(summary.map((q) => q.name)).toEqual([
       'message-release',
       'death-verification',
+      'email-delivery',
     ]);
     expect(summary[0]).toEqual({
       name: 'message-release',
