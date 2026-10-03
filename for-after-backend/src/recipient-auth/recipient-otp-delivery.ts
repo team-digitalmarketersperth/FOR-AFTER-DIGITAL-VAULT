@@ -1,20 +1,13 @@
-import { ConfigService } from '@nestjs/config';
-import {
-  createOtpDelivery,
-  OtpDelivery,
-} from '../otp-auth/otp-auth.service.js';
+import { EmailProvider } from '../email/email-provider.js';
+import { EmailOtpDelivery, OtpDelivery } from '../otp-auth/otp-auth.service.js';
 
-export {
-  ConsoleOtpDelivery,
-  DisabledOtpDelivery,
-  type OtpDeliveryInput,
-} from '../otp-auth/otp-auth.service.js';
+export { type OtpDeliveryInput } from '../otp-auth/otp-auth.service.js';
 
 /**
- * DI token for Recipient OTP delivery. RecipientAuthModule binds it from
- * RECIPIENT_OTP_DELIVERY_MODE; tests bind a fake.
+ * DI token for Recipient OTP delivery. RecipientAuthModule binds it to email
+ * (EMAIL_PROVIDER); tests bind a fake.
  */
 export abstract class RecipientOtpDelivery extends OtpDelivery {}
 
-export const otpDeliveryFactory = (config: ConfigService): OtpDelivery =>
-  createOtpDelivery(config, 'RECIPIENT', 'Recipient', 'recipient');
+export const otpDeliveryFactory = (email: EmailProvider): OtpDelivery =>
+  new EmailOtpDelivery(email, 'recipient-otp');

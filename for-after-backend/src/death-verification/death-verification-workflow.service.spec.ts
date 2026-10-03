@@ -3,11 +3,12 @@ import { ConfigService } from '@nestjs/config';
 import { AdminGuard } from '../auth/guards/admin.guard.js';
 import { releaseDueAt } from '../message-release/message-release.service.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
+import { EmailDeathNoticeDelivery } from './death-verification-notice.js';
 import {
-  ConsoleDeathNoticeDelivery,
-  DisabledDeathNoticeDelivery,
-  deathNoticeDeliveryFactory,
-} from './death-verification-notice.js';
+  EmailSendError,
+  type EmailMessage,
+  type EmailProvider,
+} from '../email/email-provider.js';
 import {
   deathTriggerDueAt,
   DeathVerificationWorkflow,
@@ -237,54 +238,55 @@ describe('AdminGuard', () => {
   });
 });
 
-describe('Safety notice delivery', () => {
-  const factory = (env: Record<string, string>) =>
-    deathNoticeDeliveryFactory(new ConfigService(env));
+describe('Safety notice delivery (Step 24: email)', () => {
+  const sent: EmailMessage[] = [];
+  const email = {
+    name: 'fake',
+    send: (m: EmailMessage) => (
+      sent.push(m),
+      Promise.resolve({ providerMessageId: 'x' })
+    ),
+  } as EmailProvider;
 
-  it('console only in development; production console stops startup; default disabled', () => {
-    expect(
-      factory({
-        NODE_ENV: 'development',
-        DEATH_VERIFICATION_NOTICE_DELIVERY_MODE: 'console',
-      }),
-    ).toBeInstanceOf(ConsoleDeathNoticeDelivery);
-    expect(() =>
-      factory({
-        NODE_ENV: 'production',
-        DEATH_VERIFICATION_NOTICE_DELIVERY_MODE: 'console',
-      }),
-    ).toThrow(/only allowed with NODE_ENV=development/);
-    expect(factory({ NODE_ENV: 'production' })).toBeInstanceOf(
-      DisabledDeathNoticeDelivery,
-    );
-    expect(() =>
-      factory({ DEATH_VERIFICATION_NOTICE_DELIVERY_MODE: 'smtp' }),
-    ).toThrow(/DEATH_VERIFICATION_NOTICE_DELIVERY_MODE/);
-  });
-
-  it('disabled delivery fails the send (so no safeguard can start)', async () => {
-    await expect(
-      new DisabledDeathNoticeDelivery().sendAccountHolderSafetyNotice(),
-    ).rejects.toThrow();
-  });
-
-  it('console delivery logs a masked, content-free DEV ONLY line', async () => {
-    const warn = vi
-      .spyOn(Logger.prototype, 'warn')
-      .mockImplementation(() => undefined);
-    await new ConsoleDeathNoticeDelivery().sendAccountHolderSafetyNotice({
+  it('sends one calm, content-free email with a per-case idempotency key', async () => {
+    await new EmailDeathNoticeDelivery(
+      email,
+      'https://app.example',
+    ).sendAccountHolderSafetyNotice({
       caseId: 'case-1',
       email: 'lisa@example.com',
       displayName: 'Lisa Test',
       safeguardEndsAt: new Date('2026-10-13T00:00:00Z'),
     });
-    const line = String(warn.mock.calls[0][0]);
-    expect(line).toContain(
-      '[DEV ONLY] Death verification safety notice sent to l***@example.com for case case-1',
-    );
-    expect(line).not.toContain('lisa@example.com');
-    expect(line).not.toContain('Lisa');
-    warn.mockRestore();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      kind: 'death-safety',
+      to: 'lisa@example.com',
+      subject: 'Action needed on your For After account',
+      idempotencyKey: 'death-safety/case-1',
+    });
+    // Sign-in link only: confirming is a signed-in action in the app.
+    expect(sent[0].text).toContain('https://app.example/login');
+    expect(sent[0].html).not.toMatch(/confirm-alive|token=/);
+    expect(sent[0].text).toContain('Hello Lisa Test,');
+  });
+
+  it('a failed send throws, so no safeguard can start', async () => {
+    const failing = {
+      name: 'fake',
+      send: () => Promise.reject(new EmailSendError('email_disabled', false)),
+    } as unknown as EmailProvider;
+    await expect(
+      new EmailDeathNoticeDelivery(
+        failing,
+        'https://app.example',
+      ).sendAccountHolderSafetyNotice({
+        caseId: 'case-1',
+        email: 'lisa@example.com',
+        displayName: 'Lisa Test',
+        safeguardEndsAt: new Date(),
+      }),
+    ).rejects.toBeInstanceOf(EmailSendError);
   });
 });
 

@@ -1,8 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { EmailProvider } from '../email/email-provider.js';
 import type { Prisma } from '../generated/prisma/client.js';
 import {
-  createOtpDelivery,
+  EmailOtpDelivery,
   OtpAuthService,
   OtpDelivery,
   type OtpPrincipal,
@@ -32,18 +33,12 @@ export const activeRelationship = (emailNormalized: string) =>
     owner: { deletedAt: null },
   }) satisfies Prisma.TrustedContactWhereInput;
 
-/** DI token; bound from TRUSTED_CONTACT_OTP_DELIVERY_MODE, faked in tests. */
+/** DI token; email in the app (EMAIL_PROVIDER), faked in tests. */
 export abstract class TrustedContactOtpDelivery extends OtpDelivery {}
 
 export const trustedContactOtpDeliveryFactory = (
-  config: ConfigService,
-): OtpDelivery =>
-  createOtpDelivery(
-    config,
-    'TRUSTED_CONTACT',
-    'Trusted Contact',
-    'trusted_contact',
-  );
+  email: EmailProvider,
+): OtpDelivery => new EmailOtpDelivery(email, 'trusted-contact-otp');
 
 /**
  * Trusted Contact passwordless email OTP and opaque Redis sessions. A

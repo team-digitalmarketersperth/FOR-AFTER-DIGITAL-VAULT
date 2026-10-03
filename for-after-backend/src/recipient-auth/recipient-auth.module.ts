@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { EmailProvider } from '../email/email-provider.js';
+import { EmailModule } from '../email/email.module.js';
 import { RecipientAuthController } from './recipient-auth.controller.js';
 import { RecipientAuthService } from './recipient-auth.service.js';
 import {
@@ -9,15 +10,16 @@ import {
 import { RecipientSessionAuthGuard } from './recipient-session.guard.js';
 
 @Module({
+  imports: [EmailModule],
   controllers: [RecipientAuthController],
-  // Delivery is configuration (RECIPIENT_OTP_DELIVERY_MODE); tests override it.
+  // Codes go out by email (EMAIL_PROVIDER); tests override the token.
   providers: [
     RecipientAuthService,
     RecipientSessionAuthGuard,
     {
       provide: RecipientOtpDelivery,
       useFactory: otpDeliveryFactory,
-      inject: [ConfigService],
+      inject: [EmailProvider],
     },
   ],
   exports: [RecipientAuthService, RecipientSessionAuthGuard],

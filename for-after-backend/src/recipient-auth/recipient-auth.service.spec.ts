@@ -11,9 +11,8 @@ import {
   RECIPIENT_SESSION_COOKIE,
   RecipientAuthService,
 } from './recipient-auth.service.js';
+import type { EmailMessage, EmailProvider } from '../email/email-provider.js';
 import {
-  ConsoleOtpDelivery,
-  DisabledOtpDelivery,
   otpDeliveryFactory,
   type OtpDeliveryInput,
 } from './recipient-otp-delivery.js';
@@ -349,46 +348,32 @@ describe('RecipientAuthService: sessions and config', () => {
   });
 });
 
-describe('OTP delivery factory', () => {
-  const factory = (env: Record<string, string>) =>
-    otpDeliveryFactory(new ConfigService(env));
-
-  it('console mode only in development', () => {
-    expect(
-      factory({
-        NODE_ENV: 'development',
-        RECIPIENT_OTP_DELIVERY_MODE: 'console',
-      }),
-    ).toBeInstanceOf(ConsoleOtpDelivery);
-    for (const NODE_ENV of ['production', 'test', '']) {
-      expect(() =>
-        factory({ NODE_ENV, RECIPIENT_OTP_DELIVERY_MODE: 'console' }),
-      ).toThrow(/only allowed with NODE_ENV=development/);
-    }
-  });
-
-  it('defaults to disabled; unknown modes stop startup', () => {
-    expect(factory({ NODE_ENV: 'production' })).toBeInstanceOf(
-      DisabledOtpDelivery,
-    );
-    expect(() =>
-      factory({ NODE_ENV: 'production', RECIPIENT_OTP_DELIVERY_MODE: 'smtp' }),
-    ).toThrow(/RECIPIENT_OTP_DELIVERY_MODE/);
-  });
-
-  it('console delivery logs a DEV ONLY line with a masked email', async () => {
-    const warn = vi
-      .spyOn(Logger.prototype, 'warn')
-      .mockImplementation(() => undefined);
-    await new ConsoleOtpDelivery('Recipient').sendOtp({
+describe('OTP delivery (Step 24: email)', () => {
+  it('sends exactly one recipient sign-in email with the code, and nothing else', async () => {
+    const sent: EmailMessage[] = [];
+    const email = {
+      name: 'fake',
+      send: (m: EmailMessage) => (
+        sent.push(m),
+        Promise.resolve({ providerMessageId: null })
+      ),
+    } as EmailProvider;
+    await otpDeliveryFactory(email).sendOtp({
       email: SOFIA,
       code: '123456',
       expiresInSeconds: 600,
     });
-    expect(warn).toHaveBeenCalledWith(
-      '[DEV ONLY] Recipient OTP for s***@example.com: 123456',
-    );
-    warn.mockRestore();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      kind: 'recipient-otp',
+      to: SOFIA,
+      subject: 'Your For After sign-in code',
+    });
+    expect(sent[0].text).toContain('Your sign-in code is 123456');
+    expect(sent[0].text).toContain('expires in 10 minutes');
+    expect(sent[0].html).toContain('123456');
+    // No idempotency key: every request is a new code.
+    expect(sent[0].idempotencyKey).toBeUndefined();
   });
 });
 

@@ -1,5 +1,6 @@
 import { HttpException, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import type { EmailProvider } from '../email/email-provider.js';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import type { Request } from 'express';
@@ -7,8 +8,6 @@ import { readFileSync } from 'node:fs';
 import { fakeRedis } from '../../test/fake-redis.js';
 import { SESSION_COOKIE } from '../config/app.setup.js';
 import {
-  ConsoleOtpDelivery,
-  DisabledOtpDelivery,
   INVALID_CODE,
   type OtpDeliveryInput,
 } from '../otp-auth/otp-auth.service.js';
@@ -285,39 +284,25 @@ describe('TrustedContactAuthService: sessions, cookie and config', () => {
     }
   });
 
-  it('delivery: console only in development; production console stops startup', () => {
-    const factory = (env: Record<string, string>) =>
-      trustedContactOtpDeliveryFactory(new ConfigService(env));
-    expect(
-      factory({
-        NODE_ENV: 'development',
-        TRUSTED_CONTACT_OTP_DELIVERY_MODE: 'console',
-      }),
-    ).toBeInstanceOf(ConsoleOtpDelivery);
-    expect(() =>
-      factory({
-        NODE_ENV: 'production',
-        TRUSTED_CONTACT_OTP_DELIVERY_MODE: 'console',
-      }),
-    ).toThrow(/TRUSTED_CONTACT_OTP_DELIVERY_MODE=console is only allowed/);
-    expect(factory({ NODE_ENV: 'production' })).toBeInstanceOf(
-      DisabledOtpDelivery,
-    );
-  });
-
-  it('console delivery prints a DEV ONLY line with a masked email', async () => {
-    const warn = vi
-      .spyOn(Logger.prototype, 'warn')
-      .mockImplementation(() => undefined);
-    await new ConsoleOtpDelivery('Trusted Contact').sendOtp({
+  it('delivery: one trusted contact sign-in email per code (Step 24)', async () => {
+    const sent: { kind: string; to: string; text: string }[] = [];
+    const email = {
+      name: 'fake',
+      send: (m: { kind: string; to: string; text: string }) => (
+        sent.push(m),
+        Promise.resolve({ providerMessageId: null })
+      ),
+    } as unknown as EmailProvider;
+    await trustedContactOtpDeliveryFactory(email).sendOtp({
       email: DAVID,
-      code: '123456',
+      code: '654321',
       expiresInSeconds: 600,
     });
-    expect(warn).toHaveBeenCalledWith(
-      '[DEV ONLY] Trusted Contact OTP for d***@example.com: 123456',
-    );
-    warn.mockRestore();
+    expect(sent).toEqual([
+      expect.objectContaining({ kind: 'trusted-contact-otp', to: DAVID }),
+    ]);
+    expect(sent[0].text).toContain('Your sign-in code is 654321');
+    expect(sent[0].text).toContain('trusted contact sign-in page');
   });
 
   it('normal logs never contain the code, challenge id, session id, pepper or full email', async () => {

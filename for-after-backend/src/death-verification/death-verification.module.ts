@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { EmailProvider } from '../email/email-provider.js';
+import { EmailConfig, EmailModule } from '../email/email.module.js';
 import { MessageReleaseModule } from '../message-release/message-release.module.js';
 import { UsersModule } from '../users/users.module.js';
 import {
@@ -19,7 +20,7 @@ import { DeathVerificationService } from './death-verification.service.js';
 // admin decision routes. UsersModule backs SessionAuthGuard; MessageReleaseModule
 // provides the one message-release queue death triggers are executed through.
 @Module({
-  imports: [UsersModule, MessageReleaseModule],
+  imports: [UsersModule, MessageReleaseModule, EmailModule],
   controllers: [
     CustomerDeathVerificationController,
     AdminDeathVerificationController,
@@ -28,11 +29,11 @@ import { DeathVerificationService } from './death-verification.service.js';
     DeathVerificationService,
     DeathVerificationWorkflow,
     DeathVerificationQueue,
-    // Delivery is configuration (DEATH_VERIFICATION_NOTICE_DELIVERY_MODE); tests override it.
+    // The notice is an email (EMAIL_PROVIDER); tests override the token.
     {
       provide: DeathNoticeDelivery,
       useFactory: deathNoticeDeliveryFactory,
-      inject: [ConfigService],
+      inject: [EmailProvider, EmailConfig],
     },
   ],
   exports: [DeathVerificationService, DeathVerificationQueue],

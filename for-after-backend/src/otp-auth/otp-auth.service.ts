@@ -14,6 +14,11 @@ import {
   timingSafeEqual,
 } from 'node:crypto';
 import { maskEmail } from '../auth/dto/register.dto.js';
+import { EmailProvider } from '../email/email-provider.js';
+import {
+  recipientSignInCode,
+  trustedContactSignInCode,
+} from '../email/email-templates.js';
 import { positiveInt } from '../media/media.service.js';
 import type { RedisService } from '../redis/redis.service.js';
 
@@ -37,65 +42,40 @@ export type OtpDeliveryInput = {
 };
 
 /**
- * Provider-neutral OTP delivery. Each principal module binds its own
- * subclass token from <PREFIX>_OTP_DELIVERY_MODE; tests bind a fake. A real
- * email provider is a later step and plugs in here without touching auth.
+ * Provider-neutral OTP delivery. Each principal module binds its own token
+ * (tests bind a fake). Production delivery is EmailOtpDelivery.
  */
 export abstract class OtpDelivery {
   abstract sendOtp(input: OtpDeliveryInput): Promise<void>;
 }
 
-// Local development / Postman only. The factory refuses it outside development.
-export class ConsoleOtpDelivery extends OtpDelivery {
-  private readonly logger = new Logger('OtpDelivery');
-
-  constructor(private readonly label: string) {
+/**
+ * Sends the code by email (Step 24) straight through the EmailProvider, not a
+ * queue: a queued job would keep the plaintext code in Redis job data and
+ * failed-job history, where only its hash may live, and a retry after the
+ * code expires is useless (the person asks for a new one). requestOtp calls
+ * this without awaiting it, so timing never reveals eligibility.
+ */
+export class EmailOtpDelivery extends OtpDelivery {
+  constructor(
+    private readonly email: EmailProvider,
+    private readonly kind: 'recipient-otp' | 'trusted-contact-otp',
+  ) {
     super();
   }
 
-  sendOtp({ email, code }: OtpDeliveryInput): Promise<void> {
-    this.logger.warn(
-      `[DEV ONLY] ${this.label} OTP for ${maskEmail(email)}: ${code}`,
-    );
-    return Promise.resolve();
+  async sendOtp({ email, code, expiresInSeconds }: OtpDeliveryInput) {
+    const render =
+      this.kind === 'recipient-otp'
+        ? recipientSignInCode
+        : trustedContactSignInCode;
+    await this.email.send({
+      kind: this.kind,
+      to: email,
+      ...render(code, Math.max(1, Math.round(expiresInSeconds / 60))),
+    });
   }
 }
-
-// No provider configured yet: codes are generated but not sent anywhere.
-export class DisabledOtpDelivery extends OtpDelivery {
-  private readonly logger = new Logger('OtpDelivery');
-
-  constructor(private readonly kind: string) {
-    super();
-  }
-
-  sendOtp(): Promise<void> {
-    this.logger.warn(
-      `${this.kind}_otp_delivery_disabled: no email provider configured, code not sent`,
-    );
-    return Promise.resolve();
-  }
-}
-
-export const createOtpDelivery = (
-  config: ConfigService,
-  prefix: string,
-  label: string,
-  kind: string,
-): OtpDelivery => {
-  const key = `${prefix}_OTP_DELIVERY_MODE`;
-  const mode = config.get<string>(key) || 'disabled';
-  if (mode === 'console') {
-    if (config.get<string>('NODE_ENV') !== 'development') {
-      throw new Error(
-        `${key}=console is only allowed with NODE_ENV=development. It logs one-time codes.`,
-      );
-    }
-    return new ConsoleOtpDelivery(label);
-  }
-  if (mode === 'disabled') return new DisabledOtpDelivery(kind);
-  throw new Error(`${key} must be "disabled" or "console" (development only).`);
-};
 
 // express-session only parses its own cookie, so read ours from the header.
 export const readCookie = (req: Request, name: string): string | undefined => {

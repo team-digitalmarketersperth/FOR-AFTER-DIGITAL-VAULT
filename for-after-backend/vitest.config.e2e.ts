@@ -15,14 +15,16 @@ export default defineConfig({
     // Recipient OTP: a fixed dummy pepper (not a secret) and no console
     // delivery; tests capture codes with a fake delivery provider.
     env: {
+      // Step 24: no email ever leaves a test run. Suites that check emails
+      // override EmailProvider (or a delivery token) with a fake.
+      EMAIL_PROVIDER: 'disabled',
+      EMAIL_QUEUE_NAME: 'test-email-delivery',
+      EMAIL_RECONCILE_INTERVAL_SECONDS: '3600',
       RELEASE_QUEUE_NAME: 'test-message-release',
       RECIPIENT_OTP_PEPPER: 'e2e-test-pepper-not-a-real-secret-0000',
-      RECIPIENT_OTP_DELIVERY_MODE: 'disabled',
       TRUSTED_CONTACT_OTP_PEPPER: 'e2e-tc-test-pepper-not-a-real-secret-00',
-      TRUSTED_CONTACT_OTP_DELIVERY_MODE: 'disabled',
       // Step 15: own queue; notices go through a fake provider in tests.
       DEATH_VERIFICATION_QUEUE_NAME: 'test-death-verification',
-      DEATH_VERIFICATION_NOTICE_DELIVERY_MODE: 'disabled',
       // Step 16: a fixed, public test key (not a secret). Admin sign-in in
       // tests completes real TOTP via test/admin-sign-in.ts.
       ADMIN_TOTP_ENCRYPTION_KEY: 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=',

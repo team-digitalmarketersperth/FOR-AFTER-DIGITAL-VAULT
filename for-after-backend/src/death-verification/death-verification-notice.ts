@@ -1,6 +1,6 @@
-import { Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { maskEmail } from '../auth/dto/register.dto.js';
+import { EmailProvider } from '../email/email-provider.js';
+import { deathSafety } from '../email/email-templates.js';
+import { EmailConfig } from '../email/email.module.js';
 
 /**
  * What the account-holder safety notice carries. Deliberately minimal: never
@@ -16,8 +16,7 @@ export type SafetyNoticeInput = {
 
 /**
  * Provider-neutral delivery of the "a death report was filed; sign in and
- * confirm you are alive" notice. Also the DI token; tests bind a fake. The
- * production email provider arrives in Step 17 as another implementation.
+ * confirm you are alive" notice. Also the DI token; tests bind a fake.
  * sendAccountHolderSafetyNotice must throw if the notice was not sent: the
  * safeguard window only starts after a successful send.
  */
@@ -27,46 +26,38 @@ export abstract class DeathNoticeDelivery {
   ): Promise<void>;
 }
 
-// Local development / Postman only; refused outside NODE_ENV=development.
-export class ConsoleDeathNoticeDelivery extends DeathNoticeDelivery {
-  private readonly logger = new Logger('DeathNoticeDelivery');
+/**
+ * Step 24: the notice is an email through EmailProvider. The workflow already
+ * gives it durable state and retries (an attempt is claimed only while the
+ * case is PENDING_VERIFICATION, so a case the Customer cancelled is never
+ * emailed; failed sends are retried by the reconciler). The idempotency key
+ * makes a retry after a lost response send nothing new. With
+ * EMAIL_PROVIDER=disabled every send fails, so no safeguard can start.
+ */
+export class EmailDeathNoticeDelivery extends DeathNoticeDelivery {
+  constructor(
+    private readonly email: EmailProvider,
+    private readonly appBaseUrl: string,
+  ) {
+    super();
+  }
 
-  sendAccountHolderSafetyNotice({
+  async sendAccountHolderSafetyNotice({
     caseId,
     email,
-    safeguardEndsAt,
+    displayName,
   }: SafetyNoticeInput): Promise<void> {
-    this.logger.warn(
-      `[DEV ONLY] Death verification safety notice sent to ${maskEmail(email)} for case ${caseId} (safeguard ends ${safeguardEndsAt.toISOString()})`,
-    );
-    return Promise.resolve();
-  }
-}
-
-// No provider yet: sending fails, so the case stays PENDING_VERIFICATION and
-// no safeguard can start. That is the safe default until a real email
-// provider exists (roadmap phase 20, notifications).
-export class DisabledDeathNoticeDelivery extends DeathNoticeDelivery {
-  sendAccountHolderSafetyNotice(): Promise<void> {
-    return Promise.reject(
-      new Error('death_notice_delivery_disabled: no provider configured'),
-    );
+    await this.email.send({
+      kind: 'death-safety',
+      to: email,
+      idempotencyKey: `death-safety/${caseId}`,
+      ...deathSafety(displayName, this.appBaseUrl),
+    });
   }
 }
 
 export const deathNoticeDeliveryFactory = (
-  config: ConfigService,
-): DeathNoticeDelivery => {
-  const key = 'DEATH_VERIFICATION_NOTICE_DELIVERY_MODE';
-  const mode = config.get<string>(key) || 'disabled';
-  if (mode === 'console') {
-    if (config.get<string>('NODE_ENV') !== 'development') {
-      throw new Error(
-        `${key}=console is only allowed with NODE_ENV=development. Real account holders would never be notified.`,
-      );
-    }
-    return new ConsoleDeathNoticeDelivery();
-  }
-  if (mode === 'disabled') return new DisabledDeathNoticeDelivery();
-  throw new Error(`${key} must be "disabled" or "console" (development only).`);
-};
+  email: EmailProvider,
+  { settings }: EmailConfig,
+): DeathNoticeDelivery =>
+  new EmailDeathNoticeDelivery(email, settings.appBaseUrl);

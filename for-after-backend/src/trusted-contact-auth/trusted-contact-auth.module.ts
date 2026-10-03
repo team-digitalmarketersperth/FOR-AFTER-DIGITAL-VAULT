@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { EmailProvider } from '../email/email-provider.js';
+import { EmailModule } from '../email/email.module.js';
 import { TrustedContactAuthController } from './trusted-contact-auth.controller.js';
 import {
   TrustedContactAuthService,
@@ -9,15 +10,16 @@ import {
 import { TrustedContactSessionAuthGuard } from './trusted-contact-session.guard.js';
 
 @Module({
+  imports: [EmailModule],
   controllers: [TrustedContactAuthController],
-  // Delivery is configuration (TRUSTED_CONTACT_OTP_DELIVERY_MODE); tests override it.
+  // Codes go out by email (EMAIL_PROVIDER); tests override the token.
   providers: [
     TrustedContactAuthService,
     TrustedContactSessionAuthGuard,
     {
       provide: TrustedContactOtpDelivery,
       useFactory: trustedContactOtpDeliveryFactory,
-      inject: [ConfigService],
+      inject: [EmailProvider],
     },
   ],
   exports: [TrustedContactAuthService, TrustedContactSessionAuthGuard],
