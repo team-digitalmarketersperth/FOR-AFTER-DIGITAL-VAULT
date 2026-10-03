@@ -96,7 +96,10 @@ flowchart LR
 | `NODE_ENV` | `production` (Secure cookies, trust one proxy hop) |
 | `COOKIE_DOMAIN`, `RECIPIENT_COOKIE_DOMAIN`, `TRUSTED_CONTACT_COOKIE_DOMAIN` | `.forafter.com.au` |
 | `FRONTEND_URL`, `WORDPRESS_URL` | production origins only |
-| `RECIPIENT_OTP_DELIVERY_MODE`, `TRUSTED_CONTACT_OTP_DELIVERY_MODE`, `DEATH_VERIFICATION_NOTICE_DELIVERY_MODE` | `disabled` until an email provider exists (`console` refuses to start outside `NODE_ENV=development`) |
+| `EMAIL_PROVIDER` | `resend` (startup refuses anything else in production) |
+| `RESEND_API_KEY` | secret manager only; a **Sending access** key |
+| `EMAIL_FROM_ADDRESS` | a sender on the domain verified in Resend ([email setup](email-production-setup.md)) |
+| `APP_BASE_URL` | `https://app.forafter.com.au` (https required) |
 | `DEATH_VERIFICATION_SAFEGUARD_SECONDS` | `1209600` (14 days) or the approved value; **never** a testing value like 60 |
 
 ### One-off tasks

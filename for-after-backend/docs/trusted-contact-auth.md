@@ -106,12 +106,9 @@ instances): 5 requests per email, 20 per IP, 30 verifies per IP → `429`. Keys 
 
 ## 5. Delivery
 
-Provider-neutral `TrustedContactOtpDelivery.sendOtp({email, code, expiresInSeconds})`, bound from
-`TRUSTED_CONTACT_OTP_DELIVERY_MODE`:
-
-- `disabled` (default): codes are generated but not sent. No email provider is approved yet.
-- `console`: logs `[DEV ONLY] Trusted Contact OTP for d***@example.com: 123456`. **Only with `NODE_ENV=development`;**
-  any other `NODE_ENV` stops startup with a clear error.
+Provider-neutral `TrustedContactOtpDelivery.sendOtp({email, code, expiresInSeconds})`. Since Step 24 it emails the
+code through `EMAIL_PROVIDER` (see [email-production-setup.md](email-production-setup.md)); `console` (development
+only) prints it to the API terminal.
 
 Startup also fails if `TRUSTED_CONTACT_OTP_PEPPER` is missing or shorter than 32 characters.
 
@@ -155,7 +152,7 @@ the code (outside dev console mode), its hash, the pepper, session ids, report n
 See `.env.example`: `TRUSTED_CONTACT_OTP_TTL_SECONDS`, `TRUSTED_CONTACT_OTP_MAX_ATTEMPTS`,
 `TRUSTED_CONTACT_OTP_REQUEST_LIMIT`, `TRUSTED_CONTACT_OTP_REQUEST_WINDOW_SECONDS`,
 `TRUSTED_CONTACT_OTP_IP_REQUEST_LIMIT`, `TRUSTED_CONTACT_OTP_VERIFY_IP_LIMIT`, `TRUSTED_CONTACT_OTP_PEPPER` (required),
-`TRUSTED_CONTACT_OTP_DELIVERY_MODE`, `TRUSTED_CONTACT_SESSION_TTL_SECONDS`, `TRUSTED_CONTACT_COOKIE_DOMAIN`.
+`TRUSTED_CONTACT_SESSION_TTL_SECONDS`, `TRUSTED_CONTACT_COOKIE_DOMAIN`.
 
 ## 9. Not built yet
 

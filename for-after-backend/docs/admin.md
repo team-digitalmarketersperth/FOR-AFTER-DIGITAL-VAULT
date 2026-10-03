@@ -249,6 +249,7 @@ arbitrary Redis key:
 |---|---|---|
 | `message-release` | Step 12 release jobs (FIXED_DATE and death-trigger activations) | `RELEASE_QUEUE_NAME` |
 | `death-verification` | Step 15 safeguard jobs | `DEATH_VERIFICATION_QUEUE_NAME` |
+| `email-delivery` | Step 24 "a message is waiting" emails; payload `{ notificationId }` only, shown as "Email <id>" ([email setup](email-production-setup.md)) | `EMAIL_QUEUE_NAME` |
 
 Any other name → `404`. Redis errors → `503 Queue data is unavailable.` (the error text, which can include the host, is
 logged only as a code).

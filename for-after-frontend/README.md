@@ -10,7 +10,7 @@
 | **Also built** | Step 19: Recipient portal (FE-21 to FE-23), Trusted Contact portal (FE-24 to FE-27), Customer death-verification safety banner + "I'm still alive". Step 20: Admin Portal (FE-28): password + mandatory TOTP sign-in and enrolment, users, death-verification review, audit log, queues |
 | **Not built yet** | Profile (FE-9, no backend), billing (FE-20), WordPress (FE-29/30) |
 | **Stack** | Next.js 16 (App Router, Turbopack) · React 19 · TypeScript · Tailwind CSS 4 · shadcn/ui (Radix) · TanStack Query 5 · React Hook Form + Zod 4 · Lucide |
-| **Tests** | Vitest + React Testing Library: **202 passing** · Step 22 Playwright `e2e/account.spec.ts` (3) passing against the real API · Playwright against the real local API, PostgreSQL, Redis and the development bucket (Step 21, 2026-10-02): **31 passing**, 0 failing, 0 skipped (Steps 17–20, with the OTP log and a fictional admin) |
+| **Tests** | Vitest + React Testing Library: **204 passing** · Playwright against the real local API (`EMAIL_PROVIDER=console`), PostgreSQL, Redis and the development bucket (Step 24, 2026-10-03): **36 passing**, 0 failing, 0 skipped (with the email log, a fictional admin and a fictional failed job) |
 | **Progress** | [`docs/tasks.md`](docs/tasks.md) (frontend tracker, 26 of 30 tasks, all verified) · full roadmap: [`../for-after-backend/docs/task.md`](../for-after-backend/docs/task.md) Part 6 |
 
 ## Requirements
@@ -123,7 +123,7 @@ is reused) and run `npx playwright test --project=vault --project=production-bui
 | Safety banner on every Customer page | The account holder | the Customer session; `/death-verification/me` |
 
 - The three sessions are separate: each portal has its own gate, query namespace (`['recipient', …]`, `['trusted-contact', …]`) and sign-out, and a 401 in one never signs the others out.
-- **Codes in development** are printed only in the API terminal (`[DEV ONLY] Recipient OTP for s***@example.com: 123456`). The UI never shows or fetches them.
+- **Codes in development** are emailed through the API's `EMAIL_PROVIDER`; with `console` they are printed only in the API terminal (`[DEV ONLY] Email (recipient-otp) to s***@example.com | … Your sign-in code is 123456 …`). The UI never shows or fetches them.
 - **E2E:** the OTP flows in `e2e/portals.spec.ts` run only when the backend output is teed to a file and `E2E_BACKEND_LOG` points at it:
   `npm run start:dev | tee backend.log` (backend), then `E2E_BACKEND_LOG=../for-after-backend/backend.log npx playwright test --project=vault` (frontend). The Recipient test waits about 2 minutes for a real FIXED_DATE release.
 

@@ -118,13 +118,13 @@ Copy `.env.example` to `.env`. **Never commit `.env`.**
 | `QUEUE_REDIS_URL`, `RELEASE_*` | no | release queue settings ([message release](docs/message-release.md)); the queue uses `REDIS_URL` if `QUEUE_REDIS_URL` is empty |
 | `OBJECT_STORAGE_*`, `MEDIA_*` | for media | private bucket, credentials, URL lifetimes, size limits ([media storage](docs/media-storage.md)) |
 | `RECIPIENT_OTP_PEPPER` | ✅ | random, at least 32 characters; HMAC key for Recipient codes (never logged) |
-| `RECIPIENT_OTP_DELIVERY_MODE` | no | `disabled` (default, codes not sent) or `console` (`NODE_ENV=development` only) |
 | `RECIPIENT_OTP_*`, `RECIPIENT_SESSION_TTL_SECONDS`, `RECIPIENT_COOKIE_DOMAIN` | no | code lifetime, attempts, rate limits, Recipient cookie ([recipient portal](docs/recipient-portal.md)) |
 | `TRUSTED_CONTACT_OTP_PEPPER` | ✅ | random, at least 32 characters, **different** from the Recipient pepper |
-| `TRUSTED_CONTACT_OTP_DELIVERY_MODE` | no | `disabled` (default) or `console` (`NODE_ENV=development` only) |
 | `TRUSTED_CONTACT_OTP_*`, `TRUSTED_CONTACT_SESSION_TTL_SECONDS`, `TRUSTED_CONTACT_COOKIE_DOMAIN` | no | same settings for Trusted Contacts ([trusted contact auth](docs/trusted-contact-auth.md)) |
 | `DEATH_VERIFICATION_SAFEGUARD_SECONDS` | no | `1209600` (14 days); local testing may use `60`; stored per case when it starts |
-| `DEATH_VERIFICATION_NOTICE_DELIVERY_MODE` | no | `disabled` (default: no notice, so no safeguard can start) or `console` (`NODE_ENV=development` only) |
+| `EMAIL_PROVIDER` | ✅ in production | `resend` (required in production), `console` (`NODE_ENV=development` only) or `disabled` (default elsewhere). Sign-in codes, release and safety emails ([email setup](docs/email-production-setup.md)) |
+| `RESEND_API_KEY`, `EMAIL_FROM_ADDRESS`, `EMAIL_FROM_NAME`, `APP_BASE_URL` | with `resend` | server-side Resend key, a sender on a domain verified in Resend, display name, app origin for links |
+| `EMAIL_SEND_TIMEOUT_MS`, `EMAIL_QUEUE_NAME`, `EMAIL_JOB_*`, `EMAIL_RECONCILE_INTERVAL_SECONDS` | no | email timeout and the `email-delivery` queue |
 | `DEATH_VERIFICATION_QUEUE_NAME`, `DEATH_VERIFICATION_RECONCILE_INTERVAL_SECONDS`, `DEATH_VERIFICATION_JOB_*` | no | safeguard queue settings ([death verification](docs/death-verification.md)) |
 | `ADMIN_TOTP_ENCRYPTION_KEY` | ✅ | 32 random bytes, **base64** (`openssl rand -base64 32`); encrypts admin TOTP secrets. Dedicated key |
 | `ADMIN_TOTP_CHALLENGE_TTL_SECONDS`, `ADMIN_TOTP_MAX_ATTEMPTS`, `ADMIN_TOTP_VERIFY_IP_LIMIT`, `ADMIN_SESSION_IDLE_TIMEOUT_SECONDS`, `ADMIN_TOTP_ISSUER` | no | `300`, `5`, `20` (per IP / 15 min), `1800`, `For After` ([admin](docs/admin.md)) |

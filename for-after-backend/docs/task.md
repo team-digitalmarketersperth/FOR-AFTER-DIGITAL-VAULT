@@ -3,14 +3,14 @@
 > The full-stack roadmap for **For After**, a secure Digital Legacy and Posthumous Messaging platform, from local
 > development to production launch. Phase order follows `docs/PROJECT_OVERVIEW.md` §59 (Recommended Development Sequence).
 
-|                              |                                                                                                                                                                                                                                                                                                 |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Last updated**             | 2026-10-03                                                                                                                                                                                                                                                                                      |
-| **Latest backend step**      | Step 23: full audit + hardening ([`step-23-audit.md`](step-23-audit.md)): Origin check on state-changing requests, scaffold removed; no new features                                                                                                                                            |
-| **Latest frontend step**     | Step 23: audit fixes (not-found/error `h1`, Playwright `account` project, optional `E2E_OTP_API`)                                                                                                                                                                                               |
-| **Backend**                  | Steps 1–16 + 22–23 (+ follow-up) built and tested (624 unit tests, 189 e2e tests)                                                                                                                                                                                                               |
-| **Frontend**                 | **27 of 30 tasks** built and verified (FE-1–19, FE-21–28); 203 unit/component tests; Playwright 36 passing, 0 failing, 0 skipped against the real local API, PostgreSQL, Redis and the development bucket (Step 23 follow-up, 2026-10-03). Frontend tracker: `for-after-frontend/docs/tasks.md` |
-| **Checklist (phases 02–27)** | **142 of 216** items done                                                                                                                                                                                                                                                                       |
+|                              |                                                                                                                                                                                                                                                                                                                                              |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Last updated**             | 2026-10-03                                                                                                                                                                                                                                                                                                                                   |
+| **Latest backend step**      | Step 24: transactional email through Resend (provider-neutral `EmailProvider`): sign-in codes, "a message is waiting" release emails (durable `ReleaseNotification` + `email-delivery` queue), account-holder safety notice. **Custom sending domain not verified in Resend yet** ([`email-production-setup.md`](email-production-setup.md)) |
+| **Latest frontend step**     | Step 24: admin queues show `email-delivery` jobs; portal E2E reads codes from the console email provider                                                                                                                                                                                                                                     |
+| **Backend**                  | Steps 1–16 + 22–24 built and tested (651 unit tests, 198 e2e tests)                                                                                                                                                                                                                                                                          |
+| **Frontend**                 | **27 of 30 tasks** built and verified (FE-1–19, FE-21–28); 204 unit/component tests; Playwright 36 passing, 0 failing, 0 skipped against the real local API (console email provider), PostgreSQL, Redis and the development bucket (Step 24, 2026-10-03). Frontend tracker: `for-after-frontend/docs/tasks.md`                               |
+| **Checklist (phases 02–27)** | **147 of 218** items done                                                                                                                                                                                                                                                                                                                    |
 
 ---
 
@@ -56,17 +56,17 @@ Each phase lists **Done** items first, then **To do**. "Backend ready" means the
 |  07   | Next.js dashboard shell    | ✅ Done (Step 17)                                                                                                                                                                |       6 / 6        |
 |  08   | User profile               | 🟡 Name update + Account settings UI done (Step 22); email change (needs verification + email provider) open                                                                     |       2 / 3        |
 |  09   | People I Love (Recipients) | 🟡 Backend + UI done (Step 18); invitations/import open                                                                                                                          |       6 / 8        |
-|  10   | Trusted Contacts           | 🟡 Backend, email OTP, Customer UI (Step 18) done; invitations open                                                                                                              |       8 / 13       |
+|  10   | Trusted Contacts           | 🟡 Backend, email OTP (by email since Step 24), Customer UI (Step 18) done; invitations open                                                                                     |       9 / 13       |
 |  11   | Messages                   | 🟡 TEXT/PHOTO/AUDIO/MIXED + UI (Step 18) done; video open                                                                                                                        |      11 / 14       |
 |  12   | Media                      | 🟡 Photo/audio on B2 + upload UI/recorder (Step 18) done; bucket CORS, video, quotas open                                                                                        | 8 (+1 partly) / 15 |
 |  13   | Memory Vault               | 🟡 Backend + UI done (Step 18)                                                                                                                                                   |       5 / 7        |
 |  14   | My Story                   | 🟡 Backend + UI done (Step 18)                                                                                                                                                   |       4 / 6        |
 |  15   | My Wishes                  | 🟡 Backend + UI with disclaimer done (Step 18)                                                                                                                                   |       5 / 7        |
 |  16   | Scheduling                 | 🟡 FIXED_DATE, ON_DEATH, AFTER_DEATH executed + schedule UI (Step 18); recurring triggers open                                                                                   |      10 / 11       |
-|  17   | Redis + BullMQ             | 🟡 Release + death-verification queues, admin failed-job view/retry done; delivery, DLQ/alerts open                                                                              | 7 (+1 partly) / 10 |
-|  18   | Recipient portal           | 🟡 Backend (Step 13) + UI (Step 19) done; SMS, email provider open                                                                                                               |       4 / 7        |
+|  17   | Redis + BullMQ             | 🟡 Release, death-verification and `email-delivery` (Step 24) queues, admin failed-job view/retry done; DLQ/alerts open                                                          | 8 (+1 partly) / 10 |
+|  18   | Recipient portal           | 🟡 Backend (Step 13) + UI (Step 19) + email sign-in codes and release emails (Step 24) done; SMS open                                                                            |       5 / 7        |
 |  19   | Death verification         | 🟡 Workflow (Steps 14–15) + Trusted Contact portal, Customer safety UI (Step 19) and admin review UI (Step 20) done; evidence, second confirmation open                          |      13 / 15       |
-|  20   | Notifications              | ⬜ Not started                                                                                                                                                                   |       0 / 3        |
+|  20   | Notifications              | 🟡 Resend email (Step 24): sign-in codes, release and safety emails; **domain verification pending (manual)**; SMS, verification/reset/invitation emails open                    |       2 / 5        |
 |  21   | Stripe billing             | ⬜ Not started                                                                                                                                                                   |       0 / 6        |
 |  22   | Admin portal               | 🟡 Admin backend (Step 16) + Admin Portal UI (Step 20) done; subscriptions/deliveries wait for Stripe/delivery                                                                   | 6 (+1 partly) / 7  |
 |  23   | Audit + security           | 🟡 `AuditLog` + admin events (Step 16) + `PASSWORD_CHANGED` (Step 22); full app audit (Step 23); other customer events, export, deletion open                                    | 2 (+1 partly) / 7  |
@@ -302,7 +302,7 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 - [ ] Recipient photo (after Media, phase 12)
 - [x] Frontend: list, add, view, edit, remove "People I Love" → **FE-10** (Step 18) (Playwright verified, Step 21)
 
-### 10 · Trusted Contacts — 🟡 8 of 13
+### 10 · Trusted Contacts — 🟡 9 of 13
 
 **Done**
 
@@ -321,7 +321,7 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 - [ ] Maximum per customer (waiting on product decision)
 - [ ] Invitation email/SMS and acceptance flow
 - [ ] SMS OTP for mobile-only Trusted Contacts
-- [ ] Production email provider for OTP delivery (provider-neutral `TrustedContactOtpDelivery` in place)
+- [x] Email OTP delivery (Step 24): `TrustedContactOtpDelivery` → `EmailOtpDelivery` → `EmailProvider` (Resend)
 - [ ] Permission model (waiting on product decision)
 - [x] Frontend: manage Trusted Contacts → **FE-11** (Step 18; their own portal is FE-24 to FE-27, Step 19) (Playwright verified, Step 21)
 
@@ -458,7 +458,7 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
       release/delivery records
 - [x] Frontend: schedule picker (FIXED_DATE with timezone offset, ON_DEATH, AFTER_DEATH), change timing, unschedule → **FE-15** (Step 18) (Playwright verified, Step 21)
 
-### 17 · Redis + BullMQ — 🟡 7 (+1 partly) of 10
+### 17 · Redis + BullMQ — 🟡 8 (+1 partly) of 10
 
 **Done**
 
@@ -477,7 +477,8 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 
 **To do**
 
-- [ ] Delivery worker (email/SMS) with per-recipient idempotency keys
+- [x] Delivery worker for email (Step 24): `email-delivery` queue, `ReleaseNotification` row per grant (unique), job id
+      per row, Resend idempotency keys, backoff, reconciler. SMS is out of scope (phase 20)
 - [~] Dead-letter handling, queue monitoring and alerts: **monitoring done (Step 16)**: `GET /admin/system/queues`,
   failed-job list (sanitized) and retry (audited; the worker re-checks PostgreSQL). Exhausted jobs stay in BullMQ's
   `failed` set for 7 days; a real DLQ and alerting are still open
@@ -490,7 +491,7 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 > Phases 18–19. The two outside audiences: **Recipients**, who read what was released to them, and **Trusted
 > Contacts**, who report a death. Neither is a User, and neither can see anything else.
 
-### 18 · Recipient portal — 🟡 4 of 7
+### 18 · Recipient portal — 🟡 5 of 7
 
 **Done**
 
@@ -501,8 +502,8 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 **To do**
 
 - [ ] SMS OTP (mobile-only Recipients already get access grants)
-- [ ] Production email provider for OTP delivery (provider-neutral `RecipientOtpDelivery` in place; one provider can serve
-      Recipient and Trusted Contact OTP)
+- [x] Email OTP delivery and a "message is waiting" email after each release (Step 24, one provider for both
+      portals; [`email-production-setup.md`](email-production-setup.md))
 - [ ] Grant revocation, sender display name, read receipts (product decisions open)
 - [x] Frontend: calm, simple recipient experience → **FE-21** to **FE-23** (Step 19) (Playwright verified, Step 21)
 
@@ -644,11 +645,19 @@ Frontend testing (component + Playwright E2E) is tracked in phase 24 and applies
 
 > Phases 20–23. Shared services the product needs before launch. None started yet.
 
-### 20 · Notifications — ⬜ 0 of 3
+### 20 · Notifications — 🟡 2 of 5
 
-- [ ] Email provider (Postmark or AWS SES) with templates
+- [x] Email provider with templates (Step 24): **Resend** behind a provider-neutral `EmailProvider` (`resend` |
+      `console` dev-only | `disabled`; production requires `resend`), four HTML + text templates with no preserved
+      content, fake inbox for tests ([`email-production-setup.md`](email-production-setup.md))
+- [ ] **Manual:** add and verify the sending domain in Resend (DNS records from the Resend dashboard), set
+      `EMAIL_FROM_ADDRESS`, turn tracking off, send a test. The account has no domain yet, so real delivery from a
+      custom sender is blocked (a test send from `onboarding@resend.dev` to `delivered@resend.dev` succeeded)
 - [ ] SMS via Twilio
-- [ ] Notifications: verification, password reset, invitations, releases, death-verification steps
+- [x] Notifications sent today (Step 24): Recipient and Trusted Contact sign-in codes, "a message is waiting for you"
+      after a release (durable, retried, one per grant), account-holder safety notice when a death report starts the
+      safety check
+- [ ] Notifications still open: email verification, password reset, Trusted Contact invitations
 
 ### 21 · Stripe billing — ⬜ 0 of 6
 
@@ -717,6 +726,10 @@ actions, role management (deliberately no API).
 
 **To do**
 
+- [x] Step 24: email unit tests (provider selection and production guards, Resend error mapping, timeout, templates,
+      worker) and `test/email-delivery.e2e-spec.ts` (9 tests, fake inbox: OTP emails, release → one minimal email →
+      Recipient sign-in, re-release/reconcile sends nothing new, provider outage → FAILED → admin retry → SENT, safety
+      email and the cancelled-before-send race); Playwright reads codes and the release email from the console provider
 - [x] Step 22: backend `test/account.e2e-spec.ts` (23 tests: profile, password, session revocation, cross-principal,
       audit) + unit tests; frontend 14 component tests and `e2e/account.spec.ts` (3 Playwright tests, real API)
 - [x] Frontend component and E2E tests (`for-after-frontend`): Vitest + RTL **185 passing** (13 files); Playwright

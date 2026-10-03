@@ -115,29 +115,27 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 ## 6. Local OTP testing
 
-Recipient (Step 13) and Trusted Contact (Step 14) sign-in send a 6-digit code by email, but no email provider exists
-yet. For local testing, set in `.env`:
+Recipient and Trusted Contact sign-in, released-message and safety emails go through `EMAIL_PROVIDER` (Step 24,
+[email setup](email-production-setup.md)). For local testing without a verified Resend domain, set in `.env`:
 
 ```env
 NODE_ENV=development
-RECIPIENT_OTP_DELIVERY_MODE=console
-TRUSTED_CONTACT_OTP_DELIVERY_MODE=console
+EMAIL_PROVIDER=console
+APP_BASE_URL=http://localhost:3000
 ```
 
-The code then appears in the API terminal:
+Every email then appears in the API terminal instead of being sent:
 
 ```text
-[DEV ONLY] Recipient OTP for s***@example.com: 123456
-[DEV ONLY] Trusted Contact OTP for d***@example.com: 654321
+[DEV ONLY] Email (recipient-otp) to s***@example.com | Your For After sign-in code | … Your sign-in code is 123456 …
 ```
 
-> 🔒 `console` mode is refused at startup unless `NODE_ENV=development`. Use `disabled` everywhere else.
+> 🔒 `console` is refused at startup unless `NODE_ENV=development`; production requires `resend`.
 
 ### Death verification (Step 15)
 
 ```env
-DEATH_VERIFICATION_NOTICE_DELIVERY_MODE=console
-DEATH_VERIFICATION_SAFEGUARD_SECONDS=60
+DEATH_VERIFICATION_SAFEGUARD_SECONDS=60   # set it once; production uses 1209600 (14 days)
 ```
 
 The account-holder safety notice then appears as
@@ -181,15 +179,16 @@ SESSION_SECRET="<32+ random characters>"
 
 # Recipient Portal (Step 13)
 RECIPIENT_OTP_PEPPER="<32+ random characters>"
-RECIPIENT_OTP_DELIVERY_MODE=console        # disabled | console (development only)
 
 # Trusted Contact auth + death reports (Step 14)
 TRUSTED_CONTACT_OTP_PEPPER="<32+ random characters, different from the Recipient pepper>"
-TRUSTED_CONTACT_OTP_DELIVERY_MODE=console  # disabled | console (development only)
 
 # Death verification (Step 15)
-DEATH_VERIFICATION_NOTICE_DELIVERY_MODE=console  # disabled | console (development only)
 DEATH_VERIFICATION_SAFEGUARD_SECONDS=60          # local testing only; production default 1209600 (14 days)
+
+# Email (Step 24)
+EMAIL_PROVIDER=console                     # resend | console (development only) | disabled
+APP_BASE_URL=http://localhost:3000
 
 # Admin backend (Step 16): required, the app refuses to start without it
 ADMIN_TOTP_ENCRYPTION_KEY="<openssl rand -base64 32>"  # 32 random bytes, base64; dedicated key

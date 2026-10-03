@@ -134,11 +134,11 @@ planned "3 OTP requests per minute"; the per-15-minute limits above replace that
 
 ### Delivery (provider-neutral)
 
-`RecipientOtpDelivery` (`sendOtp({ email, code, expiresInSeconds })`) is the only seam. `RECIPIENT_OTP_DELIVERY_MODE`:
-
-- `disabled` (default): codes are generated but not sent. A warning is logged.
-- `console`: logs `[DEV ONLY] Recipient OTP for s***@example.com: 123456`. **Only with `NODE_ENV=development`**; any
-  other `NODE_ENV` (including `production` and `test`) stops startup with a clear error.
+`RecipientOtpDelivery` (`sendOtp({ email, code, expiresInSeconds })`) is the only seam. Since Step 24 it emails the
+code through `EMAIL_PROVIDER` (`resend` in production; `console` prints it in development; `disabled` sends nothing),
+directly rather than through a queue, so the plaintext code never sits in Redis. See
+[email-production-setup.md](email-production-setup.md). A released message also sends the Recipient one
+"A message is waiting for you" email (no content, a link to `/recipient/sign-in`).
 
 > ⚠️ No email provider is chosen or wired in yet (Postmark or AWS SES are candidates). Adding one = a new delivery
 > implementation and mode; the auth flow does not change. One provider can serve both Recipients and Trusted Contacts.
@@ -233,7 +233,6 @@ check is adopted, apply it to all three.
 | Variable | Default | Notes |
 |---|:--:|---|
 | `RECIPIENT_OTP_PEPPER` | — | **Required**, 32+ random characters. Secret |
-| `RECIPIENT_OTP_DELIVERY_MODE` | `disabled` | `disabled` or `console` (development only) |
 | `RECIPIENT_OTP_TTL_SECONDS` | 600 | Code lifetime |
 | `RECIPIENT_OTP_MAX_ATTEMPTS` | 5 | Wrong codes per challenge |
 | `RECIPIENT_OTP_REQUEST_LIMIT` | 5 | request-otp per email per window |

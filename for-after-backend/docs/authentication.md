@@ -166,7 +166,7 @@ Passwordless 6-digit email code for **Recipients** ("People I Love"). Full desig
 | **Flow** | `POST /recipient-auth/request-otp` → `POST /recipient-auth/verify-otp` → `for_after_recipient_session` |
 | **Eligible email** | has a `RecipientMessageAccessGrant` for a `RELEASED`, non-deleted Message |
 | **Channel** | email only; SMS is deferred, so mobile-only Recipients cannot sign in yet |
-| **Delivery** | `RECIPIENT_OTP_DELIVERY_MODE`: `disabled` (default) or `console` (`NODE_ENV=development` only); no email provider yet |
+| **Delivery** | email through `EMAIL_PROVIDER` (Step 24, Resend in production; [email setup](email-production-setup.md)); sent directly, never queued, so the plaintext code never sits in Redis |
 | **Authorization** | the session holds only the verified email; access is decided per request from the release-time grant snapshot, never from a recipient id or the live `Recipient.email` |
 
 ---
@@ -180,7 +180,7 @@ Passwordless 6-digit email code for **Trusted Contacts**. Full design: [trusted-
 | **Flow** | `POST /trusted-contact-auth/request-otp` → `POST /trusted-contact-auth/verify-otp` → `for_after_trusted_contact_session` |
 | **Eligible email** | any **active** `TrustedContact` (not deleted, Customer not deleted); no death report or released content needed |
 | **Other routes** | `GET /trusted-contact-auth/me`, `POST /trusted-contact-auth/logout` (`204`) |
-| **Delivery** | `TRUSTED_CONTACT_OTP_DELIVERY_MODE`: `disabled` (default) or `console` (`NODE_ENV=development` only) |
+| **Delivery** | email through `EMAIL_PROVIDER` (Step 24), same as Recipients |
 | **What it unlocks** | the accounts list, filing a death report and the case status ([death-verification.md](death-verification.md)); **never** any Customer content |
 
 ---
@@ -247,8 +247,8 @@ dashboard's `GET /auth/me`.
   `/dev-register` was needed: `/register` is the normal Customer sign-up page.
 - The frontend reads auth state only from `GET /auth/me` with `credentials: 'include'`; see the frontend README.
 - Postman or curl against `http://localhost:4000/api/v1` still work.
-- For OTP testing, set `RECIPIENT_OTP_DELIVERY_MODE=console` and/or `TRUSTED_CONTACT_OTP_DELIVERY_MODE=console` with
-  `NODE_ENV=development`: the code appears in the API terminal as `[DEV ONLY] ... OTP for s***@example.com: 123456`.
+- For OTP testing, set `EMAIL_PROVIDER=console` with `NODE_ENV=development`: every email appears in the API terminal
+  as `[DEV ONLY] Email (recipient-otp) to s***@example.com | Your For After sign-in code | … Your sign-in code is 123456 …`.
 
 ---
 

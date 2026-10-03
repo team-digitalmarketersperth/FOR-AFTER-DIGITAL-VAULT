@@ -9,8 +9,8 @@
 | **Latest step** | Step 23: full application audit + fixes (no new features); report: `for-after-backend/docs/step-23-audit.md` |
 | **Tasks** | **27 of 30** built and verified ✅ (FE-1–19, FE-21–28) |
 | **Open** | FE-20 billing (no backend yet), FE-29/30 WordPress login |
-| **Unit / component tests** | **203 passing** (14 files, Vitest + React Testing Library) |
-| **Playwright** | **36 passing, 0 failing, 0 skipped** (Step 23 follow-up, 2026-10-03, real local API + PostgreSQL + Redis + development bucket, OTP log, a fictional admin and a fictional failed job): `development` 4 · `vault` + setup 27 · `account` 3 · `production-build` 2 |
+| **Unit / component tests** | **204 passing** (14 files, Vitest + React Testing Library) |
+| **Playwright** | **36 passing, 0 failing, 0 skipped** (Step 24, 2026-10-03, real local API with `EMAIL_PROVIDER=console`, PostgreSQL, Redis, development bucket, a fictional admin and failed job): `development` 4 · `vault` + setup 27 · `account` 3 · `production-build` 2 |
 | **Blocker** | None for the built scope |
 | **Design system** | [`frontend-design-system.md`](frontend-design-system.md) |
 
@@ -186,6 +186,15 @@ Also built, outside the FE list: the Customer death-verification **safety banner
 - Failed-job retry verified end to end in the browser with a fictional failed job.
 - Local `.env`: one `DEATH_VERIFICATION_SAFEGUARD_SECONDS` (60, development only).
 
+### Step 24 — Transactional email (backend; small frontend changes)
+- Sign-in codes, "a message is waiting for you" after a release, and the account-holder safety notice are emailed
+  through Resend (backend `docs/email-production-setup.md`). No frontend copy change was needed: the code step already
+  shows the API's neutral message and "Sent to …".
+- Admin queues: the new `email-delivery` queue appears with its failed jobs shown as "Email <id>" (never an address).
+- Playwright: `portals.spec` reads codes (and checks the release email) from the console provider's
+  `[DEV ONLY] Email (<kind>) to …` lines in `E2E_BACKEND_LOG`; run the API with `EMAIL_PROVIDER=console`.
+- Real email from the For After domain waits on verifying the domain in Resend (manual).
+
 ---
 
 ## ⚠️ Open items
@@ -217,7 +226,7 @@ Also built, outside the FE list: the Customer death-verification **safety banner
 
 ```bash
 # Unit / component (no backend needed)
-npm test                       # 203 tests
+npm test                       # 204 tests
 npm run lint && npm run typecheck && npm run build
 
 # Playwright (needs PostgreSQL, Redis and the NestJS API on :4000)
@@ -239,8 +248,9 @@ npx playwright test --project=account --no-deps                   # Step 22 alon
 ### Manual checks with the real backend
 1. **Customer:** `/register` → `/login` → dashboard; add a person, write a message, schedule it, unschedule it.
 2. **Recipient:** schedule a TEXT message for a person with an email ~2 minutes ahead and wait for `RELEASED`. Then open
-   `/recipient/sign-in`, enter that email, and read the code from the API console (`[DEV ONLY] Recipient OTP for
-   s***@…: 123456`). Sign in, read the message, sign out.
+   `/recipient/sign-in`, enter that email, and read the code from the API console (with `EMAIL_PROVIDER=console`:
+   `[DEV ONLY] Email (recipient-otp) to s***@… | … Your sign-in code is 123456 …`; the release itself also logs a
+   `message-released` email). Sign in, read the message, sign out.
 3. **Trusted Contact:** add a trusted contact with an email, then use `/trusted-contact/sign-in` (code from the console)
    → account → submit a fictional report → status "Report received".
 4. **Safety banner:** sign in as the Customer → banner → "I'm still alive" → confirm → the banner disappears and the case

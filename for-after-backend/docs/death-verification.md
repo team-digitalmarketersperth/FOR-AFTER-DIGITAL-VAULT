@@ -103,10 +103,10 @@ report → PENDING_VERIFICATION → send safety notice → success?
   safeguardEndsAt})`): "A death report has been submitted regarding your For After account. If you are able to access
   your account, please sign in and confirm that you are alive before the safeguard period ends." Never the reporter,
   their note, Message titles/content, recipients, Memory Vault, My Story or My Wishes.
-- **Delivery modes** (`DEATH_VERIFICATION_NOTICE_DELIVERY_MODE`):
-  - `disabled` (default): the send **fails**, so no safeguard can start. Safe until the Step 17 email provider exists.
-  - `console`: logs `[DEV ONLY] Death verification safety notice sent to l***@example.com for case <caseId>`.
-    **`NODE_ENV=development` only**; any other `NODE_ENV` stops startup with a clear error.
+- **Delivery** (Step 24): an email through `EMAIL_PROVIDER` ([email setup](email-production-setup.md)), subject
+  "Action needed on your For After account", a link to the sign-in page only (confirming stays a signed-in action),
+  Resend idempotency key `death-safety/<caseId>`. With `EMAIL_PROVIDER=disabled` every send **fails**, so no safeguard
+  can start; `console` (development only) prints the email to the API terminal.
 - **Failure:** the case stays `PENDING_VERIFICATION`, `safetyNoticeAttemptCount` / `safetyNoticeLastAttemptAt` record
   the attempt (no provider error text is stored), the report is kept, and the reconciler retries each interval. Each
   attempt is claimed atomically, so two instances never send at once.
@@ -308,7 +308,6 @@ My Story, My Wishes, OTPs, session ids, secrets or presigned URLs. There is no `
 | Variable | Default | Notes |
 |---|:--:|---|
 | `DEATH_VERIFICATION_SAFEGUARD_SECONDS` | `1209600` (14 days) | Local testing may use `60`/`120`; never in production. Stored per case at start |
-| `DEATH_VERIFICATION_NOTICE_DELIVERY_MODE` | `disabled` | `console` only with `NODE_ENV=development` |
 | `DEATH_VERIFICATION_QUEUE_NAME` | `death-verification` | Tests use their own |
 | `DEATH_VERIFICATION_RECONCILE_INTERVAL_SECONDS` | `60` | Also the notice retry cadence |
 | `DEATH_VERIFICATION_JOB_ATTEMPTS` | `5` | Safeguard job attempts |
