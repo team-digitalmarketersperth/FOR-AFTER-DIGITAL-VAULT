@@ -40,6 +40,8 @@ type ErrorStateProps = {
   onRetry?: () => void;
   action?: ReactNode;
   className?: string;
+  /** h1 when this state is the whole page (no PageHeader above it). */
+  heading?: 'h1' | 'h2';
 };
 
 export function ErrorState({
@@ -48,6 +50,7 @@ export function ErrorState({
   onRetry,
   action,
   className,
+  heading: Heading = 'h2',
 }: ErrorStateProps) {
   return (
     <section
@@ -58,7 +61,7 @@ export function ErrorState({
       )}
     >
       <AlertCircle aria-hidden className="size-6 text-muted-foreground" />
-      <h2 className="text-3xl">{title}</h2>
+      <Heading className="text-3xl">{title}</Heading>
       <p className="text-muted-foreground">{message}</p>
       {(onRetry || action) && (
         <div className="mt-2 flex flex-wrap justify-center gap-2">
@@ -80,6 +83,8 @@ type EmptyStateProps = {
   description?: string;
   action?: ReactNode;
   className?: string;
+  /** h1 when this state is the whole page (no PageHeader above it). */
+  heading?: 'h1' | 'h2';
 };
 
 export function EmptyState({
@@ -88,6 +93,7 @@ export function EmptyState({
   description,
   action,
   className,
+  heading: Heading = 'h2',
 }: EmptyStateProps) {
   return (
     <section
@@ -97,7 +103,7 @@ export function EmptyState({
       )}
     >
       {Icon && <Icon aria-hidden className="mb-1 size-6 text-muted-foreground" />}
-      <h2 className="text-2xl">{title}</h2>
+      <Heading className="text-2xl">{title}</Heading>
       {description && (
         <p className="max-w-sm text-sm text-muted-foreground">{description}</p>
       )}
@@ -143,10 +149,14 @@ export function QueryView<T>({
   if (query.isPending) return <ListSkeleton label={loadingLabel} />;
   if (query.error || query.data === undefined) {
     const error = query.error;
+    // Detail pages (the ones with notFound) render their PageHeader from the
+    // data, so without data this state is the page and carries its h1.
+    const heading = notFound ? 'h1' : 'h2';
     // A malformed id in the URL (400) is, for the person, just "not found".
     if (notFound && (error?.kind === 'not_found' || error?.kind === 'validation')) {
       return (
         <EmptyState
+          heading={heading}
           title={notFound.title}
           description="It may have been removed, or the link may be incorrect."
           action={
@@ -159,6 +169,7 @@ export function QueryView<T>({
     }
     return (
       <ErrorState
+        heading={heading}
         title={error?.kind === 'forbidden' ? 'Access denied' : "We couldn't load this"}
         message={error?.message ?? 'Please try again.'}
         onRetry={error?.kind === 'forbidden' ? undefined : () => void query.refetch()}

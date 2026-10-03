@@ -105,7 +105,8 @@ describe('People I Love', () => {
 
     routeFetch({ 'GET /recipients/zzz': json(404, { statusCode: 404, message: 'Recipient not found.' }) });
     renderWithClient(<RecipientDetail id="zzz" />);
-    expect(await screen.findByText('We couldn’t find this person')).toBeInTheDocument();
+    // Detail page without data: the not-found state is the page, so it is the h1.
+    expect(await screen.findByRole('heading', { level: 1, name: 'We couldn’t find this person' })).toBeInTheDocument();
   });
 });
 
