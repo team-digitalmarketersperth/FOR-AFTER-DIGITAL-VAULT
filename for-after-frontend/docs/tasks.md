@@ -6,11 +6,11 @@
 | | |
 |---|---|
 | **Last updated** | 2026-10-03 |
-| **Latest step** | Step 22: Account settings (FE-9) + its backend (profile update, password change) |
+| **Latest step** | Step 23: full application audit + fixes (no new features); report: `for-after-backend/docs/step-23-audit.md` |
 | **Tasks** | **27 of 30** built and verified ✅ (FE-1–19, FE-21–28) |
 | **Open** | FE-20 billing (no backend yet), FE-29/30 WordPress login |
 | **Unit / component tests** | **202 passing** (14 files, Vitest + React Testing Library) |
-| **Playwright** | Step 22 run (2026-10-03, real local API): **28 passing, 0 failing, 9 skipped** (admin signed-in + portal OTP flows: no `E2E_ADMIN_*` / `E2E_BACKEND_LOG` in this run; untouched by Step 22). Step 21 run: **31 passing, 0 failing, 0 skipped** (2026-10-02, real local API + PostgreSQL + Redis + development bucket, OTP log and a fictional admin): Step 17 4 · Steps 18–20 23 + 2 setup · production build 2 |
+| **Playwright** | **34 passing, 0 failing, 0 skipped** (Step 23, 2026-10-03, real local API + PostgreSQL + Redis + development bucket, OTP log and a fictional admin): `development` 4 · `vault` + setup 25 · `account` 3 · `production-build` 2 |
 | **Blocker** | None for the built scope |
 | **Design system** | [`frontend-design-system.md`](frontend-design-system.md) |
 
@@ -169,6 +169,17 @@ Also built, outside the FE list: the Customer death-verification **safety banner
 
 ---
 
+### Step 23 — Audit, bug bash, hardening (no new features)
+- Full audit of both apps; register and evidence in `for-after-backend/docs/step-23-audit.md`. 0 P0/P1.
+- Backend: Origin check on state-changing requests (CSRF defence in depth), Nest scaffold removed.
+- Frontend: a detail page whose item is missing or fails to load now has an `h1` (`EmptyState`/`ErrorState` `heading`).
+- Playwright: `account.spec` moved to its own `account` project (production build, after the vault suite, 5/min
+  logins); `portals.spec` can route code requests to a second API instance (`E2E_OTP_API`) whose output is the log.
+- Browser audit of 26 pages at 375/1440 px, simulated API failures, live IDOR/mass-assignment/CORS probes: no other
+  findings. Deferred: separate admin cookie, historical local DB password in the initial commit (rotate if reused).
+
+---
+
 ## ⚠️ Open items
 
 **Follow-ups found in Step 21 (not blocking the built scope)**
@@ -202,6 +213,7 @@ npm run lint && npm run typecheck && npm run build
 # Playwright (needs PostgreSQL, Redis and the NestJS API on :4000)
 npx playwright test --project=development             # Step 17, against `npm run dev`
 npx playwright test --project=vault --project=production-build   # Steps 18–20, against a production build on :3000
+npx playwright test --project=account --no-deps                   # Step 22 alone (it otherwise runs after vault)
 # Admin signed-in flows: a fictional local admin (backend docs/admin.md §11), see the README "Admin Portal" section
 #   E2E_ADMIN_EMAIL=… E2E_ADMIN_PASSWORD=… [E2E_ADMIN_TOTP_SECRET=…] npx playwright test e2e/admin.spec.ts
 # Portal OTP flows: tee the backend output, then point the tests at it

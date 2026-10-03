@@ -3,14 +3,14 @@
 > The full-stack roadmap for **For After**, a secure Digital Legacy and Posthumous Messaging platform, from local
 > development to production launch. Phase order follows `docs/PROJECT_OVERVIEW.md` §59 (Recommended Development Sequence).
 
-|                              |                                                                                                                                                                                                                                                                                                                                                                   |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Last updated**             | 2026-10-03                                                                                                                                                                                                                                                                                                                                                        |
-| **Latest backend step**      | Step 22: Customer profile update (`PATCH /users/me`) + password change (`POST /auth/change-password`) with session revocation and `PASSWORD_CHANGED` audit                                                                                                                                                                                                        |
-| **Latest frontend step**     | Step 22: Account settings (FE-9) at `/settings`                                                                                                                                                                                                                                                                                                                   |
-| **Backend**                  | Steps 1–16 + 22 built and tested (621 unit tests, 185 e2e tests)                                                                                                                                                                                                                                                                                                  |
-| **Frontend**                 | **27 of 30 tasks** built and verified (FE-1–19, FE-21–28); 199 unit/component tests; Playwright against the real local API, PostgreSQL, Redis and the development bucket (2026-10-03): 28 passing, 0 failing, 9 skipped for missing admin/OTP-log env (those 9 passed in Step 21 and touch no Step 22 code). Frontend tracker: `for-after-frontend/docs/tasks.md` |
-| **Checklist (phases 02–27)** | **140 of 215** items done                                                                                                                                                                                                                                                                                                                                         |
+|                              |                                                                                                                                                                                                                                                                                       |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Last updated**             | 2026-10-03                                                                                                                                                                                                                                                                            |
+| **Latest backend step**      | Step 23: full audit + hardening ([`step-23-audit.md`](step-23-audit.md)): Origin check on state-changing requests, scaffold removed; no new features                                                                                                                                  |
+| **Latest frontend step**     | Step 23: audit fixes (not-found/error `h1`, Playwright `account` project, optional `E2E_OTP_API`)                                                                                                                                                                                     |
+| **Backend**                  | Steps 1–16 + 22–23 built and tested (624 unit tests, 186 e2e tests)                                                                                                                                                                                                                   |
+| **Frontend**                 | **27 of 30 tasks** built and verified (FE-1–19, FE-21–28); 202 unit/component tests; Playwright 34 passing, 0 failing, 0 skipped against the real local API, PostgreSQL, Redis and the development bucket (Step 23, 2026-10-03). Frontend tracker: `for-after-frontend/docs/tasks.md` |
+| **Checklist (phases 02–27)** | **142 of 216** items done                                                                                                                                                                                                                                                             |
 
 ---
 
@@ -45,36 +45,36 @@ Each phase lists **Done** items first, then **To do**. "Backend ready" means the
 
 ## 📊 At a glance
 
-| Phase | Area                       | Status                                                                                                                                                   |    Done / items    |
-| :---: | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | :----------------: |
-|  01   | Product decisions          | 🟡 Docs written, most decisions still open                                                                                                               | 1 (+1 partly) / 34 |
-|  02   | PostgreSQL + Prisma        | ✅ Done                                                                                                                                                  |       6 / 6        |
-|  03   | NestJS foundation          | 🟡 Done except Swagger + exception filter                                                                                                                |      10 / 12       |
-|  04   | Authentication (core)      | 🟡 Core + admin TOTP + change password (Step 22) done; email verification, reset open                                                                    |      10 / 13       |
-|  05   | Sessions + authorization   | 🟡 Three principals, MFA-enforcing AdminGuard, admin idle timeout done; password change ends other sessions (Step 22); standalone sign-out-all/CSRF open |      11 / 13       |
-|  06   | Local development login    | ✅ Done (`/dev-login`, Step 17)                                                                                                                          |       2 / 2        |
-|  07   | Next.js dashboard shell    | ✅ Done (Step 17)                                                                                                                                        |       6 / 6        |
-|  08   | User profile               | 🟡 Name update + Account settings UI done (Step 22); email change (needs verification + email provider) open                                             |       2 / 3        |
-|  09   | People I Love (Recipients) | 🟡 Backend + UI done (Step 18); invitations/import open                                                                                                  |       6 / 8        |
-|  10   | Trusted Contacts           | 🟡 Backend, email OTP, Customer UI (Step 18) done; invitations open                                                                                      |       8 / 13       |
-|  11   | Messages                   | 🟡 TEXT/PHOTO/AUDIO/MIXED + UI (Step 18) done; video open                                                                                                |      11 / 14       |
-|  12   | Media                      | 🟡 Photo/audio on B2 + upload UI/recorder (Step 18) done; bucket CORS, video, quotas open                                                                | 8 (+1 partly) / 15 |
-|  13   | Memory Vault               | 🟡 Backend + UI done (Step 18)                                                                                                                           |       5 / 7        |
-|  14   | My Story                   | 🟡 Backend + UI done (Step 18)                                                                                                                           |       4 / 6        |
-|  15   | My Wishes                  | 🟡 Backend + UI with disclaimer done (Step 18)                                                                                                           |       5 / 7        |
-|  16   | Scheduling                 | 🟡 FIXED_DATE, ON_DEATH, AFTER_DEATH executed + schedule UI (Step 18); recurring triggers open                                                           |      10 / 11       |
-|  17   | Redis + BullMQ             | 🟡 Release + death-verification queues, admin failed-job view/retry done; delivery, DLQ/alerts open                                                      | 7 (+1 partly) / 10 |
-|  18   | Recipient portal           | 🟡 Backend (Step 13) + UI (Step 19) done; SMS, email provider open                                                                                       |       4 / 7        |
-|  19   | Death verification         | 🟡 Workflow (Steps 14–15) + Trusted Contact portal, Customer safety UI (Step 19) and admin review UI (Step 20) done; evidence, second confirmation open  |      13 / 15       |
-|  20   | Notifications              | ⬜ Not started                                                                                                                                           |       0 / 3        |
-|  21   | Stripe billing             | ⬜ Not started                                                                                                                                           |       0 / 6        |
-|  22   | Admin portal               | 🟡 Admin backend (Step 16) + Admin Portal UI (Step 20) done; subscriptions/deliveries wait for Stripe/delivery                                           | 6 (+1 partly) / 7  |
-|  23   | Audit + security           | 🟡 `AuditLog` foundation + admin events (Step 16) + `PASSWORD_CHANGED` (Step 22); other customer events, export, deletion open                           | 1 (+1 partly) / 6  |
-|  24   | Testing                    | 🟡 Backend tests + Postman done; frontend 199 component + Playwright green (Step 22); §50 security cases, load test open                                 |       5 / 7        |
-|  25   | WordPress integration      | ⬜ Not started                                                                                                                                           |       0 / 3        |
-|  26   | Staging                    | ⬜ Not started                                                                                                                                           |       0 / 6        |
-|  27   | Production                 | ⬜ Not started                                                                                                                                           |       0 / 9        |
-|  FE   | **Frontend (all apps)**    | 🟡 Customer app + vault + portals (Steps 17–19) + Admin Portal (Step 20) + Account settings (Step 22); billing, WordPress open                           |    **27 / 30**     |
+| Phase | Area                       | Status                                                                                                                                                                           |    Done / items    |
+| :---: | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :----------------: |
+|  01   | Product decisions          | 🟡 Docs written, most decisions still open                                                                                                                                       | 1 (+1 partly) / 34 |
+|  02   | PostgreSQL + Prisma        | ✅ Done                                                                                                                                                                          |       6 / 6        |
+|  03   | NestJS foundation          | 🟡 Done except Swagger + exception filter                                                                                                                                        |      10 / 12       |
+|  04   | Authentication (core)      | 🟡 Core + admin TOTP + change password (Step 22) done; email verification, reset open                                                                                            |      10 / 13       |
+|  05   | Sessions + authorization   | 🟡 Three principals, MFA-enforcing AdminGuard, admin idle timeout, CSRF Origin check (Step 23) done; password change ends other sessions (Step 22); standalone sign-out-all open |      12 / 13       |
+|  06   | Local development login    | ✅ Done (`/dev-login`, Step 17)                                                                                                                                                  |       2 / 2        |
+|  07   | Next.js dashboard shell    | ✅ Done (Step 17)                                                                                                                                                                |       6 / 6        |
+|  08   | User profile               | 🟡 Name update + Account settings UI done (Step 22); email change (needs verification + email provider) open                                                                     |       2 / 3        |
+|  09   | People I Love (Recipients) | 🟡 Backend + UI done (Step 18); invitations/import open                                                                                                                          |       6 / 8        |
+|  10   | Trusted Contacts           | 🟡 Backend, email OTP, Customer UI (Step 18) done; invitations open                                                                                                              |       8 / 13       |
+|  11   | Messages                   | 🟡 TEXT/PHOTO/AUDIO/MIXED + UI (Step 18) done; video open                                                                                                                        |      11 / 14       |
+|  12   | Media                      | 🟡 Photo/audio on B2 + upload UI/recorder (Step 18) done; bucket CORS, video, quotas open                                                                                        | 8 (+1 partly) / 15 |
+|  13   | Memory Vault               | 🟡 Backend + UI done (Step 18)                                                                                                                                                   |       5 / 7        |
+|  14   | My Story                   | 🟡 Backend + UI done (Step 18)                                                                                                                                                   |       4 / 6        |
+|  15   | My Wishes                  | 🟡 Backend + UI with disclaimer done (Step 18)                                                                                                                                   |       5 / 7        |
+|  16   | Scheduling                 | 🟡 FIXED_DATE, ON_DEATH, AFTER_DEATH executed + schedule UI (Step 18); recurring triggers open                                                                                   |      10 / 11       |
+|  17   | Redis + BullMQ             | 🟡 Release + death-verification queues, admin failed-job view/retry done; delivery, DLQ/alerts open                                                                              | 7 (+1 partly) / 10 |
+|  18   | Recipient portal           | 🟡 Backend (Step 13) + UI (Step 19) done; SMS, email provider open                                                                                                               |       4 / 7        |
+|  19   | Death verification         | 🟡 Workflow (Steps 14–15) + Trusted Contact portal, Customer safety UI (Step 19) and admin review UI (Step 20) done; evidence, second confirmation open                          |      13 / 15       |
+|  20   | Notifications              | ⬜ Not started                                                                                                                                                                   |       0 / 3        |
+|  21   | Stripe billing             | ⬜ Not started                                                                                                                                                                   |       0 / 6        |
+|  22   | Admin portal               | 🟡 Admin backend (Step 16) + Admin Portal UI (Step 20) done; subscriptions/deliveries wait for Stripe/delivery                                                                   | 6 (+1 partly) / 7  |
+|  23   | Audit + security           | 🟡 `AuditLog` + admin events (Step 16) + `PASSWORD_CHANGED` (Step 22); full app audit (Step 23); other customer events, export, deletion open                                    | 2 (+1 partly) / 7  |
+|  24   | Testing                    | 🟡 Backend tests + Postman done; frontend 199 component + Playwright green (Step 22); §50 security cases, load test open                                                         |       5 / 7        |
+|  25   | WordPress integration      | ⬜ Not started                                                                                                                                                                   |       0 / 3        |
+|  26   | Staging                    | ⬜ Not started                                                                                                                                                                   |       0 / 6        |
+|  27   | Production                 | ⬜ Not started                                                                                                                                                                   |       0 / 9        |
+|  FE   | **Frontend (all apps)**    | 🟡 Customer app + vault + portals (Steps 17–19) + Admin Portal (Step 20) + Account settings (Step 22); billing, WordPress open                                                   |    **27 / 30**     |
 
 ### What the backend already does
 
@@ -222,7 +222,7 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
       challenge + Redis per-IP limit. Optional Customer 2FA is not built (reuse the same service when needed)
 - [ ] Move rate-limit storage to Redis before running more than one API instance
 
-### 05 · Sessions + authorization — 🟡 11 of 13
+### 05 · Sessions + authorization — 🟡 12 of 13
 
 **Done**
 
@@ -251,8 +251,9 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
       without MFA state are destroyed; `AdminGuard` checks role **and** MFA. Customer sessions unchanged
 - [ ] "Sign out all devices" as its own action (Step 22: a password change already ends every other session; there is
       still no per-user session list)
-- [ ] CSRF review for cookie-based requests from WordPress and Next.js domains (Step 16 documented the admin exposure in
-      `docs/admin.md` §13: same `SameSite=Lax` + CORS allowlist model, no token yet)
+- [x] CSRF review for cookie-based requests (Step 23, `docs/step-23-audit.md` SEC-002): `SameSite=Lax` + CORS allowlist,
+      plus an Origin check that refuses state-changing requests from any origin outside `FRONTEND_URL`/`WORDPRESS_URL`
+      (`403`); no token needed for this model. WordPress (FE-29) must be listed in `WORDPRESS_URL`
 
 ### 06 · Local development login — ✅ 2 of 2
 
@@ -673,7 +674,7 @@ Frontend testing (component + Playwright E2E) is tracked in phase 24 and applies
 Open (not checklist items yet): admin MFA reset / recovery-code regeneration API, re-authentication for sensitive
 actions, role management (deliberately no API).
 
-### 23 · Audit + security — 🟡 1 (+1 partly) of 6
+### 23 · Audit + security — 🟡 2 (+1 partly) of 7
 
 - [~] `AuditLog` model and events: **model + admin events built (Step 16)**, append-only (DB trigger), IP stored as a
   /24 or /48 prefix. Admin sign-in, MFA, logout, user status changes, user/death-case views, death decisions and job
@@ -684,6 +685,9 @@ actions, role management (deliberately no API).
 - [ ] Data export (background job, private temporary archive)
 - [ ] Account deletion workflow (re-auth, grace period, export, cancel schedules, delete media)
 - [ ] Dependency scanning (npm audit / Dependabot)
+- [x] Step 23 full application audit, bug bash and hardening: [`step-23-audit.md`](step-23-audit.md) (issue register,
+      verification, deferred items). 0 P0/P1; SEC-002 (CSRF Origin check) fixed; SEC-001 (a local DB password in the
+      initial commit's `docs/development-guide.md`) to rotate if it was ever reused; separate admin cookie deferred
 - [ ] Threat-model review against `threat-model.md` (repo root; updated for Step 14 on 2026-09-29)
 
 ---
