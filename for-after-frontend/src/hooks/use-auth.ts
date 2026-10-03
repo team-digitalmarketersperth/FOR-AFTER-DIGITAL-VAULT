@@ -9,8 +9,10 @@ import {
 import {
   authApi,
   isAdminMfaChallenge,
+  type ChangePasswordInput,
   type CurrentUser,
   type LoginInput,
+  type ProfileInput,
   type RegisterInput,
 } from '@/lib/api/auth';
 import { ApiError, isApiError } from '@/lib/api/errors';
@@ -86,5 +88,24 @@ export function useLogout() {
     // The backend destroys the Redis session and clears the HttpOnly cookie.
     mutationFn: () => authApi.logout(),
     onSuccess: () => switchSession(queryClient, null),
+  });
+}
+
+// The response is the new /auth/me, written in place: the header, account menu
+// and greeting all read that one query, so they update without a refetch.
+export function useUpdateProfile() {
+  const queryClient = useQueryClient();
+  return useMutation<CurrentUser, ApiError, ProfileInput>({
+    mutationFn: authApi.updateProfile,
+    onSuccess: (user) => queryClient.setQueryData(queryKeys.me, user),
+  });
+}
+
+// gcTime 0, like login: the variables hold passwords. A 401 here means the
+// session already ended, and the shared handler signs this browser out.
+export function useChangePassword() {
+  return useMutation<{ success: true }, ApiError, ChangePasswordInput>({
+    mutationFn: authApi.changePassword,
+    gcTime: 0,
   });
 }

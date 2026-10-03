@@ -163,13 +163,16 @@ export const AUDIT_EVENT_TYPES = [
   'DEATH_VERIFICATION_VERIFIED',
   'DEATH_VERIFICATION_REJECTED',
   'FAILED_JOB_RETRIED',
+  'PASSWORD_CHANGED',
 ] as const;
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
+// CUSTOMER: a Customer acting on their own account (Step 22, PASSWORD_CHANGED).
+export type AuditActorType = 'ADMIN' | 'SUPER_ADMIN' | 'CUSTOMER';
 
 export type AuditLog = {
   id: string;
   eventType: AuditEventType;
-  actorType: 'ADMIN' | 'SUPER_ADMIN';
+  actorType: AuditActorType;
   actorUserId: string | null;
   subjectType: string | null;
   subjectId: string | null;

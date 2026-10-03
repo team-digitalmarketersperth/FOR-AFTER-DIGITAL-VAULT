@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -6,8 +7,10 @@ import {
 } from '@nestjs/common';
 import argon2 from 'argon2';
 import { randomBytes } from 'node:crypto';
+import type { AuditActor } from '../audit/audit-log.service.js';
 import { UserStatus } from '../generated/prisma/client.js';
 import { SafeUser, UsersService } from '../users/users.service.js';
+import { ChangePasswordDto } from './dto/change-password.dto.js';
 import { LoginDto } from './dto/login.dto.js';
 import { RegisterDto } from './dto/register.dto.js';
 
@@ -51,5 +54,32 @@ export class AuthService {
       throw new ForbiddenException('This account cannot sign in.');
     }
     return user;
+  }
+
+  /**
+   * Re-authenticates with the current password, then stores the new Argon2id
+   * hash. The caller (already ACTIVE via SessionAuthGuard) re-issues its own
+   * session; every other session ends through passwordChangedAt. A wrong
+   * current password is 400, not 401: 401 means "your session ended" here.
+   */
+  async changePassword(
+    userId: string,
+    dto: ChangePasswordDto,
+    actor: AuditActor,
+  ): Promise<void> {
+    const hash = await this.users.findPasswordHash(userId);
+    if (!hash || !(await argon2.verify(hash, dto.currentPassword))) {
+      throw new BadRequestException('Your current password is incorrect.');
+    }
+    if (dto.newPassword === dto.currentPassword) {
+      throw new BadRequestException(
+        'Choose a new password that is different from your current one.',
+      );
+    }
+    await this.users.updatePassword(
+      userId,
+      await argon2.hash(dto.newPassword, { type: argon2.argon2id }),
+      actor,
+    );
   }
 }

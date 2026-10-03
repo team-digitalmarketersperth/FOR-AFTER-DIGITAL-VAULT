@@ -33,9 +33,11 @@ model User {
   role   UserRole   @default(CUSTOMER)
   status UserStatus @default(ACTIVE)
 
-  emailVerifiedAt  DateTime?
-  twoFactorEnabled Boolean   @default(false)
-  passedAt         DateTime?
+  emailVerifiedAt   DateTime?
+  twoFactorEnabled  Boolean   @default(false)
+  passedAt          DateTime?
+  // Step 22: sessions signed in before this are refused (SessionAuthGuard).
+  passwordChangedAt DateTime?
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -104,12 +106,15 @@ enum AuditEventType {
   DEATH_VERIFICATION_VERIFIED
   DEATH_VERIFICATION_REJECTED
   FAILED_JOB_RETRIED
+  // Customer events (Step 22).
+  PASSWORD_CHANGED
 }
 
-// Only admin actors write generic audit rows so far.
+// Admin actors (Step 16) and the Customer acting on their own account (Step 22).
 enum AuditActorType {
   ADMIN
   SUPER_ADMIN
+  CUSTOMER
 }
 
 // Generic append-only audit trail (Step 16). The migration adds a trigger that
@@ -225,13 +230,13 @@ model DeathVerificationCase {
 
   // verifiedDeathAt = the approved time of death (drives AFTER_DEATH);
   // verifiedAt = when For After approved it (drives ON_DEATH).
-  verifiedAt      DateTime?
-  verifiedDeathAt DateTime?
+  verifiedAt        DateTime?
+  verifiedDeathAt   DateTime?
   // Admin ids are kept as plain history (no FK), like audit actors.
-  verifiedByUserId String?   @db.Uuid
-  rejectedAt       DateTime?
-  rejectedByUserId String?   @db.Uuid
-  cancelledAt      DateTime?
+  verifiedByUserId  String?   @db.Uuid
+  rejectedAt        DateTime?
+  rejectedByUserId  String?   @db.Uuid
+  cancelledAt       DateTime?
   // Admin-only; never returned to Customers, Trusted Contacts or Recipients.
   adminDecisionNote String?
 
@@ -275,11 +280,11 @@ model DeathVerificationAuditEvent {
   deathVerificationCaseId String                @db.Uuid
   deathVerificationCase   DeathVerificationCase @relation(fields: [deathVerificationCaseId], references: [id], onDelete: Cascade)
 
-  eventType DeathVerificationAuditEventType
-  actorType DeathVerificationActorType
+  eventType             DeathVerificationAuditEventType
+  actorType             DeathVerificationActorType
   // Plain ids (no FK) so history survives a later account or contact deletion.
-  actorUserId           String? @db.Uuid
-  actorTrustedContactId String? @db.Uuid
+  actorUserId           String?                         @db.Uuid
+  actorTrustedContactId String?                         @db.Uuid
 
   createdAt DateTime @default(now())
 
@@ -367,9 +372,9 @@ model Message {
   textContent String?
   status      MessageStatus      @default(DRAFT)
 
-  recipients   MessageRecipient[]
-  schedule     MessageSchedule?
-  mediaAssets  MediaAsset[]
+  recipients      MessageRecipient[]
+  schedule        MessageSchedule?
+  mediaAssets     MediaAsset[]
   release         MessageRelease?
   accessGrants    RecipientMessageAccessGrant[]
   deathActivation DeathTriggeredMessageActivation?

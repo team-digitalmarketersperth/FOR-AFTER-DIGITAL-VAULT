@@ -1,3 +1,4 @@
+import { applyDecorators } from '@nestjs/common';
 import { Transform } from 'class-transformer';
 import {
   IsEmail,
@@ -17,6 +18,11 @@ export const maskEmail = (email: string) =>
 export const normalizeEmail = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? emailKey(value) : value;
 
+// The one password rule: registration and password change (Step 22).
+// Length over composition rules (NIST SP 800-63B). 128 caps Argon2 input.
+export const IsNewPassword = () =>
+  applyDecorators(IsString(), MinLength(12), MaxLength(128));
+
 // Only these four fields are accepted; the global ValidationPipe rejects
 // anything else (role, status, ...).
 export class RegisterDto {
@@ -25,10 +31,7 @@ export class RegisterDto {
   @MaxLength(254)
   email: string;
 
-  // Length over composition rules (NIST SP 800-63B). 128 caps Argon2 input.
-  @IsString()
-  @MinLength(12)
-  @MaxLength(128)
+  @IsNewPassword()
   password: string;
 
   @Transform(trim)

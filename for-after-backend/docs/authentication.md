@@ -47,14 +47,20 @@
 
 ### Endpoints
 
-Prefix `/api/v1`: `POST /auth/register`, `POST /auth/login`, `GET /auth/me`, `POST /auth/logout`. Health checks stay
-unprefixed: `GET /health/database`, `GET /health/redis`.
+Prefix `/api/v1`: `POST /auth/register`, `POST /auth/login`, `GET /auth/me`, `POST /auth/logout`, and (Step 22)
+`POST /auth/change-password` + `PATCH /users/me` (name only; email is read-only until a verified email-change flow
+exists). Health checks stay unprefixed: `GET /health/database`, `GET /health/redis`.
 
 ### Passwords
 
 - **Argon2id** with the `argon2` library defaults (64 MiB memory, 3 passes). Plaintext passwords are never stored or logged.
 - Registration requires **12 to 128 characters**, no composition rules (NIST SP 800-63B). Registration does not log the user in.
 - Login returns a generic error with the same timing for an unknown email.
+- **Change password (Step 22):** signed-in, `ACTIVE` Customers only. Requires the current password (re-authentication);
+  the new one follows the registration rule (one shared `IsNewPassword` decorator) and must differ from the current one.
+  A wrong current password is `400`, not `401` (in this API `401` means "your session ended"). 5 per minute per IP.
+  The hash, `User.passwordChangedAt` and a `PASSWORD_CHANGED` audit row (actor `CUSTOMER`, no metadata) commit in one
+  transaction.
 
 ### Sessions
 
@@ -62,6 +68,11 @@ unprefixed: `GET /health/database`, `GET /health/redis`.
 - The session holds only `userId` and `role`. `SessionAuthGuard` reloads the user from PostgreSQL on every request, so
   a status change takes effect immediately.
 - The session id is regenerated on login (fixation); logout destroys it and clears the cookie.
+- Every new session stores `authenticatedAt` (epoch ms). `SessionAuthGuard` refuses (`401`) and destroys any session
+  whose `authenticatedAt` is older than the user's `passwordChangedAt`; sessions from before Step 22 have none and count
+  as older. **After a password change** the browser that made it gets a new session id and stays signed in; every
+  other session of that Customer ends on its next request. Recipient and Trusted Contact sessions are separate stores
+  and are not affected. There is no per-user session list, so a standalone "sign out all devices" is still open.
 - **No MemoryStore fallback:** the app refuses to start if `REDIS_URL` or `SESSION_SECRET` is missing, or Redis is
   unreachable at boot.
 

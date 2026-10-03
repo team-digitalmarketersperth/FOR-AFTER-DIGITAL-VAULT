@@ -15,12 +15,15 @@ import {
   AdminMfaService,
 } from '../admin-auth/admin-mfa.service.js';
 import { establishSession, SESSION_COOKIE } from '../config/app.setup.js';
+import { AuditActorType } from '../generated/prisma/client.js';
 import type { SafeUser } from '../users/users.service.js';
 import { AuthService } from './auth.service.js';
 import { CurrentUser } from './decorators/current-user.decorator.js';
+import { ChangePasswordDto } from './dto/change-password.dto.js';
 import { LoginDto } from './dto/login.dto.js';
 import { RegisterDto } from './dto/register.dto.js';
 import { ADMIN_ROLES } from './guards/admin.guard.js';
+import { CustomerGuard } from './guards/customer.guard.js';
 import { SessionAuthGuard } from './guards/session-auth.guard.js';
 
 // Matches docs/api.md (login: 5/min). ponytail: counted in memory per
@@ -69,6 +72,30 @@ export class AuthController {
   @UseGuards(SessionAuthGuard)
   me(@CurrentUser() user: SafeUser): SafeUser {
     return user;
+  }
+
+  /**
+   * Customer only (Step 22). This browser stays signed in on a new session id;
+   * every other session of this Customer gets 401 on its next request.
+   * Recipient and Trusted Contact sessions are separate and unaffected.
+   */
+  @Post('change-password')
+  @HttpCode(200)
+  @UseGuards(SessionAuthGuard, CustomerGuard, ThrottlerGuard)
+  @Throttle(FIVE_PER_MINUTE)
+  async changePassword(
+    @CurrentUser() user: SafeUser,
+    @Body() dto: ChangePasswordDto,
+    @Req() req: Request,
+  ): Promise<{ success: true }> {
+    await this.auth.changePassword(user.id, dto, {
+      type: AuditActorType.CUSTOMER,
+      userId: user.id,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+    await establishSession(req, { userId: user.id, role: user.role });
+    return { success: true };
   }
 
   // Safe to call with or without a valid session. Also the admin logout.

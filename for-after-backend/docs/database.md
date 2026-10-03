@@ -44,6 +44,7 @@ model User {
   emailVerifiedAt   DateTime?
   twoFactorEnabled  Boolean   @default(false)
   passedAt          DateTime?
+  passwordChangedAt DateTime? // Step 22: sessions signed in before this get 401
   deletedAt         DateTime?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
@@ -490,7 +491,7 @@ model StorageUsage {
 model AuditLog {
   id          String         @id @default(uuid()) @db.Uuid
   eventType   AuditEventType
-  actorType   AuditActorType // ADMIN | SUPER_ADMIN so far
+  actorType   AuditActorType // ADMIN | SUPER_ADMIN | CUSTOMER (Step 22)
   actorUserId String?        @db.Uuid
   subjectType String?        // e.g. User, DeathVerificationCase, Job
   subjectId   String?
@@ -547,11 +548,13 @@ enum AuditEventType {
   DEATH_VERIFICATION_VERIFIED
   DEATH_VERIFICATION_REJECTED
   FAILED_JOB_RETRIED
+  PASSWORD_CHANGED // Step 22, actor CUSTOMER, subject User
 }
 
 enum AuditActorType {
   ADMIN
   SUPER_ADMIN
+  CUSTOMER // Step 22: a Customer acting on their own account
 }
 
 enum DeathVerificationCaseStatus {

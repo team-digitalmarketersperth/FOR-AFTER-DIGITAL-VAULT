@@ -63,7 +63,8 @@ All responses are returned in JSON format. The standard error format includes th
 | `POST` | `/auth/register` | Create account (body: `email`, `password`, `firstName`, `lastName`) |
 | `POST` | `/auth/login` | Customer: session cookie + user. **Admin (Step 16): `{mfaRequired: true, mfaSetupRequired, challengeId, expiresInSeconds}`, no cookie** |
 | `POST` | `/auth/logout` | Invalidate session (also the admin logout; audited for admins) |
-| `GET` | `/auth/me` | Current user profile |
+| `GET` | `/auth/me` | Current user profile (also the profile read for account settings, Step 22) |
+| `POST` | `/auth/change-password` | Step 22, Customer only. Body exactly `{currentPassword, newPassword}` (new: 12–128, same rule as register, must differ). `200 {success: true}`; this browser gets a new session id, every other session of the Customer gets `401`. Wrong current password `400` (never `401`); 5/min per IP; audited `PASSWORD_CHANGED`. Admins `403`, Recipient/Trusted Contact `401` |
 | `POST` | `/auth/verify-email` | Verify email token |
 | `POST` | `/auth/resend-verification` | Resend activation |
 | `POST` | `/auth/forgot-password` | Request reset email |
@@ -113,8 +114,9 @@ Details, limits and error rules: `docs/recipient-portal.md`.
 ### Users
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
-| `GET` | `/users` | Planned self-service profile. Admin user listing is built as `/admin/users` (Step 16); there is deliberately no admin create/role-edit/delete API |
-| `PATCH` | `/users/:id` | Planned self-service profile update |
+| `PATCH` | `/users/me` | Step 22, Customer only. Body: `firstName` and/or `lastName` (trimmed, 1–100, cannot be cleared or `null`). Any other field (email, role, status, id…) is `400`. Returns the same user as `GET /auth/me`. Admins `403`, Recipient/Trusted Contact `401`. There is no `/users/:id`. Email change (with verification) is not built; email is read-only |
+
+Admin user listing is `/admin/users` (Step 16); there is deliberately no admin create/role-edit/delete API.
 
 ### Recipients (People I Love)
 | Method | Endpoint | Description |

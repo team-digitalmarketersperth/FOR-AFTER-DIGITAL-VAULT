@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   UnauthorizedException,
@@ -102,5 +103,61 @@ describe('AuthService', () => {
         password: 'wrong-password!',
       }),
     ).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  describe('changePassword (Step 22)', () => {
+    const actor = { type: 'CUSTOMER' as const, userId: 'u1' };
+    const setup = async () => {
+      const users = {
+        findPasswordHash: vi
+          .fn()
+          .mockResolvedValue((await storedUser()).passwordHash),
+        updatePassword: vi.fn().mockResolvedValue(undefined),
+      };
+      return { users, auth: new AuthService(users as unknown as UsersService) };
+    };
+
+    it('stores a new Argon2id hash after the current password is verified', async () => {
+      const { users, auth } = await setup();
+      await auth.changePassword(
+        'u1',
+        { currentPassword: PASSWORD, newPassword: 'A new long passphrase' },
+        actor,
+      );
+      const [id, hash, audited] = users.updatePassword.mock.calls[0];
+      expect(id).toBe('u1');
+      expect(audited).toBe(actor);
+      expect(hash).toMatch(/^\$argon2id\$/);
+      expect(await argon2.verify(hash, 'A new long passphrase')).toBe(true);
+    });
+
+    it('a wrong current password is 400 (not 401) and changes nothing', async () => {
+      const { users, auth } = await setup();
+      await expect(
+        auth.changePassword(
+          'u1',
+          {
+            currentPassword: 'wrong-password!',
+            newPassword: 'A new long one!',
+          },
+          actor,
+        ),
+      ).rejects.toThrow(
+        new BadRequestException('Your current password is incorrect.'),
+      );
+      expect(users.updatePassword).not.toHaveBeenCalled();
+    });
+
+    it('refuses reusing the current password', async () => {
+      const { users, auth } = await setup();
+      await expect(
+        auth.changePassword(
+          'u1',
+          { currentPassword: PASSWORD, newPassword: PASSWORD },
+          actor,
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(users.updatePassword).not.toHaveBeenCalled();
+    });
   });
 });

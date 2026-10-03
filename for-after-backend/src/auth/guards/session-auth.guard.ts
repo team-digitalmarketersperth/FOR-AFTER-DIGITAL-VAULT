@@ -14,6 +14,7 @@ import { ADMIN_ROLES } from './admin.guard.js';
 
 // Re-reads the user on every request, so a suspended or deleted account is
 // locked out immediately and role is never trusted from the session alone.
+// A session signed in before the user's last password change is destroyed.
 // Admin sessions additionally need completed MFA and expire after
 // ADMIN_SESSION_IDLE_TIMEOUT_SECONDS without a request (Customers unchanged).
 @Injectable()
@@ -32,8 +33,19 @@ export class SessionAuthGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context.switchToHttp().getRequest<Request>();
     const userId = req.session?.userId;
-    const user = userId ? await this.users.findById(userId) : null;
-    if (!user || user.status !== UserStatus.ACTIVE) {
+    const found = userId ? await this.users.findById(userId) : null;
+    if (!found || found.status !== UserStatus.ACTIVE) {
+      throw new UnauthorizedException();
+    }
+    const { passwordChangedAt, ...user } = found;
+    // Sessions from before Step 22 have no authenticatedAt and count as old.
+    if (
+      passwordChangedAt &&
+      (req.session.authenticatedAt ?? 0) < passwordChangedAt.getTime()
+    ) {
+      await new Promise<void>((resolve) =>
+        req.session.destroy(() => resolve()),
+      );
       throw new UnauthorizedException();
     }
     if (ADMIN_ROLES.includes(user.role)) {

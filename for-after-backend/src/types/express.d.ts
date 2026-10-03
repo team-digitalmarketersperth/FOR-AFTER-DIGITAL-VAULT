@@ -8,6 +8,8 @@ declare module 'express-session' {
   interface SessionData {
     userId: string;
     role: UserRole;
+    // Epoch ms of the sign-in. A password change ends sessions older than it.
+    authenticatedAt?: number;
     // Admin sessions only (Step 16), epoch ms. Set after TOTP/recovery code.
     adminMfaVerifiedAt?: number;
     lastActivityAt?: number;

@@ -8,8 +8,9 @@ import helmet from 'helmet';
 export const SESSION_COOKIE = 'for_after_session';
 
 /**
- * A new session ID (prevents session fixation) holding only `data`, saved
- * before the response. Used by Customer login and admin MFA completion.
+ * A new session ID (prevents session fixation) holding only `data` and the
+ * sign-in time, saved before the response. Used by Customer login, admin MFA
+ * completion and Customer password change.
  */
 export async function establishSession(
   req: Request,
@@ -18,7 +19,7 @@ export async function establishSession(
   await new Promise<void>((resolve, reject) =>
     req.session.regenerate((err) => (err ? reject(err) : resolve())),
   );
-  Object.assign(req.session, data);
+  Object.assign(req.session, { authenticatedAt: Date.now() }, data);
   await new Promise<void>((resolve, reject) =>
     req.session.save((err) => (err ? reject(err) : resolve())),
   );

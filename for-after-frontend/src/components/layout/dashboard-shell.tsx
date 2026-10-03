@@ -1,6 +1,6 @@
 'use client';
 
-import { ChevronDown, LogOut, Menu } from 'lucide-react';
+import { ChevronDown, LogOut, Menu, UserRound } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useState, type ReactNode } from 'react';
@@ -213,6 +213,12 @@ function AccountMenu({ user }: { user: CurrentUser }) {
             </div>
           </div>
           <DropdownMenuSeparator className="mx-1 my-2" />
+          <DropdownMenuItem asChild className="min-h-11 gap-3 rounded-md px-3 text-[15px] font-medium text-foreground-secondary">
+            <Link href="/settings">
+              <UserRound aria-hidden strokeWidth={1.5} className="size-[18px]" />
+              Account settings
+            </Link>
+          </DropdownMenuItem>
           <DropdownMenuItem
             onSelect={() => logout.mutate(undefined, { onSuccess: () => router.replace('/login') })}
             className="min-h-11 gap-3 rounded-md px-3 text-[15px] font-medium text-foreground-secondary"

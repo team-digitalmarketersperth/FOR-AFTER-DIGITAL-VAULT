@@ -5,12 +5,12 @@
 
 | | |
 |---|---|
-| **Last updated** | 2026-10-02 |
-| **Latest step** | Step 21: stabilisation, real-backend verification, git baseline (no new features) |
-| **Tasks** | **26 of 30** built and verified ✅ (FE-1–8, FE-10–19, FE-21–28) |
-| **Open** | FE-9 profile (no backend yet), FE-20 billing (no backend yet), FE-29/30 WordPress login |
-| **Unit / component tests** | **185 passing** (13 files, Vitest + React Testing Library) |
-| **Playwright** | **31 passing, 0 failing, 0 skipped** (2026-10-02, real local API + PostgreSQL + Redis + development bucket, OTP log and a fictional admin): Step 17 4 · Steps 18–20 23 + 2 setup · production build 2 |
+| **Last updated** | 2026-10-03 |
+| **Latest step** | Step 22: Account settings (FE-9) + its backend (profile update, password change) |
+| **Tasks** | **27 of 30** built and verified ✅ (FE-1–19, FE-21–28) |
+| **Open** | FE-20 billing (no backend yet), FE-29/30 WordPress login |
+| **Unit / component tests** | **202 passing** (14 files, Vitest + React Testing Library) |
+| **Playwright** | Step 22 run (2026-10-03, real local API): **28 passing, 0 failing, 9 skipped** (admin signed-in + portal OTP flows: no `E2E_ADMIN_*` / `E2E_BACKEND_LOG` in this run; untouched by Step 22). Step 21 run: **31 passing, 0 failing, 0 skipped** (2026-10-02, real local API + PostgreSQL + Redis + development bucket, OTP log and a fictional admin): Step 17 4 · Steps 18–20 23 + 2 setup · production build 2 |
 | **Blocker** | None for the built scope |
 | **Design system** | [`frontend-design-system.md`](frontend-design-system.md) |
 
@@ -30,13 +30,13 @@
 | Group | Tasks | Status |
 |---|:--:|---|
 | A. Foundation (FE-1–6) | 6 | ✅ 6 of 6 |
-| B. Customer account (FE-7–9) | 3 | ✅ 2 of 3 · ⬜ FE-9 |
+| B. Customer account (FE-7–9) | 3 | ✅ 3 of 3 |
 | C. Customer vault (FE-10–20) | 11 | ✅ 10 of 11 · ⬜ FE-20 |
 | D. Recipient portal (FE-21–23) | 3 | ✅ 3 of 3 |
 | E. Trusted Contact portal (FE-24–27) | 4 | ✅ 4 of 4 |
 | F. Admin portal (FE-28) | 1 | ✅ 1 of 1 |
 | G. WordPress (FE-29–30) | 2 | ⬜ |
-| **Total** | **30** | **26 built and verified** |
+| **Total** | **30** | **27 built and verified** |
 
 ## ✅ All tasks
 
@@ -50,7 +50,7 @@
 | FE-6 | Shared loading / error / empty states | ✅ | 17 | `components/shared/states.tsx` |
 | FE-7 | `/dev-login`, real 404 in production builds | ✅ | 17 | `app/(auth)/dev-login`, `src/proxy.ts` |
 | FE-8 | Register / login pages | ✅ | 17 | `app/(auth)` |
-| FE-9 | Profile and account settings | ⬜ | — | Backend not built (phase 08) |
+| FE-9 | Account settings: name, read-only email, password change | ✅ | 22 | `components/account/account-settings.tsx`, `app/(dashboard)/settings` |
 | FE-10 | People I Love: list, add, view, edit, remove | ✅ | 18 | `components/people/recipients.tsx` |
 | FE-11 | Trusted Contacts (Customer side): list, add, edit, remove | ✅ | 18 | `components/people/trusted-contacts.tsx` |
 | FE-12 | Messages: drafts, content type, recipients | ✅ | 18 | `components/messages/` |
@@ -146,6 +146,27 @@ Also built, outside the FE list: the Customer death-verification **safety banner
   `RecipientMessageAccessGrant`; reject → `REJECTED`.
 - Tests: 185 unit/component, 31 Playwright, all passing. Lint, typecheck and production build pass.
 
+### Step 22 — Account settings (FE-9) and its backend
+- Backend: `PATCH /users/me` (first/last name only; email, role, status rejected) and `POST /auth/change-password`
+  (current password required, registration rule, 5/min). The browser that changes the password keeps a new session;
+  every other Customer session gets 401 (`User.passwordChangedAt` vs session `authenticatedAt`). `PASSWORD_CHANGED`
+  audited with actor `CUSTOMER`. Migration `add_customer_account_settings`.
+- `/settings` from the account menu: *Your profile* (names, Save disabled until changed, response written into
+  `['auth','me']` so header/menu/greeting update at once; email read-only text) and *Security* (current/new/confirm,
+  `current-password`/`new-password`, inline "Password updated. Other devices have been signed out.").
+- A wrong current password is a 400, so it never signs the browser out; 401 still returns to `/login`; network errors
+  keep typed values. Admin audit log now labels the `CUSTOMER` actor and `PASSWORD_CHANGED`.
+- Email change is **not** built: it needs a verification design and the production email provider.
+- Tests: 14 component tests (199 total); `e2e/account.spec.ts` 3 Playwright tests against the real API (name persists
+  across reload and greeting, wrong current password, change → other device 401, old password refused, new works).
+  Checked at 375/768/1280/1440 px (no horizontal scroll; panels ≤ 768 px).
+- **Redesign (same step, UI only):** editorial layout (details + account summary side by side on desktop, Security
+  row below), password fields moved into a "Change password" dialog, success as toasts. No API, validation or
+  session change. 17 component tests (3 new: summary, dialog open/Escape, Cancel).
+- Environment note: during the run the local `next dev` (:3000) and the backend watcher (:4000) stopped; both were
+  restarted for verification. A freshly started `next dev` once served `/settings` as 404 before warming up (the
+  production build always served it); the re-run passed.
+
 ---
 
 ## ⚠️ Open items
@@ -175,7 +196,7 @@ Also built, outside the FE list: the Customer death-verification **safety banner
 
 ```bash
 # Unit / component (no backend needed)
-npm test                       # 185 tests
+npm test                       # 202 tests
 npm run lint && npm run typecheck && npm run build
 
 # Playwright (needs PostgreSQL, Redis and the NestJS API on :4000)
@@ -208,9 +229,7 @@ npx playwright test --project=vault --project=production-build   # Steps 18–20
 
 ---
 
-## ⏭️ Next: Step 22 (proposal, not started)
+## ⏭️ Next: Step 23 (proposal, not started)
 
-FE-9 (profile and account settings) has no backend yet. Build that first: profile read/update (name, contact details,
-timezone), password change (current password + re-authentication, sessions revoked), email change with verification,
-and their audit events, with backend tests. Then FE-9 on top of it. The separate admin session cookie is a good
-companion item.
+See the backend roadmap (`for-after-backend/docs/task.md`). FE-20 (billing) and FE-29/30 (WordPress) are the remaining
+frontend tasks; both wait on backend/deployment work first.

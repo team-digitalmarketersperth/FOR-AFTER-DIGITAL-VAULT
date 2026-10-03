@@ -28,6 +28,9 @@ export type AdminMfaChallenge = {
 
 export type LoginInput = { email: string; password: string };
 export type RegisterInput = LoginInput & { firstName: string; lastName: string };
+// Step 22: the only editable profile fields. Email is read-only (no verified change flow yet).
+export type ProfileInput = { firstName: string; lastName: string };
+export type ChangePasswordInput = { currentPassword: string; newPassword: string };
 
 export const isAdminMfaChallenge = (
   value: CurrentUser | AdminMfaChallenge,
@@ -49,4 +52,16 @@ export const authApi = {
 
   me: (signal?: AbortSignal) =>
     apiRequest<CurrentUser>('/auth/me', { signal }),
+
+  /** PATCH /users/me: returns the same user as /auth/me. Customer only. */
+  updateProfile: (input: ProfileInput) =>
+    apiRequest<CurrentUser>('/users/me', { method: 'PATCH', body: input }),
+
+  /**
+   * Re-authenticates with the current password. This browser stays signed in
+   * (new session id); the Customer's other sessions end. A wrong current
+   * password is a 400, so it never signs this browser out.
+   */
+  changePassword: (input: ChangePasswordInput) =>
+    apiRequest<{ success: true }>('/auth/change-password', { method: 'POST', body: input }),
 };

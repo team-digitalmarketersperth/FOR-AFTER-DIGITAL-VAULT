@@ -10,7 +10,7 @@
 | **Also built** | Step 19: Recipient portal (FE-21 to FE-23), Trusted Contact portal (FE-24 to FE-27), Customer death-verification safety banner + "I'm still alive". Step 20: Admin Portal (FE-28): password + mandatory TOTP sign-in and enrolment, users, death-verification review, audit log, queues |
 | **Not built yet** | Profile (FE-9, no backend), billing (FE-20), WordPress (FE-29/30) |
 | **Stack** | Next.js 16 (App Router, Turbopack) · React 19 · TypeScript · Tailwind CSS 4 · shadcn/ui (Radix) · TanStack Query 5 · React Hook Form + Zod 4 · Lucide |
-| **Tests** | Vitest + React Testing Library: **185 passing** · Playwright against the real local API, PostgreSQL, Redis and the development bucket (Step 21, 2026-10-02): **31 passing**, 0 failing, 0 skipped (Steps 17–20, with the OTP log and a fictional admin) |
+| **Tests** | Vitest + React Testing Library: **202 passing** · Step 22 Playwright `e2e/account.spec.ts` (3) passing against the real API · Playwright against the real local API, PostgreSQL, Redis and the development bucket (Step 21, 2026-10-02): **31 passing**, 0 failing, 0 skipped (Steps 17–20, with the OTP log and a fictional admin) |
 | **Progress** | [`docs/tasks.md`](docs/tasks.md) (frontend tracker, 26 of 30 tasks, all verified) · full roadmap: [`../for-after-backend/docs/task.md`](../for-after-backend/docs/task.md) Part 6 |
 
 ## Requirements

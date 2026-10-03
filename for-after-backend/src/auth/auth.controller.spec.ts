@@ -26,6 +26,15 @@ class FakeUsersService {
     return Promise.resolve(safe);
   }
 
+  findPasswordHash(id: string) {
+    return Promise.resolve(this.rows.get(id)?.passwordHash ?? null);
+  }
+
+  updatePassword(id: string, passwordHash: string) {
+    this.rows.get(id)!.passwordHash = passwordHash;
+    return Promise.resolve();
+  }
+
   findByEmail(email: string) {
     return Promise.resolve(
       [...this.rows.values()].find((u) => u.email === email) ?? null,
@@ -254,6 +263,34 @@ describe('Auth HTTP flow', () => {
         .post('/api/v1/auth/login')
         .send({ email: ada.email, password: ada.password })
         .expect(429);
+    });
+  });
+
+  describe('Step 22: change password', () => {
+    beforeAll(async () => {
+      await app.close();
+      await boot();
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/register')
+        .send(lisa)
+        .expect(201);
+    });
+
+    it('is limited to 5 attempts per minute (wrong current password included)', async () => {
+      const agent = request.agent(app.getHttpServer());
+      await agent
+        .post('/api/v1/auth/login')
+        .send({ email: lisa.email, password: lisa.password })
+        .expect(200);
+      const attempt = () =>
+        agent.post('/api/v1/auth/change-password').send({
+          currentPassword: 'not-my-password',
+          newPassword: 'A new long passphrase',
+        });
+      for (let i = 0; i < 5; i++) await attempt().expect(400);
+      await attempt().expect(429);
+      // Throttled, not signed out.
+      await agent.get('/api/v1/auth/me').expect(200);
     });
   });
 });

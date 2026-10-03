@@ -209,7 +209,7 @@ per-case domain history.
 | Column | Meaning |
 |---|---|
 | `eventType` | see below |
-| `actorType`, `actorUserId` | `ADMIN` or `SUPER_ADMIN`, and the admin's id (plain id, no FK, survives deletions) |
+| `actorType`, `actorUserId` | `ADMIN` or `SUPER_ADMIN` and the admin's id, or (Step 22) `CUSTOMER` and the Customer's own id (plain id, no FK, survives deletions) |
 | `subjectType`, `subjectId` | e.g. `User` / `DeathVerificationCase` / `Job` and its id |
 | `ipPrefix` | IPv4 `/24` or IPv6 `/48` (e.g. `203.0.113.0/24`). **Never the raw IP** |
 | `userAgent` | truncated to 256 characters |
@@ -219,7 +219,7 @@ per-case domain history.
 `ADMIN_MFA_FAILED` (with `reason`: `wrong_code`, `replay`, `attempts_exhausted`, ...), `ADMIN_RECOVERY_CODE_USED`,
 `ADMIN_LOGIN`, `ADMIN_LOGOUT`, `USER_SUSPENDED`, `USER_REACTIVATED`, `ADMIN_VIEWED_USER`, `ADMIN_VIEWED_DEATH_CASE`,
 `DEATH_VERIFICATION_VERIFIED`, `DEATH_VERIFICATION_REJECTED`, `FAILED_JOB_RETRIED`. No historic events were
-back-filled. Aggregate reads (lists, dashboard, queue counts) are logged, not audited, to keep the trail meaningful.
+back-filled. **Step 22** adds `PASSWORD_CHANGED` (actor `CUSTOMER`, subject the same `User`, no metadata). Aggregate reads (lists, dashboard, queue counts) are logged, not audited, to keep the trail meaningful.
 
 **Safety**
 - Status changes, enrollment, recovery-code use and death decisions write their row **in the same transaction** as the

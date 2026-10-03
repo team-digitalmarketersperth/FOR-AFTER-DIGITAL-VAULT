@@ -119,7 +119,7 @@ Feature icons sit in a 44 px petal circle.
   - **Right:** an account pill (white, hairline border, soft shadow on hover). Inside: an aubergine avatar with petal
     Cormorant initials and a petal ring, name + email (≥640 px), and a chevron that turns when open.
   - **The pill opens an account menu:** a petal "Signed in as" card (larger avatar, first name in Cormorant, email),
-    then **Log out**. Only real actions go in this menu. Add Profile/Settings when those pages exist (FE-9).
+    then **Account settings** (`/settings`, Step 22) and **Log out**. Only real actions go in this menu.
   - No search, bell or settings icons.
 - **Mobile/tablet (<1024 px):** menu button + logo in the header; the same navigation in a left sheet (focus-trapped,
   Escape closes). Single-column cards; quick actions become rows.
@@ -189,3 +189,16 @@ Recipients and Trusted Contacts are not Users. They get the same brand but a sma
 | **Role note** | `RoleNote` | Wherever a Trusted Contact acts: "Your report starts a verification process: you don't confirm the death yourself, and a report never releases any messages" |
 | **Report form** | `ReportForm` | Optional calendar date (`max` = today, sent as `YYYY-MM-DD`), optional note (2,000), a live **summary** (account, date or "Not provided"), then an explicit checkbox ("…does not confirm a death or release any messages"). Action: "Submit report". A 409 ("already submitted" / "not accepting") is an expected state panel, not an error |
 | **Safety banner** | `layout/safety-banner.tsx` | On every Customer page while `canConfirmAlive`: petal panel with a 4 px aubergine left edge (visible, not red), Cormorant heading "We've received a report about your account", the safeguard date only if the API returns it, one primary "I'm still alive" → confirmation dialog. It never shows who reported or any note |
+
+## 11. Account settings (Step 22, FE-9; redesigned)
+
+The one page that is about the person rather than their vault, so it is more composed than a list page, with the same
+tokens.
+
+| Pattern | Component | Rules |
+|---|---|---|
+| **Entry point** | account menu in `layout/dashboard-shell.tsx` | "Account settings" sits in the account menu, not the sidebar, which stays about the vault |
+| **Canvas** | `account/account-settings.tsx` (`/settings`) | Max 1120 px. `PageHeader` (eyebrow "Account", "Account *settings*"). ≥ 1280 px: Personal details (~65 %) beside the summary (~35 %), Security full width below a hairline divider. Below 1280 px everything stacks, form first |
+| **Personal details** | `ProfileForm` | One white panel: eyebrow + Cormorant `h2` + one line of copy, first/last name in two columns from 640 px. Email is an information row on `surface-muted` with a small lock icon and "Used to sign in to For After." (no input, no Edit). "Save changes" sits bottom-right in a hairline footer (full width on phones), disabled until something changes; "Changes saved" toast |
+| **Summary** | `ProfileSummary` (`aside`) | `surface-muted` panel: monogram from the saved name (white circle, faint aubergine border, Cormorant aubergine initials), name, email, then Account status (humanised, plain text) and Member since (`formatMonthYear`). Only `/auth/me` data; no photo, plan, counts or progress. A horizontal band on tablets |
+| **Security** | section + `ChangePasswordDialog` | Heading on the page background, then one row: petal key icon, "Password", one line of copy, outline "Change password". The three fields open in a dialog (Radix focus trap, Escape, scrolls on phones); closing clears them; it can't be closed mid-request. Success closes it with a toast |

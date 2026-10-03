@@ -1,5 +1,6 @@
 import { ConflictException, Injectable } from '@nestjs/common';
-import { Prisma } from '../generated/prisma/client.js';
+import { type AuditActor, writeAuditLog } from '../audit/audit-log.service.js';
+import { AuditEventType, Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 
 // The only User fields that may leave the API. passwordHash is never selected
@@ -25,14 +26,61 @@ export interface CreateUserInput {
   lastName: string;
 }
 
+// The only fields a Customer may change on their own account (Step 22).
+export type ProfileInput = { firstName?: string; lastName?: string };
+
 @Injectable()
 export class UsersService {
   constructor(private readonly prisma: PrismaService) {}
 
-  findById(id: string): Promise<SafeUser | null> {
+  /** For SessionAuthGuard, which strips passwordChangedAt before req.user. */
+  findById(
+    id: string,
+  ): Promise<(SafeUser & { passwordChangedAt: Date | null }) | null> {
     return this.prisma.user.findUnique({
       where: { id },
+      select: { ...safeUserSelect, passwordChangedAt: true },
+    });
+  }
+
+  /** For re-authentication only; never returned to a client. */
+  async findPasswordHash(id: string): Promise<string | null> {
+    const found = await this.prisma.user.findUnique({
+      where: { id },
+      select: { passwordHash: true },
+    });
+    return found?.passwordHash ?? null;
+  }
+
+  updateProfile(id: string, input: ProfileInput): Promise<SafeUser> {
+    return this.prisma.user.update({
+      where: { id },
+      data: { firstName: input.firstName, lastName: input.lastName },
       select: safeUserSelect,
+    });
+  }
+
+  /**
+   * New hash + passwordChangedAt (which ends every older session, see
+   * SessionAuthGuard) + PASSWORD_CHANGED audit row, all or nothing.
+   */
+  async updatePassword(
+    id: string,
+    passwordHash: string,
+    actor: AuditActor,
+  ): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id },
+        data: { passwordHash, passwordChangedAt: new Date() },
+        select: { id: true },
+      });
+      await writeAuditLog(tx, {
+        eventType: AuditEventType.PASSWORD_CHANGED,
+        actor,
+        subjectType: 'User',
+        subjectId: id,
+      });
     });
   }
 

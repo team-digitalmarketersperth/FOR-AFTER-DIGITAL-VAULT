@@ -1,4 +1,4 @@
-import type { AuditEventType, AuditLog, DeathCaseEventType } from '@/lib/api/admin';
+import type { AuditActorType, AuditEventType, AuditLog, DeathCaseEventType } from '@/lib/api/admin';
 import type { UserRole, UserStatus } from '@/lib/api/auth';
 
 // Admin portal wording and the few rules the UI mirrors from the API. The API
@@ -44,6 +44,13 @@ export const AUDIT_EVENT_LABEL: Record<AuditEventType, string> = {
   DEATH_VERIFICATION_VERIFIED: 'Death verified',
   DEATH_VERIFICATION_REJECTED: 'Death report rejected',
   FAILED_JOB_RETRIED: 'Failed job retried',
+  PASSWORD_CHANGED: 'Customer changed their password',
+};
+
+export const AUDIT_ACTOR_LABEL: Record<AuditActorType, string> = {
+  ADMIN: 'Admin',
+  SUPER_ADMIN: 'Super admin',
+  CUSTOMER: 'Customer',
 };
 
 export const CASE_EVENT_LABEL: Record<DeathCaseEventType, string> = {

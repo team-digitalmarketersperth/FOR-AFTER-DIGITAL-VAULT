@@ -10,7 +10,7 @@ import { EmptyState, QueryView } from '@/components/shared/states';
 import { Button } from '@/components/ui/button';
 import { useAuditLog, useAuditLogs } from '@/hooks/use-admin';
 import { AUDIT_EVENT_TYPES, type AuditEventType, type AuditFilters, type AuditLog } from '@/lib/api/admin';
-import { AUDIT_EVENT_LABEL, auditSummary, keyLabel, safeMetadata, shortId, UUID } from '@/lib/admin';
+import { AUDIT_ACTOR_LABEL, AUDIT_EVENT_LABEL, auditSummary, keyLabel, safeMetadata, shortId, UUID } from '@/lib/admin';
 import { formatDateTime, formatTimestamp, localToOffsetIso } from '@/lib/format';
 
 const BASE = '/admin/audit-logs';
@@ -75,7 +75,7 @@ export function AuditList({ filters }: { filters: AuditUrlFilters }) {
 
 const Actor = ({ e }: { e: AuditLog }) => (
   <span title={e.actorUserId ?? undefined}>
-    {e.actorType === 'SUPER_ADMIN' ? 'Super admin' : 'Admin'}
+    {AUDIT_ACTOR_LABEL[e.actorType] ?? e.actorType}
     {e.actorUserId && <span className="font-mono text-xs text-foreground-muted"> {shortId(e.actorUserId)}</span>}
   </span>
 );
@@ -173,7 +173,7 @@ export function AuditDetail({ id }: { id: string }) {
                 <Facts
                   items={[
                     ['Event type', <span key="t" className="font-mono text-sm">{e.eventType}</span>],
-                    ['Actor', e.actorType === 'SUPER_ADMIN' ? 'Super admin' : 'Admin'],
+                    ['Actor', AUDIT_ACTOR_LABEL[e.actorType] ?? e.actorType],
                     [
                       'Actor user',
                       e.actorUserId ? (
