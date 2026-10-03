@@ -95,7 +95,8 @@ Before verification the Customer is not blocked, so they can sign in and confirm
 Admins are `User` rows with role `ADMIN` or `SUPER_ADMIN`; there is **no admin sign-up** (an operator sets the role in
 PostgreSQL). They start at the same `POST /auth/login`, but a correct admin password **never creates a session**: it
 returns `{ mfaRequired: true, mfaSetupRequired, challengeId, expiresInSeconds }` backed by a 5-minute Redis challenge.
-The session (`for_after_session`, with `adminMfaVerifiedAt` + `lastActivityAt`) is created only by
+The session (its own cookie `for_after_admin_session` and Redis prefix `for_after:admin_sess:`, read only on
+`/admin/*` and `/admin-auth/*`, with `adminMfaVerifiedAt` + `lastActivityAt`) is created only by
 `POST /admin-auth/totp/confirm` (first enrollment), `/admin-auth/totp/verify` or `/admin-auth/recovery/verify`.
 TOTP via `otplib` (±30 s window, replay-protected by time step), secrets AES-256-GCM encrypted with
 `ADMIN_TOTP_ENCRYPTION_KEY`, 10 one-time recovery codes stored as hashes, 5 attempts per challenge, a Redis per-IP limit,

@@ -147,10 +147,10 @@ is reused) and run `npx playwright test --project=vault --project=production-bui
 - **The challenge id lives in memory only** (the query cache, never storage or the URL). A refresh during the second
   step asks you to sign in again; the challenge expires after 5 minutes anyway. The TOTP secret and recovery codes
   exist only in component memory while shown; nothing admin-related is written to `localStorage`/`sessionStorage`.
-- **Same cookie as Customers.** Admins use `for_after_session`, so an admin sign-in, sign-out or expiry drops Customer
-  and admin cached data (`resetAdminCache`); Recipient and Trusted Contact data are left alone. Queries live under
-  `['admin', …]`. Consequence: one browser profile holds either a Customer or an admin session, never both (signing
-  in as an admin in another tab replaces the Customer session). A separate admin cookie is an open follow-up.
+- **Own cookie.** Admins use `for_after_admin_session` (Customers keep `for_after_session`), so one browser profile can
+  hold both. An admin sign-in, sign-out (`POST /admin-auth/logout`) or expiry drops only `['admin', …]` queries
+  (`resetAdminCache`); a Customer login/logout leaves them alone. A signed-in Customer who opens `/admin` just sees
+  the admin sign-in (their cookie is never sent to admin routes).
 - **Idle timeout is the server's.** After `ADMIN_SESSION_IDLE_TIMEOUT_SECONDS` (30 min) the next admin call is `401`;
   the app clears admin data and shows "Your admin session expired. Please sign in again." on `/admin/login`. There is
   no client-side timer.

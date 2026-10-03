@@ -37,7 +37,7 @@ session cookie. From the frontend, include `credentials: 'include'` in your fetc
 | Customer | `for_after_session` | `POST /auth/login` |
 | Recipient | `for_after_recipient_session` | `POST /recipient-auth/verify-otp` |
 | Trusted Contact | `for_after_trusted_contact_session` | `POST /trusted-contact-auth/verify-otp` |
-| Admin (Step 16) | `for_after_session` (a `User` with role `ADMIN`/`SUPER_ADMIN`) | `POST /admin-auth/totp/confirm`, `/totp/verify` or `/recovery/verify`, after `POST /auth/login` returned an MFA challenge |
+| Admin (Step 16; own cookie since the Step 23 follow-up) | `for_after_admin_session` (a `User` with role `ADMIN`/`SUPER_ADMIN`; read only on `/admin/*` and `/admin-auth/*`) | `POST /admin-auth/totp/confirm`, `/totp/verify` or `/recovery/verify`, after `POST /auth/login` returned an MFA challenge |
 
 No cookie authorizes another principal's routes (`401`). Admin routes additionally require the role **and** a completed
 second factor in the session (Customers get `403`); admin sessions expire after 30 minutes idle (`401`).
@@ -62,7 +62,7 @@ All responses are returned in JSON format. The standard error format includes th
 | :--- | :--- | :--- |
 | `POST` | `/auth/register` | Create account (body: `email`, `password`, `firstName`, `lastName`) |
 | `POST` | `/auth/login` | Customer: session cookie + user. **Admin (Step 16): `{mfaRequired: true, mfaSetupRequired, challengeId, expiresInSeconds}`, no cookie** |
-| `POST` | `/auth/logout` | Invalidate session (also the admin logout; audited for admins) |
+| `POST` | `/auth/logout` | Ends the Customer session only. Admins use `POST /admin-auth/logout` (audited `ADMIN_LOGOUT`) |
 | `GET` | `/auth/me` | Current user profile (also the profile read for account settings, Step 22) |
 | `POST` | `/auth/change-password` | Step 22, Customer only. Body exactly `{currentPassword, newPassword}` (new: 12–128, same rule as register, must differ). `200 {success: true}`; this browser gets a new session id, every other session of the Customer gets `401`. Wrong current password `400` (never `401`); 5/min per IP; audited `PASSWORD_CHANGED`. Admins `403`, Recipient/Trusted Contact `401` |
 | `POST` | `/auth/verify-email` | Verify email token |

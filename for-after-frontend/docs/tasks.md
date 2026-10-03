@@ -9,8 +9,8 @@
 | **Latest step** | Step 23: full application audit + fixes (no new features); report: `for-after-backend/docs/step-23-audit.md` |
 | **Tasks** | **27 of 30** built and verified ✅ (FE-1–19, FE-21–28) |
 | **Open** | FE-20 billing (no backend yet), FE-29/30 WordPress login |
-| **Unit / component tests** | **202 passing** (14 files, Vitest + React Testing Library) |
-| **Playwright** | **34 passing, 0 failing, 0 skipped** (Step 23, 2026-10-03, real local API + PostgreSQL + Redis + development bucket, OTP log and a fictional admin): `development` 4 · `vault` + setup 25 · `account` 3 · `production-build` 2 |
+| **Unit / component tests** | **203 passing** (14 files, Vitest + React Testing Library) |
+| **Playwright** | **36 passing, 0 failing, 0 skipped** (Step 23 follow-up, 2026-10-03, real local API + PostgreSQL + Redis + development bucket, OTP log, a fictional admin and a fictional failed job): `development` 4 · `vault` + setup 27 · `account` 3 · `production-build` 2 |
 | **Blocker** | None for the built scope |
 | **Design system** | [`frontend-design-system.md`](frontend-design-system.md) |
 
@@ -178,17 +178,27 @@ Also built, outside the FE list: the Customer death-verification **safety banner
 - Browser audit of 26 pages at 375/1440 px, simulated API failures, live IDOR/mass-assignment/CORS probes: no other
   findings. Deferred: separate admin cookie, historical local DB password in the initial commit (rotate if reused).
 
+### Step 23 follow-up — admin cookie, queue retry E2E, safeguard env
+- Admin sessions use their own cookie `for_after_admin_session` (Customers keep `for_after_session`); admin sign-out is
+  `POST /admin-auth/logout`; admin cache events only touch `['admin', …]`. A Customer and an admin can now be signed in
+  in the same browser profile. A Customer on `/admin` sees the admin sign-in (no "Access denied": the Customer cookie
+  is never sent to admin routes).
+- Failed-job retry verified end to end in the browser with a fictional failed job.
+- Local `.env`: one `DEATH_VERIFICATION_SAFEGUARD_SECONDS` (60, development only).
+
 ---
 
 ## ⚠️ Open items
 
 **Follow-ups found in Step 21 (not blocking the built scope)**
-- [ ] **Separate admin session cookie.** Admins and Customers share `for_after_session`, so one browser profile cannot
-  hold both: an admin sign-in in another tab replaces the Customer session. Proposed: a `for_after_admin_session`
-  (backend change + `AdminGate`). Documented, not redesigned in Step 21.
-- [ ] Failed-job **retry** is component-tested only: the local queues had no failed job to retry in E2E.
-- [ ] The backend's local `.env` sets `DEATH_VERIFICATION_SAFEGUARD_SECONDS` twice (14 days, then 60 s; the last wins).
-  Fine for development, but worth tidying so nobody copies it.
+- [x] **Separate admin session cookie** (Step 23 follow-up): `for_after_admin_session`, own Redis prefix, read only on
+  admin routes; `POST /admin-auth/logout`. Verified in one browser profile (Playwright `admin.spec`): Customer and
+  admin side by side, refresh both, Customer logout → admin stays, admin logout → Customer stays.
+- [x] Failed-job **retry** E2E (Step 23 follow-up): backend `scripts/dev-failed-job-fixture.mjs` makes one fictional
+  failed job (development only; random message id with no row); `admin.spec` retries it through the UI
+  (`E2E_ADMIN_FAILED_JOB`) and the real worker completes it as `stale`.
+- [x] Local `.env` now sets `DEATH_VERIFICATION_SAFEGUARD_SECONDS` once (`60`, marked development only); production stays
+  `1209600` (`.env.example`, `docs/deployment.md`).
 
 **Before production**
 - [ ] Content-Security-Policy (needs the API and storage domains).
@@ -207,7 +217,7 @@ Also built, outside the FE list: the Customer death-verification **safety banner
 
 ```bash
 # Unit / component (no backend needed)
-npm test                       # 202 tests
+npm test                       # 203 tests
 npm run lint && npm run typecheck && npm run build
 
 # Playwright (needs PostgreSQL, Redis and the NestJS API on :4000)

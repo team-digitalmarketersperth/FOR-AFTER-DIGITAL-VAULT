@@ -187,7 +187,7 @@ reject wins. Details: `docs/death-verification.md`.
 ```
 Admin --POST /auth/login (password)--> Redis challenge {userId, purpose, attempts, createdAt}; no session
       --POST /admin-auth/totp/setup--> encrypted secret (AdminMfaCredential, enabledAt null) → otpauthUri once
-      --POST /admin-auth/totp/confirm | /totp/verify | /recovery/verify--> for_after_session
+      --POST /admin-auth/totp/confirm | /totp/verify | /recovery/verify--> for_after_admin_session
                                         {userId, role, adminMfaVerifiedAt, lastActivityAt}
 SessionAuthGuard (re-reads User; admin: MFA present + idle < 30 min) → AdminGuard (role + MFA)
   → /admin/dashboard · /admin/users · /admin/audit-logs · /admin/system/queues · /admin/death-verifications

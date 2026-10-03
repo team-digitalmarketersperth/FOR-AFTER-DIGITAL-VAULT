@@ -3,14 +3,14 @@
 > The full-stack roadmap for **For After**, a secure Digital Legacy and Posthumous Messaging platform, from local
 > development to production launch. Phase order follows `docs/PROJECT_OVERVIEW.md` §59 (Recommended Development Sequence).
 
-|                              |                                                                                                                                                                                                                                                                                       |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Last updated**             | 2026-10-03                                                                                                                                                                                                                                                                            |
-| **Latest backend step**      | Step 23: full audit + hardening ([`step-23-audit.md`](step-23-audit.md)): Origin check on state-changing requests, scaffold removed; no new features                                                                                                                                  |
-| **Latest frontend step**     | Step 23: audit fixes (not-found/error `h1`, Playwright `account` project, optional `E2E_OTP_API`)                                                                                                                                                                                     |
-| **Backend**                  | Steps 1–16 + 22–23 built and tested (624 unit tests, 186 e2e tests)                                                                                                                                                                                                                   |
-| **Frontend**                 | **27 of 30 tasks** built and verified (FE-1–19, FE-21–28); 202 unit/component tests; Playwright 34 passing, 0 failing, 0 skipped against the real local API, PostgreSQL, Redis and the development bucket (Step 23, 2026-10-03). Frontend tracker: `for-after-frontend/docs/tasks.md` |
-| **Checklist (phases 02–27)** | **142 of 216** items done                                                                                                                                                                                                                                                             |
+|                              |                                                                                                                                                                                                                                                                                                 |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Last updated**             | 2026-10-03                                                                                                                                                                                                                                                                                      |
+| **Latest backend step**      | Step 23: full audit + hardening ([`step-23-audit.md`](step-23-audit.md)): Origin check on state-changing requests, scaffold removed; no new features                                                                                                                                            |
+| **Latest frontend step**     | Step 23: audit fixes (not-found/error `h1`, Playwright `account` project, optional `E2E_OTP_API`)                                                                                                                                                                                               |
+| **Backend**                  | Steps 1–16 + 22–23 (+ follow-up) built and tested (624 unit tests, 189 e2e tests)                                                                                                                                                                                                               |
+| **Frontend**                 | **27 of 30 tasks** built and verified (FE-1–19, FE-21–28); 203 unit/component tests; Playwright 36 passing, 0 failing, 0 skipped against the real local API, PostgreSQL, Redis and the development bucket (Step 23 follow-up, 2026-10-03). Frontend tracker: `for-after-frontend/docs/tasks.md` |
+| **Checklist (phases 02–27)** | **142 of 216** items done                                                                                                                                                                                                                                                                       |
 
 ---
 
@@ -249,6 +249,9 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 
 - [x] Session timeout on inactivity for admins (Step 16): `ADMIN_SESSION_IDLE_TIMEOUT_SECONDS` (30 min); admin sessions
       without MFA state are destroyed; `AdminGuard` checks role **and** MFA. Customer sessions unchanged
+- [x] Separate admin session cookie (Step 23 follow-up): `for_after_admin_session` + Redis prefix
+      `for_after:admin_sess:`, read only on `/admin/*` and `/admin-auth/*`; `POST /admin-auth/logout`. Customer and
+      admin sessions coexist in one browser; each logout ends only its own (backend e2e + Playwright)
 - [ ] "Sign out all devices" as its own action (Step 22: a password change already ends every other session; there is
       still no per-user session list)
 - [x] CSRF review for cookie-based requests (Step 23, `docs/step-23-audit.md` SEC-002): `SameSite=Lax` + CORS allowlist,

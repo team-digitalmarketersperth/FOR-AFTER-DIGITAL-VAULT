@@ -62,7 +62,7 @@ first time:  POST /admin-auth/totp/setup   { challengeId }        → { secret, 
 enrolled:    POST /admin-auth/totp/verify  { challengeId, code }  → session
 lost device: POST /admin-auth/recovery/verify { challengeId, recoveryCode } → session
   ▼
-for_after_session with adminMfaVerifiedAt + lastActivityAt  →  AdminGuard
+for_after_admin_session with adminMfaVerifiedAt + lastActivityAt  →  AdminGuard
 ```
 
 **Challenge** (Redis `for_after:admin_auth:challenge:<challengeId>`, TTL `ADMIN_TOTP_CHALLENGE_TTL_SECONDS`): only
@@ -113,9 +113,13 @@ challenge is deleted and the step fails.
 
 ## 4. Admin sessions and AdminGuard
 
-Admins use the same `for_after_session` cookie (HttpOnly, `SameSite=Lax`, `Secure` in production). After a successful
-second factor the session id is regenerated and the session holds `userId`, `role`, `adminMfaVerifiedAt` and
-`lastActivityAt`. Nothing else.
+Admins have their own cookie, **`for_after_admin_session`** (Step 23 follow-up; same flags as the Customer cookie:
+HttpOnly, `SameSite=Lax`, `Secure` in production, same domain and TTL) in its own Redis namespace
+(`for_after:admin_sess:`). One dispatcher in `configureApp` gives `/api/v1/admin/*` and `/api/v1/admin-auth/*` only the
+admin session and every other route only the Customer session (`for_after_session`), so a Customer and an admin can be
+signed in in the same browser profile, and neither's sign-in, logout or expiry touches the other. After a successful
+second factor the admin session id is regenerated and holds `userId`, `role`, `adminMfaVerifiedAt` and
+`lastActivityAt`. Nothing else. The password step still creates no session or cookie.
 
 **`SessionAuthGuard`** (every User route) re-reads the user and, for `ADMIN`/`SUPER_ADMIN` only:
 
@@ -126,11 +130,11 @@ second factor the session id is regenerated and the session holds `userId`, `rol
 Customer sessions are unchanged (no idle timeout).
 
 **`AdminGuard`** (after `SessionAuthGuard`) requires role `ADMIN`/`SUPER_ADMIN` **and** `adminMfaVerifiedAt`, so an
-admin route is never reachable on role alone. Customers get `403`; no session, a Recipient or a Trusted Contact cookie
-gets `401`.
+admin route is never reachable on role alone. A Customer, Recipient or Trusted Contact cookie is never read on admin
+routes (`401`, like no session); an admin cookie is never read on Customer routes (`401`).
 
-**Logout** is the existing `POST /auth/logout` (destroys the session, clears the cookie) and writes `ADMIN_LOGOUT` for
-admin sessions. There is no second logout route.
+**Logout** is `POST /admin-auth/logout`: destroys the admin session, clears `for_after_admin_session` and writes
+`ADMIN_LOGOUT`. `POST /auth/logout` ends only the Customer session. Neither ends the other.
 
 ---
 
@@ -146,7 +150,7 @@ All under `/api/v1`. Every `/admin/*` route: `SessionAuthGuard` + `AdminGuard`.
 | `POST` | `/admin-auth/totp/verify` | `{ challengeId, code }` → admin profile + session |
 | `POST` | `/admin-auth/recovery/verify` | `{ challengeId, recoveryCode }` → admin profile + `remainingRecoveryCodes` + session |
 | `GET` | `/admin-auth/me` | `id, email, firstName, lastName, role, mfaEnabled, mfaVerified, mfaVerifiedAt` |
-| `POST` | `/auth/logout` | also the admin logout |
+| `POST` | `/admin-auth/logout` | ends only the admin session; audited `ADMIN_LOGOUT` |
 | `GET` | `/admin/dashboard` | user counts by status, open death cases, failed jobs |
 | `GET` | `/admin/users` | `page, limit (≤100), search, status, role` |
 | `GET` | `/admin/users/:userId` | account metadata + counts; audited |
@@ -320,7 +324,7 @@ Folder 16's admin logins now include an "Admin - TOTP Verify" step.
    the secret). Optionally set `adminTotpSecret` as a **current** value (never initial) so the pre-request script can
    compute codes in the Runner.
 4. Read the 6-digit code from the app. Without `adminTotpSecret`, type it into `adminTotpCode`.
-5. **Admin - TOTP Confirm** → `200`, `recoveryCodes` (shown once: store them offline) and the `for_after_session`
+5. **Admin - TOTP Confirm** → `200`, `recoveryCodes` (shown once: store them offline) and the `for_after_admin_session`
    cookie.
 6. **Admin - /admin-auth/me** → `mfaVerified: true`.
 7. Call the admin APIs (dashboard, users, audit, queues, death verification). Later sign-ins use **Admin - TOTP

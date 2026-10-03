@@ -178,7 +178,8 @@ Full design: `docs/admin.md`.
 - **Secrets at rest.** TOTP secrets are AES-256-GCM encrypted with the dedicated `ADMIN_TOTP_ENCRYPTION_KEY` (validated
   at startup, never logged, never derived from other secrets). Recovery codes (80-bit) are stored as SHA-256 only and
   shown once. Secrets, codes and challenge ids never reach logs or audit rows (unit-tested).
-- **Admin sessions.** Same HttpOnly `for_after_session` cookie (Lax, Secure in production); the session proves MFA
+- **Admin sessions.** Own HttpOnly `for_after_admin_session` cookie (Lax, Secure in production) and Redis prefix,
+  read only on admin routes, so it never mixes with a Customer session; the session proves MFA
   (`adminMfaVerifiedAt`) and expires after 30 minutes idle. Sessions without MFA state (pre-Step 16, or a Customer
   promoted mid-session) are destroyed. `AdminGuard` checks role **and** MFA on every admin route.
 - **Least privilege.** `ADMIN` manages Customers only; `SUPER_ADMIN` also admins; nobody manages a `SUPER_ADMIN` or
