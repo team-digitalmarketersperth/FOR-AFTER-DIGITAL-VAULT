@@ -44,7 +44,8 @@ export class ConsoleDeathNoticeDelivery extends DeathNoticeDelivery {
 }
 
 // No provider yet: sending fails, so the case stays PENDING_VERIFICATION and
-// no safeguard can start. That is the safe default until Step 17.
+// no safeguard can start. That is the safe default until a real email
+// provider exists (roadmap phase 20, notifications).
 export class DisabledDeathNoticeDelivery extends DeathNoticeDelivery {
   sendAccountHolderSafetyNotice(): Promise<void> {
     return Promise.reject(
