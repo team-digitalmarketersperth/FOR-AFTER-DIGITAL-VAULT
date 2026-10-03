@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { API, freshTotp } from './helpers';
+import { API, freshTotp, newAccount, registerViaApi, type Account } from './helpers';
 
 // Step 20: Admin Portal against the real local API.
 //
@@ -12,7 +12,10 @@ import { API, freshTotp } from './helpers';
 // enrolled one needs E2E_ADMIN_TOTP_SECRET. E2E_ADMIN_SUSPEND_EMAIL names a
 // fictional Customer to suspend and reactivate; E2E_ADMIN_READY_CASE and
 // E2E_ADMIN_REJECT_CASE name READY_FOR_REVIEW case ids to verify / reject.
-// Uses one password login (5/min per IP).
+// E2E_ADMIN_FAILED_JOB names a failed message-release job to retry (backend
+// scripts/dev-failed-job-fixture.mjs makes a fictional one).
+// The signed-in admin works in a browser profile where a fictional Customer is
+// signed in too (separate cookies). Uses 3 password logins (5/min per IP).
 
 const EMAIL = process.env.E2E_ADMIN_EMAIL;
 const PASSWORD = process.env.E2E_ADMIN_PASSWORD;
@@ -30,11 +33,12 @@ test.describe('without an admin session', () => {
   test.describe('with a Customer session', () => {
     test.use({ storageState: 'e2e/.auth/b.json' });
 
-    test('a Customer is denied, and is not signed out', async ({ page }) => {
-      expect((await page.request.get(`${API}/admin-auth/me`)).status()).toBe(403);
-      expect((await page.request.get(`${API}/admin/dashboard`)).status()).toBe(403);
+    test('a Customer session never reaches the Admin Portal, and is not signed out', async ({ page }) => {
+      // The Customer cookie is never read on admin routes: no admin session.
+      expect((await page.request.get(`${API}/admin-auth/me`)).status()).toBe(401);
+      expect((await page.request.get(`${API}/admin/dashboard`)).status()).toBe(401);
       await page.goto('/admin');
-      await expect(page.getByRole('heading', { name: 'Access denied' })).toBeVisible();
+      await expect(page).toHaveURL(/\/admin\/login$/);
       await expect(page.getByRole('navigation', { name: 'Admin' })).toHaveCount(0);
       expect((await page.request.get(`${API}/auth/me`)).status()).toBe(200);
     });
@@ -45,14 +49,26 @@ test.describe.serial('signed-in admin', () => {
   test.skip(!EMAIL || !PASSWORD, 'Set E2E_ADMIN_EMAIL and E2E_ADMIN_PASSWORD (a fictional local admin)');
 
   let page: Page;
+  let customerTab: Page;
+  let customer: Account;
   let secret = process.env.E2E_ADMIN_TOTP_SECRET ?? '';
   let usedStep = -1;
+  const customerLogin = async () =>
+    expect(
+      (await page.request.post(`${API}/auth/login`, { data: { email: customer.email, password: customer.password } })).status(),
+    ).toBe(200);
 
+  // One browser profile: a Customer signs in first, the admin then signs in in
+  // another tab. Both sessions must survive each other.
   test.beforeAll(async ({ browser }) => {
-    page = await browser.newPage();
+    const context = await browser.newContext();
+    page = await context.newPage();
+    customer = newAccount();
+    await registerViaApi(context.request, customer);
+    await customerLogin();
   });
   test.afterAll(async () => {
-    await page.close();
+    await page.context().close();
   });
 
   const code = async () => {
@@ -96,6 +112,29 @@ test.describe.serial('signed-in admin', () => {
     await expect(page).toHaveURL(/\/admin$/);
     await expect(page.getByRole('heading', { name: 'Overview' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Needs attention' })).toBeVisible();
+  });
+
+  test('Customer and admin stay signed in side by side; a Customer logout leaves the admin', async () => {
+    const names = (await page.context().cookies()).map((c) => c.name);
+    expect(names).toEqual(expect.arrayContaining(['for_after_session', 'for_after_admin_session']));
+    customerTab = await page.context().newPage();
+    await customerTab.goto('/dashboard');
+    await expect(customerTab.getByRole('heading', { name: `Welcome back, ${customer.firstName}.` })).toBeVisible();
+    // No "This area is for Customer accounts": the admin sign-in replaced nothing.
+    await expect(customerTab.getByText('This area is for Customer accounts')).toHaveCount(0);
+    await customerTab.reload();
+    await expect(customerTab.getByRole('heading', { name: `Welcome back, ${customer.firstName}.` })).toBeVisible();
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'Overview' })).toBeVisible();
+
+    await customerTab.getByRole('button', { name: /^Account:/ }).click();
+    await customerTab.getByRole('menuitem', { name: 'Log out' }).click();
+    await expect(customerTab).toHaveURL(/\/login$/);
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'Overview' })).toBeVisible();
+    expect((await page.request.get(`${API}/admin-auth/me`)).status()).toBe(200);
+    // Back in as the Customer for the admin sign-out test below.
+    await customerLogin();
   });
 
   test('the session survives a refresh and the portal has no Customer navigation', async () => {
@@ -165,12 +204,38 @@ test.describe.serial('signed-in admin', () => {
     await expect(page.getByRole('textbox')).toHaveCount(0);
   });
 
-  test('sign out ends the session; /admin then asks to sign in', async () => {
+  test('failed jobs: retry re-queues one through the normal worker (never a forced release)', async () => {
+    const jobId = process.env.E2E_ADMIN_FAILED_JOB;
+    test.skip(!jobId, 'Set E2E_ADMIN_FAILED_JOB (backend: node scripts/dev-failed-job-fixture.mjs)');
+    await page.goto('/admin/system/queues');
+    const table = page.getByRole('table', { name: /Failed jobs in message-release/ });
+    const row = table.getByRole('row').filter({ hasText: jobId! });
+    await expect(row).toContainText('1 of 1');
+    await row.getByRole('button', { name: 'Retry' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Retry this job?' });
+    await expect(dialog).toContainText('force a release');
+    await dialog.getByRole('button', { name: 'Retry job' }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page.getByText('Job queued to run again')).toBeVisible();
+    await expect(table.getByRole('row').filter({ hasText: jobId! })).toHaveCount(0);
+    // The API agrees: no longer failed, and retrying again is refused.
+    const failed = await (await page.request.get(`${API}/admin/system/queues/message-release/failed?limit=100`)).json();
+    expect(JSON.stringify(failed)).not.toContain(jobId);
+    expect((await page.request.post(`${API}/admin/system/queues/message-release/jobs/${jobId}/retry`)).status()).toBe(409);
+    await page.goto('/admin/audit-logs?eventType=FAILED_JOB_RETRIED');
+    await expect(page.getByRole('link', { name: 'Failed job retried' }).first()).toBeVisible();
+  });
+
+  test('sign out ends only the admin session; /admin then asks to sign in', async () => {
     await page.goto('/admin');
     await page.getByRole('button', { name: 'Sign out' }).first().click();
     await expect(page).toHaveURL(/\/admin\/login$/);
     expect((await page.request.get(`${API}/admin-auth/me`)).status()).toBe(401);
     await page.goto('/admin');
     await expect(page).toHaveURL(/\/admin\/login$/);
+    // The Customer in the other tab is still signed in.
+    expect((await page.request.get(`${API}/auth/me`)).status()).toBe(200);
+    await customerTab.reload();
+    await expect(customerTab.getByRole('heading', { name: `Welcome back, ${customer.firstName}.` })).toBeVisible();
   });
 });
