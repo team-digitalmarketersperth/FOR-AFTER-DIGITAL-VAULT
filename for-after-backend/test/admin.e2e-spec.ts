@@ -53,6 +53,7 @@ describe('Admin backend (e2e)', () => {
   const users = {
     admin: at('adm.ada'),
     admin2: at('adm.ben'),
+    admin3: at('adm.cleo'),
     root: at('adm.root'),
     lisa: at('adm.lisa'),
     noah: at('adm.noah'),
@@ -173,12 +174,17 @@ describe('Admin backend (e2e)', () => {
       .useValue(otpDelivery)
       .compile();
     app = moduleRef.createNestApplication<NestExpressApplication>();
-    // Real Redis sessions, as in main.ts (own prefix for tests).
+    // Real Redis sessions, as in main.ts: Customer and admin sessions under
+    // separate prefixes (own prefixes for tests).
     configureApp(
       app,
       new RedisStore({
         client: app.get(RedisService).client,
         prefix: `for_after:test_sess:${run}:`,
+      }),
+      new RedisStore({
+        client: app.get(RedisService).client,
+        prefix: `for_after:test_admin_sess:${run}:`,
       }),
     );
     await app.init();
@@ -198,7 +204,7 @@ describe('Admin backend (e2e)', () => {
     }
     // No admin sign-up exists: an operator sets the role.
     await prisma.user.updateMany({
-      where: { email: { in: [users.admin, users.admin2] } },
+      where: { email: { in: [users.admin, users.admin2, users.admin3] } },
       data: { role: 'ADMIN' },
     });
     await prisma.user.update({
@@ -293,9 +299,10 @@ describe('Admin backend (e2e)', () => {
           code: await generate({ secret }),
         })
         .expect(200);
-      expect(String(confirmed.headers['set-cookie'])).toMatch(
-        /^for_after_session=.*HttpOnly/i,
-      );
+      // The admin session has its own cookie; the Customer cookie is untouched.
+      const cookies = String(confirmed.headers['set-cookie']);
+      expect(cookies).toMatch(/^for_after_admin_session=.*HttpOnly/i);
+      expect(cookies).not.toMatch(/(^|, )for_after_session=/);
       recoveryCodes = confirmed.body.recoveryCodes;
       expect(recoveryCodes).toHaveLength(10);
       expect(confirmed.body).toMatchObject({
@@ -327,7 +334,7 @@ describe('Admin backend (e2e)', () => {
 
     it('logout, then normal TOTP sign-in; the same code cannot be replayed', async () => {
       const agent = agents.admin;
-      await agent.post(api('/auth/logout')).expect(200);
+      await agent.post(api('/admin-auth/logout')).expect(200);
       await agent.get(api('/admin-auth/me')).expect(401);
 
       const { challengeId, mfaSetupRequired } = await passwordLogin(agent);
@@ -420,8 +427,99 @@ describe('Admin backend (e2e)', () => {
     });
   });
 
+  describe('Customer and admin sessions in one browser (separate cookies)', () => {
+    const cookieValue = (agent: Agent, name: string) =>
+      // supertest agents keep a cookie jar like a browser profile.
+      (
+        agent as unknown as {
+          jar: { getCookie: (n: string, o: object) => { value: string } };
+        }
+      ).jar.getCookie(name, {
+        domain: '127.0.0.1',
+        path: '/',
+        secure: false,
+        script: false,
+      })?.value;
+
+    it('both stay signed in; each logout ends only its own session', async () => {
+      // "Tab 2": admin password + TOTP. "Tab 1": a Customer login, same jar.
+      const { agent } = await adminSignIn(app, users.admin3, password);
+      await agent
+        .post(api('/auth/login'))
+        .send({ email: users.noah, password })
+        .expect(200);
+      expect((await agent.get(api('/auth/me')).expect(200)).body.email).toBe(
+        users.noah,
+      );
+      const me = await agent.get(api('/admin-auth/me')).expect(200);
+      expect(me.body).toMatchObject({ email: users.admin3, mfaVerified: true });
+      await agent.get(api('/admin/dashboard')).expect(200);
+      await agent.get(api('/recipients')).expect(200);
+
+      // Customer logout → admin unaffected.
+      const out = await agent.post(api('/auth/logout')).expect(200);
+      expect(String(out.headers['set-cookie'])).toMatch(/^for_after_session=;/);
+      await agent.get(api('/auth/me')).expect(401);
+      await agent.get(api('/admin-auth/me')).expect(200);
+
+      // Customer back in; admin logout → Customer unaffected, audited.
+      await agent
+        .post(api('/auth/login'))
+        .send({ email: users.noah, password })
+        .expect(200);
+      const adminOut = await agent.post(api('/admin-auth/logout')).expect(200);
+      expect(String(adminOut.headers['set-cookie'])).toMatch(
+        /^for_after_admin_session=;/,
+      );
+      await agent.get(api('/admin-auth/me')).expect(401);
+      await agent.get(api('/admin/dashboard')).expect(401);
+      await agent.get(api('/auth/me')).expect(200);
+      const admin3 = await userId(users.admin3);
+      expect(
+        await prisma.auditLog.count({
+          where: { eventType: 'ADMIN_LOGOUT', actorUserId: admin3 },
+        }),
+      ).toBe(1);
+    });
+
+    it('a cookie only works under its own name (no cross-presentation)', async () => {
+      const customer = await signIn(users.olga);
+      const sid = cookieValue(customer, 'for_after_session');
+      expect(sid).toBeTruthy();
+      // The Customer session id sent as the admin cookie finds nothing.
+      await http()
+        .get(api('/admin-auth/me'))
+        .set('Cookie', `for_after_admin_session=${sid}`)
+        .expect(401);
+      const adminSid = cookieValue(agents.admin2, 'for_after_admin_session');
+      expect(adminSid).toBeTruthy();
+      // And an MFA-verified admin session sent as the Customer cookie.
+      await http()
+        .get(api('/auth/me'))
+        .set('Cookie', `for_after_session=${adminSid}`)
+        .expect(401);
+      await http()
+        .get(api('/admin-auth/me'))
+        .set('Cookie', `for_after_admin_session=${adminSid}`)
+        .expect(200);
+    });
+
+    it('the admin password alone sets no cookie and opens nothing', async () => {
+      const agent = request.agent(app.getHttpServer());
+      const login = await agent
+        .post(api('/auth/login'))
+        .send({ email: users.admin2, password })
+        .expect(200);
+      expect(login.headers['set-cookie']).toBeUndefined();
+      expect(login.body).toMatchObject({ mfaRequired: true });
+      await agent.get(api('/admin-auth/me')).expect(401);
+      await agent.get(api('/admin/users')).expect(401);
+      await agent.get(api('/auth/me')).expect(401);
+    });
+  });
+
   describe('other principals never reach admin routes', () => {
-    it('Customer: 403 on admin APIs; no challenge to use for MFA routes', async () => {
+    it('Customer: 401 on admin APIs (its cookie is never read there); no challenge to use for MFA routes', async () => {
       for (const path of [
         '/admin/users',
         '/admin/dashboard',
@@ -430,12 +528,13 @@ describe('Admin backend (e2e)', () => {
         '/admin/death-verifications',
         '/admin-auth/me',
       ]) {
-        await agents.lisa.get(api(path)).expect(403);
+        // The Customer cookie is never read on admin routes: no admin session.
+        await agents.lisa.get(api(path)).expect(401);
       }
       await agents.lisa
         .post(api(`/admin/users/${ids.lisa}/suspend`))
         .send({ reason: 'x' })
-        .expect(403);
+        .expect(401);
       const fake = 'A'.repeat(43);
       await agents.lisa
         .post(api('/admin-auth/totp/setup'))
@@ -503,7 +602,7 @@ describe('Admin backend (e2e)', () => {
         .expect(200);
       expect(
         admins.body.items.map((u: { email: string }) => u.email).sort(),
-      ).toEqual([users.admin, users.admin2].sort());
+      ).toEqual([users.admin, users.admin2, users.admin3].sort());
       const page2 = await agents.admin
         .get(api('/admin/users'))
         .query({ search: `.${tag}@`, limit: 2, page: 2 })
@@ -511,8 +610,8 @@ describe('Admin backend (e2e)', () => {
       expect(page2.body.pagination).toEqual({
         page: 2,
         limit: 2,
-        total: 6,
-        pages: 3,
+        total: 7,
+        pages: 4,
       });
       expect(page2.body.items).toHaveLength(2);
       await agents.admin.get(api('/admin/users?limit=101')).expect(400);
@@ -774,7 +873,7 @@ describe('Admin backend (e2e)', () => {
         .expect(404);
       await agents.lisa
         .post(api(`/admin/system/queues/message-release/jobs/${jobId}/retry`))
-        .expect(403);
+        .expect(401);
       await agents.admin
         .post(api(`/admin/system/queues/message-release/jobs/${jobId}/retry`))
         .expect(200);

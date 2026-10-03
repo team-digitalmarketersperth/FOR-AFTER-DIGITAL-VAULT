@@ -4,8 +4,8 @@ import userEvent from '@testing-library/user-event';
 import type { ReactElement } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import type { AdminMe, AdminUserDetail, AuditLog, DeathCaseDetail } from '@/lib/api/admin';
-import { adminKeys, makeQueryClient } from '@/lib/query/query-client';
-import { json, routeFetch, router } from '@/test/utils';
+import { adminKeys, makeQueryClient, queryKeys, resetPrivateCache } from '@/lib/query/query-client';
+import { customer, json, routeFetch, router } from '@/test/utils';
 import { AdminLoginForm, MfaSetup, MfaVerify } from './admin-auth';
 import { AdminGate } from './admin-shell';
 import { AuditDetail, AuditList } from './audit-logs';
@@ -73,10 +73,13 @@ describe('Admin password step', () => {
       'POST /auth/login': json(200, { id: 'u1', role: 'CUSTOMER' }),
       'POST /auth/logout': json(200, { success: true }),
     });
-    renderAdmin(<AdminLoginForm />);
+    const { queryClient } = renderAdmin(<AdminLoginForm />);
+    queryClient.setQueryData(queryKeys.me, customer);
     await signInWithPassword();
     expect(await screen.findByText('Not an administrator account')).toBeInTheDocument();
     expect(api.called('POST', '/auth/logout')).toHaveLength(1);
+    // That Customer session is gone, so the Customer cache follows.
+    expect(queryClient.getQueryData(queryKeys.me)).toBeNull();
     expect(router.push).not.toHaveBeenCalled();
   });
 
@@ -274,23 +277,41 @@ describe('Admin gate', () => {
     expect(queryClient.getQueryData(adminKeys.dashboard)).toBeUndefined();
   });
 
-  it('sign out ends the session, clears admin data and goes to the admin sign-in', async () => {
+  it('sign out ends only the admin session, clears admin data and goes to the admin sign-in', async () => {
     const api = routeFetch({
       'GET /admin-auth/me': json(200, ADMIN),
-      'POST /auth/logout': json(200, { success: true }),
+      'POST /admin-auth/logout': json(200, { success: true }),
     });
     const { queryClient } = renderAdmin(<AdminGate>admin page</AdminGate>, [
       [adminKeys.user('x'), { id: 'x' }],
       [['trusted-contact', 'me'], { email: 'tc@example.test' }],
+      [queryKeys.me, customer],
+      [queryKeys.recipients, []],
     ]);
     await screen.findByText('admin page');
     await userEvent.click(screen.getAllByRole('button', { name: 'Sign out' })[0]);
     await waitFor(() => expect(router.replace).toHaveBeenCalledWith('/admin/login'));
-    expect(api.called('POST', '/auth/logout')).toHaveLength(1);
+    expect(api.called('POST', '/admin-auth/logout')).toHaveLength(1);
+    // The Customer session (separate cookie) is never signed out from here.
+    expect(api.called('POST', '/auth/logout')).toHaveLength(0);
     expect(queryClient.getQueryData(adminKeys.user('x'))).toBeUndefined();
     expect(queryClient.getQueryData(adminKeys.expired)).toBeUndefined();
-    // Another principal's session is not this sign-out's business.
+    // Other principals' sessions and data are not this sign-out's business.
     expect(queryClient.getQueryData(['trusted-contact', 'me'])).toEqual({ email: 'tc@example.test' });
+    expect(queryClient.getQueryData(queryKeys.me)).toEqual(customer);
+    expect(queryClient.getQueryData(queryKeys.recipients)).toEqual([]);
+  });
+
+  it('a Customer sign-out in the same tab leaves the admin session and data alone', async () => {
+    const queryClient = makeQueryClient();
+    queryClient.setQueryData(adminKeys.me, ADMIN);
+    queryClient.setQueryData(adminKeys.user('x'), { id: 'x' });
+    queryClient.setQueryData(queryKeys.recipients, []);
+    await resetPrivateCache(queryClient, null);
+    expect(queryClient.getQueryData(queryKeys.me)).toBeNull();
+    expect(queryClient.getQueryData(queryKeys.recipients)).toBeUndefined();
+    expect(queryClient.getQueryData(adminKeys.me)).toEqual(ADMIN);
+    expect(queryClient.getQueryData(adminKeys.user('x'))).toEqual({ id: 'x' });
   });
 });
 

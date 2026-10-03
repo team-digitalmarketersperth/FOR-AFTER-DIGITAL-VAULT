@@ -25,7 +25,7 @@ import {
 } from '@/lib/api/admin';
 import { authApi, isAdminMfaChallenge, type AdminMfaChallenge, type LoginInput } from '@/lib/api/auth';
 import { ApiError, isApiError } from '@/lib/api/errors';
-import { adminKeys, dropAdminData, resetAdminCache } from '@/lib/query/query-client';
+import { adminKeys, dropAdminData, resetAdminCache, resetPrivateCache } from '@/lib/query/query-client';
 
 // ─── Session ────────────────────────────────────────────────────────────────
 
@@ -33,7 +33,8 @@ import { adminKeys, dropAdminData, resetAdminCache } from '@/lib/query/query-cli
  * GET /admin-auth/me is the only source of truth (never /auth/me, never local
  * state). 401 → null ("signed out"); if a session was showing, the server ended
  * it (idle timeout, suspension, …), so its data goes and sign-in says why.
- * 403 (a Customer session) stays an error: it is not "signed out".
+ * A Customer session is never sent here (separate cookie), so a signed-in
+ * Customer just sees the admin sign-in; a 403 still stays an error.
  */
 export function useAdminSession() {
   const qc = useQueryClient();
@@ -61,8 +62,9 @@ export type AdminLoginResult = { kind: 'mfa'; challenge: StoredChallenge } | { k
 
 /**
  * Password step. An admin gets a challenge and no session. A Customer's
- * correct password does create a Customer session, which the admin portal
- * doesn't want, so it is ended again straight away.
+ * correct password does create a Customer session (it replaces any Customer
+ * session in this browser), which the admin portal doesn't want, so it is
+ * ended again straight away and the Customer cache follows.
  */
 export function useAdminLogin() {
   const qc = useQueryClient();
@@ -72,6 +74,7 @@ export function useAdminLogin() {
       const result = await authApi.login(input);
       if (!isAdminMfaChallenge(result)) {
         await authApi.logout().catch(() => undefined);
+        await resetPrivateCache(qc, null);
         await resetAdminCache(qc, null);
         return { kind: 'not_admin' };
       }

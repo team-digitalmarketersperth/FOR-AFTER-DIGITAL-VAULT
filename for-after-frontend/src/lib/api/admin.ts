@@ -240,8 +240,9 @@ export const adminAuthApi = {
   recover: (challengeId: string, recoveryCode: string) =>
     post<RecoveryVerified>('/admin-auth/recovery/verify', { challengeId, recoveryCode }),
   me: (signal?: AbortSignal) => apiRequest<AdminMe>('/admin-auth/me', { signal }),
-  // The shared logout also ends admin sessions (and audits ADMIN_LOGOUT).
-  logout: () => post<{ success: true }>('/auth/logout'),
+  // Ends only the admin session (for_after_admin_session) and audits ADMIN_LOGOUT;
+  // a Customer signed in in the same browser stays signed in.
+  logout: () => post<{ success: true }>('/admin-auth/logout'),
 };
 
 export const adminApi = {

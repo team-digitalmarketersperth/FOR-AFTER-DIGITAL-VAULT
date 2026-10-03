@@ -5,13 +5,18 @@ import {
   HttpCode,
   Post,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { AdminGuard } from '../auth/guards/admin.guard.js';
 import { SessionAuthGuard } from '../auth/guards/session-auth.guard.js';
-import { establishSession } from '../config/app.setup.js';
+import {
+  ADMIN_SESSION_COOKIE,
+  endSession,
+  establishSession,
+} from '../config/app.setup.js';
 import type { SafeUser } from '../users/users.service.js';
 import { AdminMfaService } from './admin-mfa.service.js';
 import {
@@ -42,7 +47,7 @@ const adminMe = (user: SafeUser, req: Request) => ({
  * Admin second factor (Step 16). Every POST here needs the challengeId from an
  * admin's POST /auth/login; Customers, Recipients and Trusted Contacts never
  * get one, so they always get 401. Only a successful confirm/verify creates the
- * for_after_session. Logout is the shared POST /auth/logout.
+ * admin session (for_after_admin_session, never the Customer cookie).
  */
 @Controller('admin-auth')
 export class AdminAuthController {
@@ -95,6 +100,25 @@ export class AdminAuthController {
   @UseGuards(SessionAuthGuard, AdminGuard)
   me(@CurrentUser() user: SafeUser, @Req() req: Request) {
     return adminMe(user, req);
+  }
+
+  // Admin session only; a Customer session in the same browser stays. Safe
+  // without a session (the audit row is written only for a real one).
+  @Post('logout')
+  @HttpCode(200)
+  async logout(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<{ success: true }> {
+    const { userId, role, adminMfaVerifiedAt } = await endSession(
+      req,
+      res,
+      ADMIN_SESSION_COOKIE,
+    );
+    if (userId && role && adminMfaVerifiedAt) {
+      await this.mfa.recordLogout({ id: userId, role }, context(req));
+    }
+    return { success: true };
   }
 
   private async startSession(req: Request, user: SafeUser) {

@@ -103,7 +103,7 @@ describe('Message schedules (e2e, PostgreSQL)', () => {
     await app?.close();
   });
 
-  it('requires a session (401), a customer (403) and a UUID (400)', async () => {
+  it('requires a Customer session (401, admins included) and a UUID (400)', async () => {
     await request(app.getHttpServer())
       .post(url)
       .send({ triggerType: 'ON_DEATH' })
@@ -112,10 +112,11 @@ describe('Message schedules (e2e, PostgreSQL)', () => {
       where: { email: emails[2] },
       data: { role: 'ADMIN' },
     });
-    // Step 16: an admin session needs password + TOTP.
+    // Step 16: an admin session needs password + TOTP. Its own cookie is never
+    // read on Customer routes, so it gets 401 like any other non-Customer.
     const { agent: admin } = await adminSignIn(app, emails[2], password);
-    await admin.get(url).expect(403);
-    await admin.post(url).send({ triggerType: 'ON_DEATH' }).expect(403);
+    await admin.get(url).expect(401);
+    await admin.post(url).send({ triggerType: 'ON_DEATH' }).expect(401);
     await lisa.get(scheduleUrl('not-a-uuid')).expect(400);
   });
 

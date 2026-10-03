@@ -92,7 +92,7 @@ describe('Memory Vault (e2e, PostgreSQL, mocked storage)', () => {
     await app?.close();
   });
 
-  it('requires a session (401), a customer (403) and UUIDs (400)', async () => {
+  it('requires a Customer session (401, admins included) and UUIDs (400)', async () => {
     await request(app.getHttpServer()).get(root).expect(401);
     await request(app.getHttpServer())
       .post(root)
@@ -100,16 +100,17 @@ describe('Memory Vault (e2e, PostgreSQL, mocked storage)', () => {
       .expect(401);
     for (const role of ['ADMIN', 'SUPER_ADMIN'] as const) {
       await prisma.user.update({ where: { email: emails[2] }, data: { role } });
-      // Step 16: each role enrolls MFA afresh (test reset only).
+      // Step 16: each role enrolls MFA afresh (test reset only). The admin
+      // cookie is never read on Customer routes: 401.
       await prisma.adminMfaCredential.deleteMany({
         where: { user: { email: emails[2] } },
       });
       const { agent: admin } = await adminSignIn(app, emails[2], password);
-      await admin.get(root).expect(403);
+      await admin.get(root).expect(401);
       await admin
         .post(root)
         .send({ title: 'x', category: 'FAMILY' })
-        .expect(403);
+        .expect(401);
     }
     const id = crypto.randomUUID();
     await lisa.get(`${root}/not-a-uuid`).expect(400);

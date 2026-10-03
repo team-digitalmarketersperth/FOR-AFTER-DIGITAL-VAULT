@@ -80,7 +80,7 @@ describe('My Story (e2e, PostgreSQL)', () => {
     await app?.close();
   });
 
-  it('requires a session (401) and a customer (403)', async () => {
+  it('requires a Customer session (401, admins included)', async () => {
     const anon = request(app.getHttpServer());
     await anon.get(root).expect(401);
     await anon.get(early).expect(401);
@@ -88,15 +88,16 @@ describe('My Story (e2e, PostgreSQL)', () => {
     await anon.delete(earlyAnswer).expect(401);
     for (const role of ['ADMIN', 'SUPER_ADMIN'] as const) {
       await prisma.user.update({ where: { email: emails[2] }, data: { role } });
-      // Step 16: each role enrolls MFA afresh (test reset only).
+      // Step 16: each role enrolls MFA afresh (test reset only). The admin
+      // cookie is never read on Customer routes: 401.
       await prisma.adminMfaCredential.deleteMany({
         where: { user: { email: emails[2] } },
       });
       const { agent: admin } = await adminSignIn(app, emails[2], password);
-      await admin.get(root).expect(403);
-      await admin.get(earlyAnswer).expect(403);
-      await admin.put(earlyAnswer).send({ textContent: 'x' }).expect(403);
-      await admin.delete(earlyAnswer).expect(403);
+      await admin.get(root).expect(401);
+      await admin.get(earlyAnswer).expect(401);
+      await admin.put(earlyAnswer).send({ textContent: 'x' }).expect(401);
+      await admin.delete(earlyAnswer).expect(401);
     }
   });
 

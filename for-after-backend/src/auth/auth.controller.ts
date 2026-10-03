@@ -14,7 +14,11 @@ import {
   type AdminMfaChallenge,
   AdminMfaService,
 } from '../admin-auth/admin-mfa.service.js';
-import { establishSession, SESSION_COOKIE } from '../config/app.setup.js';
+import {
+  endSession,
+  establishSession,
+  SESSION_COOKIE,
+} from '../config/app.setup.js';
 import { AuditActorType } from '../generated/prisma/client.js';
 import type { SafeUser } from '../users/users.service.js';
 import { AuthService } from './auth.service.js';
@@ -98,32 +102,15 @@ export class AuthController {
     return { success: true };
   }
 
-  // Safe to call with or without a valid session. Also the admin logout.
+  // Customer session only (for_after_session); safe without one. Admins sign
+  // out with POST /admin-auth/logout, so neither ends the other's session.
   @Post('logout')
   @HttpCode(200)
   async logout(
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ): Promise<{ success: true }> {
-    const { userId, role, adminMfaVerifiedAt } = req.session;
-    const { path, domain, httpOnly, sameSite, secure } = req.session.cookie;
-    await new Promise<void>((resolve, reject) =>
-      req.session.destroy((err) => (err ? reject(err) : resolve())),
-    );
-    if (userId && role && adminMfaVerifiedAt) {
-      await this.adminMfa.recordLogout(
-        { id: userId, role },
-        { ip: req.ip, userAgent: req.headers['user-agent'] },
-      );
-    }
-    // Same path/domain/flags as when set, or the browser keeps the cookie.
-    res.clearCookie(SESSION_COOKIE, {
-      path,
-      domain,
-      httpOnly,
-      sameSite,
-      secure: secure === true,
-    });
+    await endSession(req, res, SESSION_COOKIE);
     return { success: true };
   }
 }

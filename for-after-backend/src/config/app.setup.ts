@@ -6,6 +6,10 @@ import session, { type SessionData, type Store } from 'express-session';
 import helmet from 'helmet';
 
 export const SESSION_COOKIE = 'for_after_session';
+// Admins have their own session (Step 23 follow-up), so a Customer and an admin
+// can be signed in in the same browser. Only admin routes ever read it.
+export const ADMIN_SESSION_COOKIE = 'for_after_admin_session';
+const ADMIN_PATH = /^\/api\/v1\/admin(-auth)?(\/|$)/;
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 /**
@@ -27,11 +31,42 @@ export async function establishSession(
 }
 
 /**
+ * Destroys this request's session and clears its cookie (`name` must be the
+ * cookie that session came from). Returns what the session held. Safe without
+ * a session.
+ */
+export async function endSession(
+  req: Request,
+  res: Response,
+  name: string,
+): Promise<Partial<SessionData>> {
+  const { userId, role, adminMfaVerifiedAt } = req.session;
+  const { path, domain, httpOnly, sameSite, secure } = req.session.cookie;
+  await new Promise<void>((resolve, reject) =>
+    req.session.destroy((err) => (err ? reject(err) : resolve())),
+  );
+  // Same path/domain/flags as when set, or the browser keeps the cookie.
+  res.clearCookie(name, {
+    path,
+    domain,
+    httpOnly,
+    sameSite,
+    secure: secure === true,
+  });
+  return { userId, role, adminMfaVerifiedAt };
+}
+
+/**
  * HTTP-level setup shared by main.ts and the auth integration test.
  * The session store is a required argument, so there is no path that falls
- * back to express-session's in-memory store.
+ * back to express-session's in-memory store. main.ts gives admins their own
+ * Redis prefix; tests may share one in-memory store (separate cookies).
  */
-export function configureApp(app: NestExpressApplication, store: Store): void {
+export function configureApp(
+  app: NestExpressApplication,
+  store: Store,
+  adminStore: Store = store,
+): void {
   const config = app.get(ConfigService);
   const isProd = config.get<string>('NODE_ENV') === 'production';
 
@@ -83,10 +118,10 @@ export function configureApp(app: NestExpressApplication, store: Store): void {
   // one proxy hop lets secure cookies be issued and gives the throttler the real client IP.
   if (isProd) app.set('trust proxy', 1);
 
-  app.use(
+  const sessionFor = (name: string, sessionStore: Store) =>
     session({
-      store,
-      name: SESSION_COOKIE,
+      store: sessionStore,
+      name,
       secret,
       resave: false,
       saveUninitialized: false,
@@ -99,6 +134,15 @@ export function configureApp(app: NestExpressApplication, store: Store): void {
         domain: config.get<string>('COOKIE_DOMAIN') || undefined,
         maxAge: ttlSeconds * 1000,
       },
-    }),
+    });
+  const customerSession = sessionFor(SESSION_COOKIE, store);
+  const adminSession = sessionFor(ADMIN_SESSION_COOKIE, adminStore);
+  // Exactly one session per request: /admin/* and /admin-auth/* see only the
+  // admin cookie, every other route only the Customer cookie. So neither
+  // principal's sign-in, logout or expiry can touch the other's session.
+  app.use((req: Request, res: Response, next: NextFunction) =>
+    ADMIN_PATH.test(req.path)
+      ? adminSession(req, res, next)
+      : customerSession(req, res, next),
   );
 }

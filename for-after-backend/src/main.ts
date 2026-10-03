@@ -9,12 +9,11 @@ async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     instrument: ObserveInstrument,
   });
+  const redis = app.get(RedisService).client;
   configureApp(
     app,
-    new RedisStore({
-      client: app.get(RedisService).client,
-      prefix: 'for_after:sess:',
-    }),
+    new RedisStore({ client: redis, prefix: 'for_after:sess:' }),
+    new RedisStore({ client: redis, prefix: 'for_after:admin_sess:' }),
   );
   // Runs onModuleDestroy (closes the Postgres pool and Redis) on SIGTERM/SIGINT.
   app.enableShutdownHooks();

@@ -362,10 +362,11 @@ describe('Death verification workflow (e2e)', () => {
       ).toBe(0);
     });
 
-    it('authorization: Customer 403, Trusted Contact 401, no session 401; validation 400; unknown 404', async () => {
-      await verify(ids.lisaCase, {}, agents.maya).expect(403);
+    it('authorization: Customer, Trusted Contact and no session all 401; validation 400; unknown 404', async () => {
+      // A Customer cookie is never read on admin routes (separate admin session).
+      await verify(ids.lisaCase, {}, agents.maya).expect(401);
       await verify(ids.lisaCase, {}, agents.david).expect(401);
-      await agents.maya.get(api('/admin/death-verifications')).expect(403);
+      await agents.maya.get(api('/admin/death-verifications')).expect(401);
       await http().get(api('/admin/death-verifications')).expect(401);
       await agents.admin
         .get(api('/admin/death-verifications/not-a-uuid'))
@@ -543,7 +544,7 @@ describe('Death verification workflow (e2e)', () => {
         .post(api('/death-verification/me/confirm-alive'))
         .send({ confirmAlive: true })
         .expect(401);
-      await agents.admin.get(api('/auth/me')).expect(200);
+      await agents.admin.get(api('/admin-auth/me')).expect(200);
     });
 
     it('a verified case accepts no decisions or reports (409)', async () => {
@@ -613,7 +614,8 @@ describe('Death verification workflow (e2e)', () => {
         safeguardEndsAt: null,
         canConfirmAlive: false,
       });
-      await agents.admin.get(api('/death-verification/me')).expect(403);
+      // The admin cookie is never read on Customer routes.
+      await agents.admin.get(api('/death-verification/me')).expect(401);
     });
   });
 

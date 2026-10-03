@@ -213,12 +213,12 @@ describe('Customer account settings (e2e)', () => {
       }
     });
 
-    it('an admin session → 403 (Customer-only routes)', async () => {
-      await admin.patch(api('/users/me')).send({ firstName: 'X' }).expect(403);
+    it('an admin session → 401 (its cookie is never read on Customer routes)', async () => {
+      await admin.patch(api('/users/me')).send({ firstName: 'X' }).expect(401);
       await admin
         .post(api('/auth/change-password'))
         .send({ currentPassword: password, newPassword })
-        .expect(403);
+        .expect(401);
       expect((await userRow(ADMIN)).firstName).toBe('Ada');
     });
 

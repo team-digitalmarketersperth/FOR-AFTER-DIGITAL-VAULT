@@ -84,12 +84,12 @@ const isMe = (key: readonly unknown[]) => key[0] === 'auth' && key[1] === 'me';
 const isAdminMe = (key: readonly unknown[]) => key[0] === 'admin' && key[1] === 'me';
 
 /**
- * Admins sign in with the Customer cookie (for_after_session), so an admin
- * sign-in, sign-out or expiry replaces that one session: Customer and admin
- * data both go. Recipient and Trusted Contact sessions are separate and stay.
+ * Admins have their own session cookie (for_after_admin_session), so an admin
+ * sign-in, sign-out or expiry only touches ['admin', …]. The Customer, Recipient
+ * and Trusted Contact sessions in the same browser are separate and stay.
  */
 export function dropAdminData(client: QueryClient) {
-  client.removeQueries({ predicate: ({ queryKey }) => !isPortal(queryKey[0]) && !isAdminMe(queryKey) });
+  client.removeQueries({ queryKey: ['admin'], predicate: ({ queryKey }) => !isAdminMe(queryKey) });
 }
 
 export async function resetAdminCache(client: QueryClient, me: unknown = null) {
@@ -104,10 +104,13 @@ export async function endAdminSession(client: QueryClient) {
   client.setQueryData(adminKeys.expired, true);
 }
 
-/** Drops every private query; auth/me is written in place so gates react. */
+/**
+ * The Customer changed (login, logout, expiry): drops every private query except
+ * the separate admin session's; auth/me is written in place so gates react.
+ */
 export async function resetPrivateCache(client: QueryClient, user: unknown) {
   await client.cancelQueries({ queryKey: queryKeys.me });
-  client.removeQueries({ predicate: ({ queryKey }) => !isMe(queryKey) });
+  client.removeQueries({ predicate: ({ queryKey }) => !isMe(queryKey) && queryKey[0] !== 'admin' });
   client.setQueryData(queryKeys.me, user);
 }
 

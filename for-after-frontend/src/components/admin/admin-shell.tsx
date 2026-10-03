@@ -55,7 +55,7 @@ export function AdminGate({ children }: { children: ReactNode }) {
   if (session.isPending || signedOut) return <PageLoader label="Checking your admin session" />;
   const me = session.data;
   if (!me) {
-    // 403 = a signed-in Customer: not "signed out", so no automatic logout.
+    // 403 = signed in but not an admin: not "signed out", so no automatic logout.
     if (session.error?.kind === 'forbidden') return <NotAnAdmin />;
     return (
       <ErrorState

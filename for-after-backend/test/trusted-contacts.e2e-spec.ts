@@ -167,15 +167,16 @@ describe('Trusted contacts (e2e, PostgreSQL)', () => {
     expect((await lisa.get(url).expect(200)).body.firstName).toBe('David');
   });
 
-  it('non-CUSTOMER roles are refused (403)', async () => {
+  it('admin sessions are refused (401: the admin cookie is never read here)', async () => {
     await prisma.user.update({
       where: { email: emails[2] },
       data: { role: 'ADMIN' },
     });
-    // Step 16: an admin session needs password + TOTP.
+    // Step 16: an admin session needs password + TOTP. Its own cookie is never
+    // read on Customer routes, so it gets 401 like any other non-Customer.
     const { agent: admin } = await adminSignIn(app, emails[2], password);
-    await admin.post(base).send(david).expect(403);
-    await admin.get(base).expect(403);
+    await admin.post(base).send(david).expect(401);
+    await admin.get(base).expect(401);
   });
 
   it('soft-deletes: row stays in the database but disappears from the API', async () => {

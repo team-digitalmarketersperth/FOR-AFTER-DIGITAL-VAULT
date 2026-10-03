@@ -291,7 +291,7 @@ describe('Message composition + schedule readiness (e2e)', () => {
     await lisa.post(schedule(id)).send(onDeath).expect(409); // TEXT + photo
   });
 
-  it('G — cross-user: John gets 404 everywhere; admins get 403', async () => {
+  it('G — cross-user: John gets 404 everywhere; admins get 401', async () => {
     const id = await createMessage({
       contentType: 'TEXT',
       textContent: 'Private text.',
@@ -314,9 +314,10 @@ describe('Message composition + schedule readiness (e2e)', () => {
       where: { email: emails[2] },
       data: { role: 'ADMIN' },
     });
-    // Step 16: an admin session needs password + TOTP.
+    // Step 16: an admin session needs password + TOTP. Its own cookie is never
+    // read on Customer routes, so it gets 401 like any other non-Customer.
     const { agent: admin } = await adminSignIn(app, emails[2], password);
-    await admin.post(schedule(id)).send(onDeath).expect(403);
-    await admin.get(media(id)).expect(403);
+    await admin.post(schedule(id)).send(onDeath).expect(401);
+    await admin.get(media(id)).expect(401);
   });
 });
