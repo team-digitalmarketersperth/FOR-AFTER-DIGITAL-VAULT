@@ -14,17 +14,26 @@ const RUN = Date.now();
 
 test.use({ storageState: 'e2e/.auth/b.json' });
 
-/** The next code logged for this (masked) email after `from` bytes. */
-async function codeFromLog(label: 'Recipient' | 'Trusted Contact', email: string, from: number) {
-  const masked = email.replace(/^(.)[^@]*@/, '$1***@');
-  const pattern = new RegExp(`\\[DEV ONLY\\] ${label} OTP for ${masked.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}: (\\d{6})`);
+const masked = (email: string) => email.replace(/^(.)[^@]*@/, '$1***@').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Step 24: with EMAIL_PROVIDER=console the API prints each email it would send
+ * ("[DEV ONLY] Email (<kind>) to s***@… | subject | plain text"). Waits for the
+ * next one of `kind` to this (masked) address after `from` bytes.
+ */
+async function emailFromLog(kind: string, email: string, from: number) {
+  const pattern = new RegExp(`\\[DEV ONLY\\] Email \\(${kind}\\) to ${masked(email)} \\| [^\\n]*`);
   for (let i = 0; i < 40; i++) {
-    const text = fs.readFileSync(LOG!, 'utf8').slice(from);
-    const match = text.match(pattern);
-    if (match) return match[1];
+    const match = fs.readFileSync(LOG!, 'utf8').slice(from).match(pattern);
+    if (match) return match[0];
     await new Promise((r) => setTimeout(r, 250));
   }
-  throw new Error(`No ${label} OTP for ${masked} in ${LOG}`);
+  throw new Error(`No ${kind} email for ${email.replace(/^(.)[^@]*@/, '$1***@')} in ${LOG}`);
+}
+
+async function codeFromLog(label: 'Recipient' | 'Trusted Contact', email: string, from: number) {
+  const kind = label === 'Recipient' ? 'recipient-otp' : 'trusted-contact-otp';
+  return (await emailFromLog(kind, email, from)).match(/Your sign-in code is (\d{6})/)![1];
 }
 
 // Optional: when the API on :4000 runs in a terminal you can't tee, start a second
@@ -128,12 +137,19 @@ test.describe('with the dev OTP log', () => {
     const released = await make('Released letter');
     const scheduled = await make('Scheduled letter');
     await make('Draft letter');
+    const logStart = fs.statSync(LOG!).size;
     const soon = new Date(Date.now() + 70_000).toISOString();
     expect((await page.request.post(`${API}/messages/${released.id}/schedule`, { data: { triggerType: 'FIXED_DATE', scheduledFor: soon } })).status()).toBe(201);
     expect((await page.request.post(`${API}/messages/${scheduled.id}/schedule`, { data: { triggerType: 'ON_DEATH' } })).status()).toBe(201);
     await expect
       .poll(async () => (await (await page.request.get(`${API}/messages/${released.id}`)).json()).status, { timeout: 4 * 60_000, intervals: [5_000] })
       .toBe('RELEASED');
+    // Step 24: the release queued one minimal "a message is waiting" email,
+    // with a sign-in link and nothing of the message itself.
+    const notice = await emailFromLog('message-released', email, logStart);
+    expect(notice).toContain('A message is waiting for you');
+    expect(notice).toContain('/recipient/sign-in');
+    expect(notice).not.toContain('Released letter');
 
     const rc = await browser.newContext({ storageState: { cookies: [], origins: [] } });
     const rcPage = await rc.newPage();
