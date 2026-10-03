@@ -1,11 +1,12 @@
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { NestExpressApplication } from '@nestjs/platform-express';
-import type { Request } from 'express';
+import type { NextFunction, Request, Response } from 'express';
 import session, { type SessionData, type Store } from 'express-session';
 import helmet from 'helmet';
 
 export const SESSION_COOKIE = 'for_after_session';
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 /**
  * A new session ID (prevents session fixation) holding only `data` and the
@@ -56,6 +57,20 @@ export function configureApp(app: NestExpressApplication, store: Store): void {
   app.setGlobalPrefix('api/v1', { exclude: ['health/*path'] });
   app.use(helmet());
   app.enableCors({ origin: origins, credentials: true });
+  // CSRF defence in depth. SameSite=Lax keeps the cookies off cross-site
+  // requests, but not off same-site ones (another subdomain, another localhost
+  // port), and a plain HTML form needs no CORS preflight. Browsers send Origin
+  // on every state-changing request, so refuse any outside the CORS allowlist.
+  // Requests without Origin (curl, Postman, server-to-server) are unaffected.
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const { origin } = req.headers;
+    if (SAFE_METHODS.has(req.method) || !origin || origins.includes(origin)) {
+      return next();
+    }
+    res
+      .status(403)
+      .json({ statusCode: 403, message: 'Request origin not allowed.' });
+  });
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

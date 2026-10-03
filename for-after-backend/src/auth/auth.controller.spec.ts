@@ -89,7 +89,12 @@ describe('Auth HTTP flow', () => {
         ConfigModule.forRoot({
           isGlobal: true,
           ignoreEnvFile: true,
-          load: [() => ({ SESSION_SECRET: 'x'.repeat(32) })],
+          load: [
+            () => ({
+              SESSION_SECRET: 'x'.repeat(32),
+              FRONTEND_URL: 'http://app.test',
+            }),
+          ],
         }),
         AuthModule,
       ],
@@ -291,6 +296,57 @@ describe('Auth HTTP flow', () => {
       await attempt().expect(429);
       // Throttled, not signed out.
       await agent.get('/api/v1/auth/me').expect(200);
+    });
+  });
+
+  describe('Step 23: Origin check on state-changing requests (CSRF)', () => {
+    beforeAll(async () => {
+      await app.close();
+      await boot();
+    });
+
+    const register = (origin?: string) => {
+      const req = request(app.getHttpServer()).post('/api/v1/auth/register');
+      return (origin ? req.set('Origin', origin) : req).send(lisa);
+    };
+
+    it('refuses a foreign or null Origin before anything runs', async () => {
+      for (const origin of ['http://evil.example', 'null']) {
+        const res = await register(origin).expect(403);
+        expect(res.body).toEqual({
+          statusCode: 403,
+          message: 'Request origin not allowed.',
+        });
+      }
+      // Nothing was created: the allowed request below is the first.
+      expect(await users.findByEmail('lisa@example.com')).toBeNull();
+    });
+
+    it('also refuses a form-encoded cross-origin POST (no preflight needed)', () =>
+      request(app.getHttpServer())
+        .post('/api/v1/auth/logout')
+        .set('Origin', 'http://evil.example')
+        .type('form')
+        .send('a=1')
+        .expect(403));
+
+    it('allows the configured app origin, and requests without Origin', async () => {
+      await register('http://app.test').expect(201);
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/logout')
+        .expect(200);
+    });
+
+    it('never blocks safe methods (GET, preflight)', async () => {
+      await request(app.getHttpServer())
+        .get('/api/v1/auth/me')
+        .set('Origin', 'http://evil.example')
+        .expect(401);
+      const preflight = await request(app.getHttpServer())
+        .options('/api/v1/auth/login')
+        .set('Origin', 'http://evil.example')
+        .set('Access-Control-Request-Method', 'POST');
+      expect(preflight.headers['access-control-allow-origin']).toBeUndefined();
     });
   });
 });
