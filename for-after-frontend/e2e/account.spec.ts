@@ -2,8 +2,8 @@ import { expect, test } from '@playwright/test';
 import { API, newAccount, registerViaApi, signIn } from './helpers';
 
 // Step 22 (FE-9) against the real API: profile update and password change.
-// One fictional account. Uses 1 register + 4 logins of the 5/min limit, so run
-// it on its own or wait a minute after other specs.
+// One fictional account. Uses 1 register + 4 logins of the 5/min limit: the
+// `account` project runs it after the vault suite (or alone with --no-deps).
 test('account settings: name persists everywhere; password change keeps this session and ends others', async ({
   page,
   browser,

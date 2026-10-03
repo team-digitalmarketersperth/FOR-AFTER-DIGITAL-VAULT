@@ -27,7 +27,18 @@ async function codeFromLog(label: 'Recipient' | 'Trusted Contact', email: string
   throw new Error(`No ${label} OTP for ${masked} in ${LOG}`);
 }
 
+// Optional: when the API on :4000 runs in a terminal you can't tee, start a second
+// instance on the same database and Redis with its output in E2E_BACKEND_LOG and
+// set E2E_OTP_API to its origin (e.g. http://localhost:4001). Only the code request
+// goes there; challenges and sessions live in the shared Redis.
+const OTP_API = process.env.E2E_OTP_API;
+
 async function signInWithCode(page: Page, portal: 'recipient' | 'trusted-contact', email: string) {
+  if (OTP_API) {
+    await page.route('**/*-auth/request-otp', (route) =>
+      route.continue({ url: route.request().url().replace(new URL(API).origin, OTP_API) }),
+    );
+  }
   const from = fs.statSync(LOG!).size;
   await page.goto(`/${portal}/sign-in`);
   await page.getByLabel('Email').fill(email);

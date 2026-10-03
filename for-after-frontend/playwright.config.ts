@@ -22,7 +22,7 @@ export default defineConfig({
   projects: [
     {
       name: 'development',
-      testIgnore: /production\.spec|vault\.|portals\.|admin\./,
+      testIgnore: /production\.spec|vault\.|portals\.|admin\.|account\./,
       use: { ...devices['Desktop Chrome'], baseURL: 'http://localhost:3000' },
     },
     {
@@ -43,6 +43,16 @@ export default defineConfig({
         permissions: ['microphone'],
         launchOptions: { args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] },
       },
+    },
+    {
+      // Account settings (Step 22) registers its own Customer and spends 4 logins, so it
+      // runs after the vault suite has left the 5/min login window (alone: --no-deps).
+      // Same production build on :3000 as the vault suites: next dev's first compile of
+      // /settings can exceed the 20 s expect timeout.
+      name: 'account',
+      testMatch: /account\.spec\.ts/,
+      dependencies: ['vault'],
+      use: { ...devices['Desktop Chrome'], baseURL: 'http://localhost:3000' },
     },
     {
       name: 'production-build',
