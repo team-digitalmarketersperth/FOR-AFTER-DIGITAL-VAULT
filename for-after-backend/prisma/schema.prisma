@@ -38,6 +38,8 @@ model User {
   passedAt          DateTime?
   // Step 22: sessions signed in before this are refused (SessionAuthGuard).
   passwordChangedAt DateTime?
+  // Phase 08: the same for a confirmed email change (sign in again).
+  emailChangedAt    DateTime?
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -59,6 +61,36 @@ model User {
   // ADMIN / SUPER_ADMIN only (Step 16).
   adminMfaCredential    AdminMfaCredential?
   adminMfaRecoveryCodes AdminMfaRecoveryCode[]
+
+  authTokens AuthToken[]
+
+  recipientPhotos RecipientPhoto[]
+}
+
+enum AuthTokenPurpose {
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
+  EMAIL_CHANGE
+}
+
+// Phase 04. Single-use emailed links (verify email, reset password). Only the
+// SHA-256 of the 32-byte random token is stored; the raw token exists only in
+// the email. Consumed (or superseded by a newer one) by setting consumedAt.
+// Rows are kept: the last hour's rows are the per-account send cap.
+model AuthToken {
+  id         String           @id @default(uuid()) @db.Uuid
+  userId     String           @db.Uuid
+  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  purpose    AuthTokenPurpose
+  tokenHash  String           @unique
+  // EMAIL_CHANGE only: the requested address, normalized. User.email changes
+  // only when this token is confirmed.
+  newEmail   String?
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime         @default(now())
+
+  @@index([userId, purpose, createdAt])
 }
 
 // Admin TOTP (Step 16). Written by setup with enabledAt null; confirm sets
@@ -108,6 +140,12 @@ enum AuditEventType {
   FAILED_JOB_RETRIED
   // Customer events (Step 22).
   PASSWORD_CHANGED
+  // Phase 04: email verification and password reset.
+  EMAIL_VERIFIED
+  PASSWORD_RESET_COMPLETED
+  // Phase 08: change email. No addresses in metadata (personal data).
+  EMAIL_CHANGE_REQUESTED
+  EMAIL_CHANGED
 }
 
 // Admin actors (Step 16) and the Customer acting on their own account (Step 22).
@@ -164,6 +202,9 @@ model Recipient {
 
   messageRecipients MessageRecipient[]
   accessGrants      RecipientMessageAccessGrant[]
+  // Phase 09: at most one READY, non-deleted photo (partial unique index in
+  // the migration). Customer-managed; the Recipient never sees it.
+  photos            RecipientPhoto[]
 
   @@index([ownerUserId])
 }
@@ -661,4 +702,33 @@ model MyWishResponse {
   deletedAt DateTime?
 
   @@unique([ownerUserId, promptKey])
+}
+
+// Phase 09: a Customer's private profile photo for one Recipient. Same storage,
+// lifecycle and verification as other media (docs/media-storage.md); PHOTO
+// only. A new upload becomes the photo only once READY, superseding the old
+// one (soft delete + best-effort object removal). storageKey never leaves the API.
+model RecipientPhoto {
+  id          String    @id @default(uuid()) @db.Uuid
+  ownerUserId String    @db.Uuid
+  owner       User      @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  recipientId String    @db.Uuid
+  recipient   Recipient @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+
+  kind       MediaKind        @default(PHOTO)
+  status     MediaAssetStatus @default(PENDING_UPLOAD)
+  storageKey String           @unique
+
+  originalFileName String // metadata only, never used as a path
+  mimeType         String
+  sizeBytes        Int // expected size, verified against storage on complete
+
+  uploadedAt DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([ownerUserId])
+  @@index([recipientId, status])
 }
