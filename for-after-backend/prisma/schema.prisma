@@ -56,7 +56,9 @@ model User {
   myStoryResponses MyStoryResponse[]
   myWishResponses  MyWishResponse[]
 
-  deathVerificationCase DeathVerificationCase?
+  // Phase 10: history. At most one open (or VERIFIED) case per Customer,
+  // enforced by a partial unique index in the migration.
+  deathVerificationCases DeathVerificationCase[]
 
   // ADMIN / SUPER_ADMIN only (Step 16).
   adminMfaCredential    AdminMfaCredential?
@@ -146,13 +148,20 @@ enum AuditEventType {
   // Phase 08: change email. No addresses in metadata (personal data).
   EMAIL_CHANGE_REQUESTED
   EMAIL_CHANGED
+  // Phase 10: Trusted Contact invitations. No addresses or tokens in metadata.
+  TRUSTED_CONTACT_INVITATION_SENT
+  TRUSTED_CONTACT_INVITATION_ACCEPTED
+  TRUSTED_CONTACT_INVITATION_DECLINED
 }
 
-// Admin actors (Step 16) and the Customer acting on their own account (Step 22).
+// Admin actors (Step 16), the Customer acting on their own account (Step 22)
+// and an invited Trusted Contact answering an invitation (Phase 10; actorUserId
+// null, subjectId = the TrustedContact id).
 enum AuditActorType {
   ADMIN
   SUPER_ADMIN
   CUSTOMER
+  TRUSTED_CONTACT
 }
 
 // Generic append-only audit trail (Step 16). The migration adds a trigger that
@@ -229,10 +238,45 @@ model TrustedContact {
   deletedAt DateTime?
 
   deathReports DeathReport[]
+  invitations  TrustedContactInvitation[]
 
   @@index([ownerUserId])
   // Trusted Contact OTP eligibility and account lookup by signed-in email.
   @@index([email])
+}
+
+// Stored states only. EXPIRED is not stored: a PENDING row past expiresAt.
+enum TrustedContactInvitationStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  // Superseded by a newer invitation, or the Trusted Contact was removed.
+  CANCELLED
+}
+
+// Phase 10: an emailed invitation to be a Trusted Contact (email only; SMS is
+// deferred). Only the SHA-256 of the 32-byte token is stored. Accepting only
+// records consent: it creates no session and grants no access (sign-in stays
+// email OTP). emailNormalized is the address it was sent to; it only works
+// while the Trusted Contact still has that email. The migration adds a partial
+// unique index: at most one PENDING invitation per Trusted Contact.
+model TrustedContactInvitation {
+  id               String         @id @default(uuid()) @db.Uuid
+  trustedContactId String         @db.Uuid
+  trustedContact   TrustedContact @relation(fields: [trustedContactId], references: [id], onDelete: Cascade)
+
+  emailNormalized String
+  tokenHash       String                         @unique
+  status          TrustedContactInvitationStatus @default(PENDING)
+  expiresAt       DateTime
+  acceptedAt      DateTime?
+  declinedAt      DateTime?
+  cancelledAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([trustedContactId, createdAt])
 }
 
 // PENDING_VERIFICATION → SAFEGUARD_ACTIVE → READY_FOR_REVIEW → VERIFIED (Step 15).
@@ -247,13 +291,19 @@ enum DeathVerificationCaseStatus {
   CANCELLED
 }
 
-// One canonical case per Customer. A report is NOT proof of death. Only an
+// One verification cycle. A Customer may have many over time (Phase 10): a
+// report after a CANCELLED/REJECTED case opens a NEW case and the old one stays
+// as immutable history. A partial unique index in the migration allows at most
+// one case per Customer in an open status or VERIFIED, so there is never a
+// second open case and never a new case after a verified death. A report is NOT proof of death. Only an
 // explicit admin verification (VERIFIED) activates death-triggered Messages;
 // nothing else changes the User, Messages, schedules, releases or grants.
 model DeathVerificationCase {
   id          String @id @default(uuid()) @db.Uuid
-  ownerUserId String @unique @db.Uuid
+  ownerUserId String @db.Uuid
   owner       User   @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  // The closed (CANCELLED/REJECTED) case this one follows, as plain history.
+  reopenedFromCaseId String? @db.Uuid
 
   status     DeathVerificationCaseStatus @default(PENDING_VERIFICATION)
   openedAt   DateTime                    @default(now())
@@ -292,11 +342,15 @@ model DeathVerificationCase {
   auditEvents DeathVerificationAuditEvent[]
   activations DeathTriggeredMessageActivation[]
 
+  @@index([ownerUserId, openedAt])
   @@index([status])
 }
 
 enum DeathVerificationAuditEventType {
   REPORT_RECEIVED
+  // Phase 10: this case was opened by a report after a closed (CANCELLED or
+  // REJECTED) case; the case's reopenedFromCaseId names that case.
+  CASE_REOPENED
   SAFETY_NOTICE_SENT
   SAFEGUARD_STARTED
   SAFEGUARD_ELAPSED

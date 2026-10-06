@@ -14,6 +14,7 @@ import { DeathVerificationModule } from '../src/death-verification/death-verific
 import { EmailProvider } from '../src/email/email-provider.js';
 import { MediaModule } from '../src/media/media.module.js';
 import { MediaStorage } from '../src/media/storage/media-storage.service.js';
+import { MessageReleaseReconciler } from '../src/message-release/message-release-reconciler.service.js';
 import { MessageReleaseService } from '../src/message-release/message-release.service.js';
 import { MessageSchedulesModule } from '../src/message-schedules/message-schedules.module.js';
 import { MessagesModule } from '../src/messages/messages.module.js';
@@ -43,6 +44,7 @@ describe('Email delivery (e2e, fake provider)', () => {
     lisa: at('em.lisa'),
     maya: at('em.maya'),
     noah: at('em.noah'),
+    ivy: at('em.ivy'),
     admin: at('em.admin'),
   };
   const SOFIA = at('em.sofia');
@@ -176,7 +178,7 @@ describe('Email delivery (e2e, fake provider)', () => {
       where: { email: users.admin },
       data: { role: 'ADMIN' },
     });
-    for (const key of ['lisa', 'maya', 'noah'] as const)
+    for (const key of ['lisa', 'maya', 'noah', 'ivy'] as const)
       agents[key] = await signIn(users[key]);
     agents.admin = (await adminSignIn(app, users.admin, password)).agent;
   });
@@ -396,7 +398,12 @@ describe('Email delivery (e2e, fake provider)', () => {
         .send({ firstName: 'David', email: DAVID })
         .expect(201);
       agents.david = await otpSignIn('trusted-contact-auth', DAVID);
-      expect(inbox.to(DAVID)).toEqual([
+      // Phase 10: adding the contact also emailed the invitation.
+      expect(inbox.to(DAVID).map((m) => m.kind)).toEqual([
+        'trusted-contact-invitation',
+        'trusted-contact-otp',
+      ]);
+      expect(inbox.to(DAVID, 'trusted-contact-otp')).toEqual([
         expect.objectContaining({
           kind: 'trusted-contact-otp',
           subject: 'Your For After sign-in code',
@@ -476,7 +483,7 @@ describe('Email delivery (e2e, fake provider)', () => {
             })
           ).safetyNoticeAttemptCount === 1,
       );
-      expect(inbox.to(users.noah)).toHaveLength(0);
+      expect(inbox.to(users.noah, 'death-safety')).toHaveLength(0);
 
       await agents.noah
         .post(api('/death-verification/me/confirm-alive'))
@@ -487,7 +494,7 @@ describe('Email delivery (e2e, fake provider)', () => {
         .get(DeathVerificationWorkflow)
         .startSafeguard(kase.id, new Date(Date.now() + 3_600_000));
       expect(outcome).toEqual({ result: 'skipped' });
-      expect(inbox.to(users.noah)).toHaveLength(0);
+      expect(inbox.to(users.noah, 'death-safety')).toHaveLength(0);
       expect(
         (
           await prisma.deathVerificationCase.findUniqueOrThrow({
@@ -496,5 +503,301 @@ describe('Email delivery (e2e, fake provider)', () => {
         ).status,
       ).toBe('CANCELLED');
     });
+  });
+  // Step 24.1: every assigned Recipient is told once, and only after release.
+  describe('recipient release notifications (Step 24.1)', () => {
+    const AVA = at('em.ava');
+    const BEN = at('em.ben');
+    const CAL = at('em.cal');
+    const KIT = at('em.kit');
+    const JUNO = at('em.juno');
+    const NOTE = 'Fictional private note about Ava';
+    const released = (email: string) => inbox.to(email, 'message-released');
+    const newRecipient = async (agent: Agent, body: object) =>
+      (await agent.post(api('/recipients')).send(body).expect(201)).body
+        .id as string;
+    const notificationRows = (messageId: string) =>
+      prisma.releaseNotification.findMany({
+        where: { grant: { messageId } },
+        include: { grant: true },
+      });
+    let ava: string, ben: string, cal: string, dot: string;
+    let multiId: string;
+
+    it('DRAFT, SCHEDULED and unscheduled messages send nothing', async () => {
+      ava = await newRecipient(agents.lisa, {
+        firstName: 'Ava',
+        lastName: 'Fictional-Surname',
+        email: AVA,
+        privateNote: NOTE,
+      });
+      const draft = (
+        await agents.lisa
+          .post(api('/messages'))
+          .send({
+            title: 'Draft only',
+            textContent: PRIVATE_TEXT,
+            recipientIds: [ava],
+          })
+          .expect(201)
+      ).body.id as string;
+      const later = await scheduleSoon(agents.lisa, [ava], 'Scheduled later');
+      await agents.lisa
+        .patch(api(`/messages/${later}/schedule`))
+        .send({
+          triggerType: 'FIXED_DATE',
+          scheduledFor: new Date(Date.now() + 30 * 86_400_000).toISOString(),
+        })
+        .expect(200);
+      // Scheduled to release in 1.5 s, then unscheduled before it can.
+      const unscheduled = await scheduleSoon(agents.lisa, [ava], 'Unscheduled');
+      await agents.lisa
+        .delete(api(`/messages/${unscheduled}/schedule`))
+        .expect(204);
+      await sleep(2500);
+      const statuses = await prisma.message.findMany({
+        where: { id: { in: [draft, later, unscheduled] } },
+        select: { status: true },
+      });
+      expect(statuses.map((m) => m.status).sort()).toEqual([
+        'DRAFT',
+        'DRAFT',
+        'SCHEDULED',
+      ]);
+      expect(
+        await prisma.releaseNotification.count({
+          where: { grant: { messageId: { in: [draft, later, unscheduled] } } },
+        }),
+      ).toBe(0);
+      expect(inbox.to(AVA)).toHaveLength(0);
+    });
+
+    it('three Recipients with email get one email each; one without email blocks nothing; one outage stays isolated', async () => {
+      ben = await newRecipient(agents.lisa, { firstName: 'Ben', email: BEN });
+      cal = await newRecipient(agents.lisa, { firstName: 'Cal', email: CAL });
+      dot = await newRecipient(agents.lisa, {
+        firstName: 'Dot',
+        mobile: '+61400000001',
+      });
+      // Ben's first attempt fails transiently; Ava's and Cal's must not wait on it.
+      inbox.failNextFor(BEN, 1);
+      multiId = await scheduleSoon(
+        agents.lisa,
+        [ava, ben, cal, dot],
+        'To four',
+      );
+      await until(async () => {
+        const rows = await notificationRows(multiId);
+        return rows.length === 3 && rows.every((n) => n.status === 'SENT');
+      });
+      const msg = await prisma.message.findUniqueOrThrow({
+        where: { id: multiId },
+        include: {
+          release: true,
+          accessGrants: { include: { notification: true } },
+        },
+      });
+      expect(msg.status).toBe('RELEASED');
+      expect(msg.release).not.toBeNull();
+      expect(msg.accessGrants).toHaveLength(4);
+      const byRecipient = Object.fromEntries(
+        msg.accessGrants.map((g) => [g.recipientId, g.notification]),
+      );
+      expect(byRecipient[dot]).toBeNull(); // no address: no row, no attempt
+      expect(byRecipient[ava]).toMatchObject({
+        status: 'SENT',
+        attemptCount: 1,
+      });
+      expect(byRecipient[cal]).toMatchObject({
+        status: 'SENT',
+        attemptCount: 1,
+      });
+      // Retried with BullMQ backoff, then sent once.
+      expect(byRecipient[ben]).toMatchObject({
+        status: 'SENT',
+        attemptCount: 2,
+        lastErrorCode: null,
+      });
+      for (const [email, name, id] of [
+        [AVA, 'Ava', ava],
+        [BEN, 'Ben', ben],
+        [CAL, 'Cal', cal],
+      ]) {
+        const mails = released(email);
+        expect(mails).toHaveLength(1);
+        expect(mails[0].text).toContain(`Hi ${name},`);
+        expect(mails[0].idempotencyKey).toBe(
+          `release-notification/${byRecipient[id]!.id}`,
+        );
+      }
+    });
+
+    it('privacy: no content, title, note, surname, sender, media or token in the email', () => {
+      const [email] = released(AVA);
+      for (const part of [email.subject, email.html, email.text]) {
+        expect(part).not.toContain('To four');
+        expect(part).not.toContain(PRIVATE_TEXT);
+        expect(part).not.toContain(NOTE);
+        expect(part).not.toContain('Fictional-Surname');
+        expect(part).not.toMatch(
+          /lisa|X-Amz|signature=|storageKey|token|code=/i,
+        );
+      }
+      // The only link is the plain sign-in page.
+      expect(email.html.match(/href="[^"]*"/g)).toEqual([
+        `href="${APP}/recipient/sign-in"`,
+      ]);
+    });
+
+    it('re-running release, both reconcilers and the enqueue sends nothing new', async () => {
+      expect(await app.get(MessageReleaseService).release(multiId)).toEqual({
+        result: 'already_released',
+      });
+      await app.get(MessageReleaseReconciler).reconcile();
+      const notifications = app.get(ReleaseNotificationQueue);
+      await notifications.enqueueForMessage(multiId);
+      expect(
+        await notifications.enqueueStale(new Date(Date.now() + 5 * 60_000)),
+      ).toBe(0);
+      await sleep(800);
+      expect(
+        await prisma.messageRelease.count({ where: { messageId: multiId } }),
+      ).toBe(1);
+      expect(
+        await prisma.recipientMessageAccessGrant.count({
+          where: { messageId: multiId },
+        }),
+      ).toBe(4);
+      expect(await notificationRows(multiId)).toHaveLength(3);
+      for (const email of [AVA, BEN, CAL])
+        expect(released(email)).toHaveLength(1);
+    });
+
+    it('a second message to the same Recipient is its own notification', async () => {
+      const second = await scheduleSoon(agents.lisa, [ava], 'Second to Ava');
+      await until(
+        async () => (await notificationRows(second))[0]?.status === 'SENT',
+      );
+      expect(released(AVA)).toHaveLength(2);
+      expect(released(BEN)).toHaveLength(1);
+    });
+
+    it('the email is not a sign-in: the Recipient still needs an OTP, then sees only their own messages', async () => {
+      // Following the email link without a session opens nothing.
+      await http().get(api('/recipient/messages')).expect(401);
+      const onlyCal = await scheduleSoon(agents.lisa, [cal], 'Only for Cal');
+      await until(
+        async () => (await notificationRows(onlyCal))[0]?.status === 'SENT',
+      );
+      const reader = await otpSignIn('recipient-auth', BEN);
+      const list = JSON.stringify(
+        (await reader.get(api('/recipient/messages')).expect(200)).body,
+      );
+      expect(list).toContain(multiId);
+      expect(list).not.toContain(onlyCal);
+      await reader.get(api(`/recipient/messages/${onlyCal}`)).expect(404);
+      await reader.get(api(`/recipient/messages/${multiId}`)).expect(200);
+    });
+
+    it('death triggers: nothing at report or safeguard; ON_DEATH at verification; AFTER_DEATH only when it releases', async () => {
+      await agents.ivy
+        .post(api('/trusted-contacts'))
+        .send({ firstName: 'Juno', email: JUNO })
+        .expect(201);
+      const kit = await newRecipient(agents.ivy, {
+        firstName: 'Kit',
+        email: KIT,
+      });
+      const create = async (title: string, schedule: object) => {
+        const id = (
+          await agents.ivy
+            .post(api('/messages'))
+            .send({ title, textContent: PRIVATE_TEXT, recipientIds: [kit] })
+            .expect(201)
+        ).body.id as string;
+        await agents.ivy
+          .post(api(`/messages/${id}/schedule`))
+          .send(schedule)
+          .expect(201);
+        return id;
+      };
+      const onDeath = await create('Ivy on death', {
+        triggerType: 'ON_DEATH',
+      });
+      const afterDeath = await create('Ivy after death', {
+        triggerType: 'AFTER_DEATH',
+        afterDeathDays: 1,
+      });
+
+      const juno = await otpSignIn('trusted-contact-auth', JUNO);
+      const [account] = (
+        await juno.get(api('/trusted-contact/accounts')).expect(200)
+      ).body;
+      await juno
+        .post(
+          api(
+            `/trusted-contact/accounts/${account.trustedContactId}/death-reports`,
+          ),
+        )
+        .send({ confirmReport: true })
+        .expect(201);
+      await until(() => inbox.to(users.ivy, 'death-safety').length === 1);
+      const kase = await prisma.deathVerificationCase.findFirstOrThrow({
+        where: { owner: { email: users.ivy } },
+      });
+      expect(kase.status).toBe('SAFEGUARD_ACTIVE');
+      await sleep(300);
+      expect(released(KIT)).toHaveLength(0);
+      // The safeguard is an hour in this suite (other tests confirm alive
+      // during it): end it now (test-only fixture), then elapse it for real.
+      await prisma.deathVerificationCase.update({
+        where: { id: kase.id },
+        data: { safeguardEndsAt: new Date(Date.now() - 1000) },
+      });
+      expect(
+        await app.get(DeathVerificationWorkflow).elapseSafeguard(kase.id),
+      ).toEqual({ result: 'ready_for_review' });
+      await sleep(300);
+      expect(released(KIT)).toHaveLength(0);
+
+      // Death one day ago minus 8 s: AFTER_DEATH (1 day) falls due 8 s later.
+      await agents.admin
+        .post(api(`/admin/death-verifications/${kase.id}/verify`))
+        .send({
+          verifiedDeathAt: new Date(
+            Date.now() - 86_400_000 + 8000,
+          ).toISOString(),
+          confirmVerification: true,
+          decisionNote: 'Fictional Step 24.1 verification test.',
+        })
+        .expect(200);
+      await until(
+        async () => (await notificationRows(onDeath))[0]?.status === 'SENT',
+      );
+      expect(released(KIT)).toHaveLength(1);
+      const pending = await prisma.message.findUniqueOrThrow({
+        where: { id: afterDeath },
+        include: { deathActivation: true },
+      });
+      expect(pending.status).toBe('SCHEDULED');
+      expect(await notificationRows(afterDeath)).toHaveLength(0);
+
+      await until(
+        async () => (await notificationRows(afterDeath))[0]?.status === 'SENT',
+        25_000,
+      );
+      const [row] = await notificationRows(afterDeath);
+      expect(row.sentAt!.getTime()).toBeGreaterThanOrEqual(
+        pending.deathActivation!.dueAt.getTime(),
+      );
+      expect(released(KIT)).toHaveLength(2);
+      expect(released(KIT)[1].text).toContain('Hi Kit,');
+      const reader = await otpSignIn('recipient-auth', KIT);
+      const list = JSON.stringify(
+        (await reader.get(api('/recipient/messages')).expect(200)).body,
+      );
+      expect(list).toContain(onDeath);
+      expect(list).toContain(afterDeath);
+    }, 45_000);
   });
 });

@@ -8,6 +8,7 @@ import {
   Res,
   UseGuards,
 } from '@nestjs/common';
+import { ApiCookieAuth, ApiTags } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { AdminGuard } from '../auth/guards/admin.guard.js';
@@ -24,6 +25,7 @@ import {
   AdminRecoveryCodeDto,
   AdminTotpCodeDto,
 } from './dto/admin-mfa.dto.js';
+import { AUTH } from '../config/swagger.js';
 
 const context = (req: Request) => ({
   ip: req.ip,
@@ -49,6 +51,7 @@ const adminMe = (user: SafeUser, req: Request) => ({
  * get one, so they always get 401. Only a successful confirm/verify creates the
  * admin session (for_after_admin_session, never the Customer cookie).
  */
+@ApiTags('Admin auth')
 @Controller('admin-auth')
 export class AdminAuthController {
   constructor(private readonly mfa: AdminMfaService) {}
@@ -96,6 +99,7 @@ export class AdminAuthController {
     return { ...adminMe(user, req), remainingRecoveryCodes };
   }
 
+  @ApiCookieAuth(AUTH.admin)
   @Get('me')
   @UseGuards(SessionAuthGuard, AdminGuard)
   me(@CurrentUser() user: SafeUser, @Req() req: Request) {
@@ -104,6 +108,7 @@ export class AdminAuthController {
 
   // Admin session only; a Customer session in the same browser stays. Safe
   // without a session (the audit row is written only for a real one).
+  @ApiCookieAuth(AUTH.admin)
   @Post('logout')
   @HttpCode(200)
   async logout(

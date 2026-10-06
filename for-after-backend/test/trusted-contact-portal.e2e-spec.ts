@@ -195,13 +195,14 @@ describe('Trusted Contact auth + death report intake (e2e)', () => {
       email: DAVID.toUpperCase(),
       mobile: '+61 400 000 111',
     });
+    // Removed before Sarah is added: at most two active contacts (Phase 10).
+    ids.ghost = await addContact(lisa, { firstName: 'Ghost', email: GHOST });
+    await lisa.delete(api(`/trusted-contacts/${ids.ghost}`)).expect(204);
     ids.sarah = await addContact(lisa, {
       firstName: 'Sarah',
       relationship: 'Sister',
       email: SARAH,
     });
-    ids.ghost = await addContact(lisa, { firstName: 'Ghost', email: GHOST });
-    await lisa.delete(api(`/trusted-contacts/${ids.ghost}`)).expect(204);
     // David is also John's Trusted Contact; John has no content.
     ids.davidForJohn = await addContact(john, {
       firstName: 'David',
@@ -360,9 +361,26 @@ describe('Trusted Contact auth + death report intake (e2e)', () => {
         '/my-wishes/prompts',
         '/recipient/messages',
         '/recipient-auth/me',
+        // Phase 10 permission model: no content, Recipient, settings or
+        // Customer case routes with a Trusted Contact session either.
+        `/messages/${ids.draft}`,
+        `/messages/${ids.draft}/media`,
+        `/recipients/${ids.recipient}`,
+        `/trusted-contacts/${ids.david}`,
+        '/death-verification/me',
       ]) {
-        await david.get(api(path)).expect(401);
+        const res = await david.get(api(path));
+        expect([path, res.status]).toEqual([path, 401]);
       }
+      // Nor can it act for the Customer (settings, confirm alive, contacts).
+      await david.patch(api('/users/me')).send({ firstName: 'X' }).expect(401);
+      await david
+        .post(api('/death-verification/me/confirm-alive'))
+        .send({})
+        .expect(401);
+      await david
+        .post(api(`/trusted-contacts/${ids.david}/invitation`))
+        .expect(401);
     });
   });
 
@@ -512,6 +530,7 @@ describe('Trusted Contact auth + death report intake (e2e)', () => {
         status: 'PENDING_VERIFICATION',
         reportedByYou: true,
         openedAt: expect.any(String),
+        canReport: false,
       });
       const list = await david
         .get(api('/trusted-contact/accounts'))
@@ -542,7 +561,11 @@ describe('Trusted Contact auth + death report intake (e2e)', () => {
             )
             .expect(200)
         ).body,
-      ).toMatchObject({ status: 'PENDING_VERIFICATION', reportedByYou: false });
+      ).toMatchObject({
+        status: 'PENDING_VERIFICATION',
+        reportedByYou: false,
+        canReport: true,
+      });
       const res = await report(sarah, ids.sarah, {
         reportedDateOfDeath: undefined,
         note: undefined,
@@ -564,6 +587,7 @@ describe('Trusted Contact auth + death report intake (e2e)', () => {
         .get(api(`/trusted-contact/accounts/${ids.sarah}/death-verification`))
         .expect(200);
       expect(Object.keys(status.body).sort()).toEqual([
+        'canReport',
         'openedAt',
         'reportedByYou',
         'status',

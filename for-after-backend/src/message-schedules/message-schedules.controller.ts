@@ -10,6 +10,7 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
+import { ApiCookieAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { CustomerGuard } from '../auth/guards/customer.guard.js';
 import { SessionAuthGuard } from '../auth/guards/session-auth.guard.js';
@@ -20,8 +21,11 @@ import {
   MessageSchedulesService,
   type ScheduleResponse,
 } from './message-schedules.service.js';
+import { AUTH } from '../config/swagger.js';
 
 // One schedule per message. Ownership is enforced through the Message in the service.
+@ApiTags('Scheduling')
+@ApiCookieAuth(AUTH.customer)
 @Controller('messages/:messageId/schedule')
 @UseGuards(SessionAuthGuard, CustomerGuard)
 export class MessageSchedulesController {

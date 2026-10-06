@@ -14,6 +14,7 @@ const row = {
   privateNote: 'Fictional note.',
   createdAt: new Date(),
   updatedAt: new Date(),
+  photos: [] as { id: string }[],
 };
 
 const notFound = () =>
@@ -28,10 +29,16 @@ const setup = () => {
     findMany: vi.fn().mockResolvedValue([row]),
     findFirst: vi.fn().mockResolvedValue(row),
     update: vi.fn().mockResolvedValue(row),
+    count: vi.fn().mockResolvedValue(1),
   };
+  // The list reads count + page in one array transaction.
+  const $transaction = (ops: Promise<unknown>[]) => Promise.all(ops);
   return {
     recipient,
-    service: new RecipientsService({ recipient } as unknown as PrismaService),
+    service: new RecipientsService({
+      recipient,
+      $transaction,
+    } as unknown as PrismaService),
   };
 };
 
@@ -58,15 +65,37 @@ describe('RecipientsService', () => {
     expect(res.birthday).toBe('2001-03-15');
   });
 
-  it('lists only the owner’s non-deleted recipients, newest first', async () => {
+  it('lists one page of the owner’s live recipients, newest first with an id tiebreak', async () => {
     const { recipient, service } = setup();
-    await service.findAllForOwner('owner-a');
+    recipient.count.mockResolvedValue(37);
+    const res = await service.findAllForOwner('owner-a', 2, 25);
+    const where = { ownerUserId: 'owner-a', deletedAt: null };
     expect(recipient.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { ownerUserId: 'owner-a', deletedAt: null },
-        orderBy: { createdAt: 'desc' },
+        where,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: 25,
+        take: 25,
       }),
     );
+    // The total uses the same owner filter: no other Customer is ever counted.
+    expect(recipient.count).toHaveBeenCalledWith({ where });
+    expect(res.pagination).toEqual({ page: 2, limit: 25, total: 37, pages: 2 });
+    expect(res.items[0]).toMatchObject({ id: 'r1', photoId: null });
+    expect(res.items[0]).not.toHaveProperty('photos');
+  });
+
+  it('exposes the current photo id only, never a storage key or URL', async () => {
+    const { recipient, service } = setup();
+    recipient.findFirst.mockResolvedValue({ ...row, photos: [{ id: 'p1' }] });
+    const res = await service.findOwnedById('owner-a', 'r1');
+    expect(res.photoId).toBe('p1');
+    const { select } = recipient.findFirst.mock.calls[0][0];
+    expect(select.photos).toEqual({
+      where: { status: 'READY', deletedAt: null },
+      select: { id: true },
+      take: 1,
+    });
   });
 
   it('findOwnedById scopes the query by owner and hides deleted rows', async () => {

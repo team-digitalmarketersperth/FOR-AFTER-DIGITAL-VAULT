@@ -13,6 +13,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { ApiCookieAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { CustomerGuard } from '../auth/guards/customer.guard.js';
 import { SessionAuthGuard } from '../auth/guards/session-auth.guard.js';
@@ -28,6 +29,7 @@ import {
   type WishPromptWithResponse,
   type WishResponse,
 } from './my-wishes.service.js';
+import { AUTH } from '../config/swagger.js';
 
 export const WISH_PROMPT_NOT_FOUND = 'Prompt not found.';
 
@@ -46,6 +48,8 @@ export class WishPromptKeyPipe implements PipeTransform<string, MyWishPrompt> {
 }
 
 // The owner is always the session user; ownership is enforced in the service.
+@ApiTags('My Wishes')
+@ApiCookieAuth(AUTH.customer)
 @Controller('my-wishes/prompts')
 @UseGuards(SessionAuthGuard, CustomerGuard)
 export class MyWishesController {

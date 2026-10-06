@@ -1,4 +1,5 @@
 import { createHmac } from 'node:crypto';
+import fs from 'node:fs';
 import type { APIRequestContext, Page } from '@playwright/test';
 
 export const API = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000/api/v1';
@@ -18,6 +19,24 @@ export async function registerViaApi(request: APIRequestContext, account: Accoun
   if (response.status() !== 201) {
     throw new Error(`Register failed with ${response.status()} (throttled? wait a minute)`);
   }
+}
+
+const masked = (email: string) => email.replace(/^(.)[^@]*@/, '$1***@').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Step 24: with EMAIL_PROVIDER=console the API prints each email it would send
+ * ("[DEV ONLY] Email (<kind>) to s***@… | subject | plain text") to its output,
+ * which the test teed into `log`. Waits for the next one of `kind` to this
+ * (masked) address after `from` bytes.
+ */
+export async function emailFromLog(log: string, kind: string, email: string, from: number) {
+  const pattern = new RegExp(`\\[DEV ONLY\\] Email \\(${kind}\\) to ${masked(email)} \\| [^\\n]*`);
+  for (let i = 0; i < 40; i++) {
+    const match = fs.readFileSync(log, 'utf8').slice(from).match(pattern);
+    if (match) return match[0];
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  throw new Error(`No ${kind} email for ${email.replace(/^(.)[^@]*@/, '$1***@')} in ${log}`);
 }
 
 export async function signIn(page: Page, { email, password }: Account) {

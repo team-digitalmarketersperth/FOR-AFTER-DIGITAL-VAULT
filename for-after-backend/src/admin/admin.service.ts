@@ -144,7 +144,12 @@ export class AdminService {
             memoryVaultItems: { where: { deletedAt: null } },
           },
         },
-        deathVerificationCase: { select: { id: true, status: true } },
+        // The current (newest) case; older ones are in the death-case list.
+        deathVerificationCases: {
+          orderBy: [{ openedAt: 'desc' }, { id: 'desc' }],
+          take: 1,
+          select: { id: true, status: true },
+        },
       },
     });
     if (!found) throw new NotFoundException('User not found.');
@@ -162,7 +167,12 @@ export class AdminService {
       subjectId: userId,
     });
     this.logger.log(`admin_user_viewed user ${userId} admin ${actor.userId}`);
-    const { _count, deathVerificationCase, twoFactorEnabled, ...user } = found;
+    const {
+      _count,
+      deathVerificationCases: [deathVerificationCase],
+      twoFactorEnabled,
+      ...user
+    } = found;
     return {
       ...user,
       mfaEnabled: twoFactorEnabled,

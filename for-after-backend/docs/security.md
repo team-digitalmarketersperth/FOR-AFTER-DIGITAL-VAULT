@@ -47,7 +47,9 @@ We utilize `@nestjs/throttler` to mitigate brute-force and DDoS attempts:
 - **Login**: 5 attempts per minute.
 - **OTP Requests**: 3 requests per minute. *As built (Step 13):* Redis counters, 5 per email + 20 per IP per 15 minutes,
   verify 30 per IP per 15 minutes, 5 attempts per code (`docs/recipient-portal.md`).
-- **Password Reset**: 3 requests per hour.
+- **Password Reset**: 3 requests per hour. *As built (Phase 04):* at most 3 reset emails per account per hour, 10
+  forgot-password requests per IP per hour, 5 reset submissions per IP per minute; all throttler counters in Redis
+  (`for_after:throttle:`), shared by every API instance (`docs/authentication.md`).
 - **Death Reports**: 2 reports per day per user. *As built (Step 14):* one report per Trusted Contact per case (unique
   index), behind Trusted Contact OTP (5 requests per email + 20 per IP per 15 minutes, 5 attempts per code).
 - **Export Jobs**: 1 per hour.

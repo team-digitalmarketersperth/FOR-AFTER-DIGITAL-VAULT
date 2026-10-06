@@ -6,8 +6,8 @@
 
 | | |
 |---|---|
-| **Built** | Customer auth (Step 2), Recipient OTP (Step 13), Trusted Contact OTP (Step 14), deceased-account lockout (Step 15), **mandatory admin TOTP + recovery codes + admin idle timeout (Step 16)** |
-| **Planned** | Optional Customer 2FA, email verification, password reset, session audit table, SMS OTP |
+| **Built** | Customer auth (Step 2), Recipient OTP (Step 13), Trusted Contact OTP (Step 14), deceased-account lockout (Step 15), **mandatory admin TOTP + recovery codes + admin idle timeout (Step 16)**, change password (Step 22), **email verification, password reset and Redis-backed rate limits (Phase 04)** |
+| **Planned** | Optional Customer 2FA, session audit table, SMS OTP |
 | **Related** | [Admin backend](admin.md) · [Authorization](authorization.md) · [Security](security.md) · [Recipient Portal](recipient-portal.md) · [Trusted Contact auth](trusted-contact-auth.md) |
 
 ## 🧭 Contents
@@ -48,8 +48,31 @@
 ### Endpoints
 
 Prefix `/api/v1`: `POST /auth/register`, `POST /auth/login`, `GET /auth/me`, `POST /auth/logout`, and (Step 22)
-`POST /auth/change-password` + `PATCH /users/me` (name only; email is read-only until a verified email-change flow
-exists). Health checks stay unprefixed: `GET /health/database`, `GET /health/redis`.
+`POST /auth/change-password` + `PATCH /users/me` (name only; the email changes only through the Phase 08 flow), and (Phase 04) `POST /auth/verify-email`, `POST /auth/resend-verification`, `POST /auth/forgot-password`,
+`POST /auth/reset-password`. Health checks stay unprefixed: `GET /health/database`, `GET /health/redis`.
+
+### Email verification and password reset (Phase 04)
+
+Both use a single-use emailed link carrying a 32-byte random token (base64url, 43 characters). Only its SHA-256 is
+stored (`AuthToken`, `purpose` `EMAIL_VERIFICATION` | `PASSWORD_RESET`, unique `tokenHash`); the raw token exists only
+in the email and is never logged. A token is consumed by one conditional update (`consumedAt` null and not expired),
+so concurrent uses succeed exactly once. Issuing a new token supersedes the account's older unused one, under a row
+lock on the user. Each account gets at most **3 emails per hour** per purpose (counted from the token rows), on top of
+the per-IP limits below. Links are sent straight through `EmailProvider`, like sign-in codes: a queued job would keep
+the raw token in Redis job data and failed-job history ([email-production-setup.md](email-production-setup.md)).
+
+| | Email verification | Password reset |
+|---|---|---|
+| Sent | after `POST /auth/register` (in the background), and by `POST /auth/resend-verification` for an ACTIVE, unverified account | by `POST /auth/forgot-password` for an ACTIVE Customer (admins recover through operations) |
+| Link | `APP_BASE_URL/verify-email?token=…` | `APP_BASE_URL/reset-password?token=…` |
+| Lifetime | `EMAIL_VERIFICATION_TOKEN_TTL_SECONDS`, default 86400 (24 h) | `PASSWORD_RESET_TOKEN_TTL_SECONDS`, default 3600 (60 min) |
+| Request answer | resend: `202`, the same message for any email | `202` `"If an account exists for that email, password reset instructions have been sent."` for any email |
+| Use | `POST /auth/verify-email {token}` → `200 {verified: true}`; sets `emailVerifiedAt` (kept if already set); audited `EMAIL_VERIFIED` | `POST /auth/reset-password {token, newPassword}` → `200 {success: true}`; registration password rule, Argon2id, `passwordChangedAt` (every existing session gets `401`), other reset links consumed, audited `PASSWORD_RESET_COMPLETED`. **No session is created**: the Customer signs in again |
+| Bad link | `400 "This link is invalid or has expired."` (wrong, expired, used or superseded alike) | same |
+
+The request endpoints never await the lookup or the send, so neither the answer nor its timing reveals whether an
+account exists. **Login policy:** no product document says an unverified Customer may not sign in, so login is
+unchanged; `emailVerifiedAt` is returned by `GET /auth/me` for a future decision (open product question).
 
 ### Passwords
 
@@ -102,10 +125,47 @@ TOTP via `otplib` (±30 s window, replay-protected by time step), secrets AES-25
 `ADMIN_TOTP_ENCRYPTION_KEY`, 10 one-time recovery codes stored as hashes, 5 attempts per challenge, a Redis per-IP limit,
 and a 30-minute admin idle timeout. Customer login and sessions are unchanged. Full design: [admin.md](admin.md).
 
+### Change email (Phase 08)
+
+`User.email` never changes on request. The Customer asks, the new address proves itself, then the account switches:
+
+1. `POST /auth/change-email {newEmail, currentPassword}` (Customer session, `CustomerGuard`; admins `403`, Recipient and
+   Trusted Contact `401`). The current password is checked with the same Argon2id check as change-password (wrong:
+   `400 "Your current password is incorrect."`), before anything about the new address is looked at. The address is
+   normalized like registration; the current one is `400`, one another account uses is `409` (registration's
+   message). Answer `202 {pendingEmail: "n***@example.com"}`.
+2. A single-use link goes to the **new** address only: `APP_BASE_URL/settings/verify-email-change?token=…`. It is an
+   `AuthToken` with purpose `EMAIL_CHANGE` carrying `newEmail` (same rules as the other links: SHA-256 at rest, 24 h via
+   `EMAIL_VERIFICATION_TOKEN_TTL_SECONDS`, a newer request or `POST /auth/change-email/resend` supersedes it,
+   `POST /auth/change-email/cancel` ends it, at most 3 per account per hour). Audited `EMAIL_CHANGE_REQUESTED`.
+3. `POST /auth/change-email/confirm {token}` is public, like `verify-email`: the token authorizes this one change and
+   nothing else. In one transaction: the token is consumed (once, however many race), `email` = the new address,
+   `emailVerifiedAt` = now (the link proves the inbox), `emailChangedAt` = now, the account's other change **and
+   password-reset** links are consumed (a reset link left in the old inbox cannot reopen the account), audited
+   `EMAIL_CHANGED` (no addresses in audit rows). If another account took the address meanwhile, the unique index
+   decides: `409`, and nothing (token included) changes.
+4. `SessionAuthGuard` refuses every Customer session signed in before `emailChangedAt` (as for `passwordChangedAt`;
+   one column each, so neither carries the other's meaning). Nobody is signed in by the link: the Customer signs in
+   with the new address; the old one no longer works. Recipient and Trusted Contact sessions are separate and
+   unaffected.
+5. The old address gets "Your For After email address was changed" (no link, no token, not the new address), after
+   the change commits. Best effort, like other auth emails: a failure is logged (`email-changed_failed`) and never
+   undoes the change; there is no durable retry for it (only release notifications have a queue).
+
 ### Rate limits
 
-Register and login: 5 requests per minute per IP, counted in memory per instance (move to Redis when running more than
-one instance).
+Per IP, counted in Redis (Phase 04, `RedisThrottlerStorage` on the app's Redis client, keys under
+`for_after:throttle:` + the throttler's SHA-256 of route and IP), so every API instance enforces the same counter:
+
+| Route | Limit |
+|---|---|
+| `POST /auth/register`, `/auth/login` (Customers and admins), `/auth/change-password`, `/auth/reset-password`, `/auth/change-email` | 5 per minute |
+| `POST /auth/verify-email`, `/auth/change-email/confirm` | 10 per minute |
+| `POST /auth/forgot-password`, `/auth/resend-verification`, `/auth/change-email/resend` | 10 per hour (plus 3 emails per account per hour) |
+
+Recipient and Trusted Contact OTP and admin MFA keep their own Redis counters (unchanged). If Redis is unavailable the
+request fails (`500`) rather than going through unthrottled; sessions need Redis anyway. Fixed window: a caller over
+the limit stays blocked until the window ends.
 
 ---
 
@@ -148,8 +208,6 @@ sequenceDiagram
 
 | Feature | Design |
 |---|---|
-| **Email verification** | Single-use token; `POST /auth/verify-email`. Verification email sent via Postmark after registration. |
-| **Password reset** | `POST /auth/forgot-password` generates an expiring token and emails it; `POST /auth/reset-password` validates it, re-hashes with Argon2 and **revokes all active sessions** for that user. |
 | **Two-factor (TOTP)** | **Admins: built in Step 16** under `/admin-auth/totp/*` (see [admin.md](admin.md); no `qrcode` dependency, the `otpauthUri` is returned for the client to render). Optional Customer 2FA is still planned and could reuse the same service and tables. |
 | **Session audit table** | PostgreSQL table: `id`, `user_id`, `session_token_hash`, `ip_address`, `user_agent`, `expires_at`, `last_used_at`, `revoked_at`, `created_at`. |
 
@@ -166,7 +224,7 @@ Passwordless 6-digit email code for **Recipients** ("People I Love"). Full desig
 | **Flow** | `POST /recipient-auth/request-otp` → `POST /recipient-auth/verify-otp` → `for_after_recipient_session` |
 | **Eligible email** | has a `RecipientMessageAccessGrant` for a `RELEASED`, non-deleted Message |
 | **Channel** | email only; SMS is deferred, so mobile-only Recipients cannot sign in yet |
-| **Delivery** | email through `EMAIL_PROVIDER` (Step 24, Resend in production; [email setup](email-production-setup.md)); sent directly, never queued, so the plaintext code never sits in Redis |
+| **Delivery** | email through `EMAIL_PROVIDER` (Step 24, Brevo; [email setup](email-production-setup.md)); sent directly, never queued, so the plaintext code never sits in Redis |
 | **Authorization** | the session holds only the verified email; access is decided per request from the release-time grant snapshot, never from a recipient id or the live `Recipient.email` |
 
 ---
@@ -236,6 +294,9 @@ dashboard's `GET /auth/me`.
 | `RECIPIENT_*` | no | Recipient OTP, rate-limit, session and cookie settings ([recipient-portal.md](recipient-portal.md)) |
 | `TRUSTED_CONTACT_OTP_PEPPER` | ✅ | 32+ random characters, different from the Recipient pepper (Step 14) |
 | `TRUSTED_CONTACT_*` | no | Trusted Contact OTP, rate-limit, session and cookie settings ([trusted-contact-auth.md](trusted-contact-auth.md)) |
+| `EMAIL_VERIFICATION_TOKEN_TTL_SECONDS` | no | default `86400` (Phase 04) |
+| `PASSWORD_RESET_TOKEN_TTL_SECONDS` | no | default `3600` (Phase 04) |
+| `THROTTLE_KEY_PREFIX` | no | Redis namespace for rate-limit counters, default `for_after:throttle:`; e2e tests set one per test file |
 
 ---
 
@@ -249,6 +310,8 @@ dashboard's `GET /auth/me`.
 - Postman or curl against `http://localhost:4000/api/v1` still work.
 - For OTP testing, set `EMAIL_PROVIDER=console` with `NODE_ENV=development`: every email appears in the API terminal
   as `[DEV ONLY] Email (recipient-otp) to s***@example.com | Your For After sign-in code | … Your sign-in code is 123456 …`.
+  With `EMAIL_PROVIDER=brevo` the code arrives in the inbox instead (only for an eligible email); see
+  [email setup](email-production-setup.md) for the `unauthorized` troubleshooting.
 
 ---
 

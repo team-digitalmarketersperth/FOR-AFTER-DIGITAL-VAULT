@@ -23,7 +23,8 @@ export default defineConfig({
     {
       name: 'development',
       testIgnore: /production\.spec|vault\.|portals\.|admin\.|account\./,
-      use: { ...devices['Desktop Chrome'], baseURL: 'http://localhost:3000' },
+      // E2E_BASE_URL: another app origin, e.g. a build pointed at a second API.
+      use: { ...devices['Desktop Chrome'], baseURL: process.env.E2E_BASE_URL ?? 'http://localhost:3000' },
     },
     {
       // Signs in two throwaway Customers once; saved to e2e/.auth (git-ignored).

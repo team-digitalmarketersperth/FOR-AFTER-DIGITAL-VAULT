@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isApiError, type ApiError } from '@/lib/api/errors';
 import {
   deathVerificationApi,
+  invitationApi,
   recipientApi,
   recipientAuthApi,
   trustedContactApi,
@@ -12,6 +13,7 @@ import {
   type CustomerCaseStatus,
   type DeathReportInput,
   type DeathReportReceipt,
+  type InvitationView,
   type OtpChallenge,
   type PortalMe,
   type ReleasedMessage,
@@ -133,5 +135,27 @@ export function useConfirmAlive() {
     onSuccess: (status) => qc.setQueryData(queryKeys.deathVerification, status),
     // A 409 means the case closed meanwhile (e.g. an admin decision): re-read it.
     onError: () => qc.invalidateQueries({ queryKey: queryKeys.deathVerification }),
+  });
+}
+
+// ─── Trusted Contact invitation (Phase 10) ─────────────────────────────────
+
+/** What the emailed link is for. Not cached beyond the page: the token is a credential. */
+export const useInvitation = (token: string) =>
+  useQuery<InvitationView, ApiError>({
+    queryKey: ['trusted-contact', 'invitation', token],
+    queryFn: () => invitationApi.view(token),
+    enabled: !!token,
+    gcTime: 0,
+    retry: false,
+  });
+
+/** Accept or decline. The answer replaces the view; no session is created. */
+export function useAnswerInvitation(token: string) {
+  const qc = useQueryClient();
+  return useMutation<InvitationView, ApiError, 'accept' | 'decline'>({
+    mutationFn: (answer) => invitationApi[answer](token),
+    onSuccess: (view) => qc.setQueryData(['trusted-contact', 'invitation', token], view),
+    gcTime: 0,
   });
 }

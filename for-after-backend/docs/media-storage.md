@@ -10,10 +10,9 @@
 
 > ℹ️ Trusted Contacts (Step 14) have **no** media access of any kind, and death-report evidence upload is not built.
 
-> ⚠️ **Browser uploads need a bucket CORS rule.** The frontend (Step 18) PUTs files straight to the bucket from the
-> browser. The development bucket `for-after-dev` has no CORS rule yet, so the preflight from `http://localhost:3000`
-> returns 403 and browser uploads fail. Add a rule allowing origin `http://localhost:3000` (and later
-> `https://app.forafter.com.au`), method `PUT` and header `content-type`. Viewing via `<img>`/`<audio>` needs no CORS.
+> ℹ️ **Browser uploads need a bucket CORS rule** (origin `http://localhost:3000`, later `https://app.forafter.com.au`;
+> method `PUT`; header `content-type`). The development bucket has it (`backblaze/cors-rules.json`); Playwright uploads
+> through it (`e2e/vault.spec.ts`, `e2e/people.spec.ts`). Viewing via `<img>`/`<audio>` needs no CORS.
 
 ## 🧭 Contents
 
@@ -50,6 +49,7 @@
 | `OBJECT_STORAGE_FORCE_PATH_STYLE` | `false` for B2 (`true` is typical for MinIO) |
 | `MEDIA_UPLOAD_URL_TTL_SECONDS` / `MEDIA_ACCESS_URL_TTL_SECONDS` | 600 / 300 by default |
 | `MEDIA_PHOTO_MAX_BYTES` / `MEDIA_AUDIO_MAX_BYTES` | 20 MB / 100 MB by default |
+| `RECIPIENT_PHOTO_MAX_BYTES` | 5 MB by default (Phase 09 Recipient photos) |
 
 Missing storage config **stops the app at startup** with the names of the missing variables (never their values). There is no fallback storage.
 
@@ -102,6 +102,27 @@ Client -> DELETE ...                            (soft delete first, then DeleteO
 ### Testing
 - Unit and e2e tests **mock `MediaStorage`** and never contact a real bucket or use credentials (e2e uses real PostgreSQL and sessions).
 - The real B2 dev bucket is only for manual local integration testing (Postman).
+
+## 2a. Recipient photo (Phase 09)
+
+One optional, private profile photo per Person I Love, managed by the Customer (the Recipient never sees it; it grants
+nothing in the Recipient Portal). Own table `RecipientPhoto` (same fields as the media tables, `kind` always `PHOTO`),
+same storage, allowlist (JPEG/PNG/WebP, no SVG), HEAD verification and signed URLs as above, under
+`/recipients/:id/photo/…` (docs/api.md). Size: `RECIPIENT_PHOTO_MAX_BYTES`, default **5 MB** (an implementation
+default: no product document sets one). Content is checked by declared type and stored size only, like other media;
+magic-byte checks remain the open Phase 12 item.
+
+- **Key:** `users/<ownerId>/recipients/<recipientId>/photo/<uuid>.<ext>`: ids only, never a name, contact detail or note.
+- **One current photo:** a partial unique index (one `READY`, non-deleted row per Recipient) plus a lock on the
+  Recipient row during completion, so concurrent uploads end with exactly one photo and a deleted Recipient is never
+  given one.
+- **Replacement:** the old photo stays until the new one is verified; then, in one transaction, the old one is
+  soft-deleted and the new one becomes READY. The old object is deleted after commit, best effort: a storage failure
+  never undoes the swap (left for reconciliation, like other media).
+- **Lists:** recipients carry `photoId` only; each avatar asks for its own 5-minute URL when shown (no URLs or keys in
+  list responses). The frontend keeps them in memory only.
+- **Soft-deleting a Recipient** soft-deletes its photos and removes their objects (best effort); every photo route
+  already refuses a deleted Recipient (`404`, like a foreign one).
 
 ## 2b. Video Pipeline (planned, not built: Mux / Cloudflare Stream)
 

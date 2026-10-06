@@ -15,6 +15,8 @@ import { isApiError } from '@/lib/api/errors';
 export const queryKeys = {
   me: ['auth', 'me'] as const,
   recipients: ['recipients'] as const,
+  recipientPages: ['recipients', 'page'] as const,
+  recipientPage: (page: number) => ['recipients', 'page', page] as const,
   recipient: (id: string) => ['recipients', id] as const,
   trustedContacts: ['trusted-contacts'] as const,
   trustedContact: (id: string) => ['trusted-contacts', id] as const,

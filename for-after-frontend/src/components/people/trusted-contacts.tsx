@@ -1,7 +1,7 @@
 'use client';
 
 import { zodResolver } from '@hookform/resolvers/zod';
-import { ShieldCheck, Trash2, UserPlus } from 'lucide-react';
+import { Mail, ShieldCheck, Trash2, UserPlus } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
@@ -14,8 +14,14 @@ import { EmptyState, QueryView, Spinner } from '@/components/shared/states';
 import { Button } from '@/components/ui/button';
 import { useUnsavedChanges } from '@/hooks/use-unsaved-changes';
 import { trustedContacts } from '@/hooks/use-vault';
-import type { TrustedContact, TrustedContactInput } from '@/lib/api/people';
-import { fullName } from '@/lib/format';
+import {
+  MAX_TRUSTED_CONTACTS,
+  type InvitationStatus,
+  type TrustedContact,
+  type TrustedContactInput,
+} from '@/lib/api/people';
+import { formatDate, fullName } from '@/lib/format';
+import { cn } from '@/lib/utils';
 import { toNull, trustedContactSchema, type TrustedContactValues } from '@/schemas/vault';
 
 const addButton = (
@@ -26,6 +32,8 @@ const addButton = (
     </Link>
   </Button>
 );
+
+const LIMIT_COPY = `You can nominate up to ${MAX_TRUSTED_CONTACTS} trusted contacts.`;
 
 /** What the role means, matching what the product actually does today. */
 function RoleExplainer() {
@@ -38,23 +46,102 @@ function RoleExplainer() {
           our team verifies every report before any message is released.
         </p>
         <p>
-          Being a trusted contact does not give them access to your messages, memories or wishes. For After
-          doesn&apos;t contact them yet, so let them know you&apos;ve chosen them.
+          Being a trusted contact does not give them access to your messages, memories or wishes. If you add an
+          email address, we&apos;ll email them an invitation explaining the role. {LIMIT_COPY}
         </p>
       </div>
     </aside>
   );
 }
 
+/** Phase 10: the email invitation, in plain words. SMS invitations are deferred. */
+export const INVITATION_COPY: Record<InvitationStatus, { label: string; description: string }> = {
+  PENDING: {
+    label: 'Invitation pending',
+    description: 'We’ve emailed an invitation. It’s waiting for their answer.',
+  },
+  ACCEPTED: { label: 'Invitation accepted', description: 'They’ve accepted the invitation.' },
+  DECLINED: {
+    label: 'Invitation declined',
+    description: 'They declined the invitation. You can send it again, or choose someone else.',
+  },
+  EXPIRED: {
+    label: 'Invitation expired',
+    description: 'The invitation expired before they answered. You can send a new one.',
+  },
+  NOT_SENT: { label: 'Invitation not sent', description: 'No invitation has been sent to this email address yet.' },
+  UNAVAILABLE: {
+    label: 'No invitation',
+    description:
+      'Invitations are sent by email, and this contact only has a mobile number. Text-message invitations aren’t available yet, so please let them know yourself, or add an email address.',
+  },
+};
+
+export function InvitationBadge({ status }: { status: InvitationStatus }) {
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium',
+        status === 'ACCEPTED' ? 'bg-success/10 text-success' : 'border border-border bg-surface-muted text-foreground-secondary',
+      )}
+    >
+      {INVITATION_COPY[status].label}
+    </span>
+  );
+}
+
+const canSend = (status: InvitationStatus) => status !== 'ACCEPTED' && status !== 'UNAVAILABLE';
+
+/** Status + send/resend for one contact. The API decides; this only offers what it allows. */
+function InvitationPanel({ contact }: { contact: TrustedContact }) {
+  const invite = trustedContacts.useInvite(contact.id);
+  const { status, sentAt } = contact.invitation;
+  return (
+    <section
+      aria-labelledby="invitation-heading"
+      className="mb-8 grid max-w-3xl gap-3 rounded-xl border border-border bg-surface p-6 sm:p-8"
+    >
+      <div className="flex flex-wrap items-center gap-3">
+        <h2 id="invitation-heading" className="text-2xl">
+          Invitation
+        </h2>
+        <InvitationBadge status={status} />
+      </div>
+      <p className="text-[15px] text-foreground-secondary">
+        {INVITATION_COPY[status].description}
+        {sentAt && status !== 'ACCEPTED' && <> Sent {formatDate(sentAt)}.</>}
+      </p>
+      <FormError error={invite.error} />
+      {canSend(status) && (
+        <div>
+          <Button
+            variant="outline"
+            disabled={invite.isPending}
+            onClick={() =>
+              invite.mutate(undefined, {
+                onSuccess: () => toast.success(`Invitation sent to ${contact.firstName}`),
+              })
+            }
+          >
+            {invite.isPending ? <Spinner /> : <Mail aria-hidden strokeWidth={1.5} />}
+            {status === 'NOT_SENT' ? 'Send invitation' : 'Resend invitation'}
+          </Button>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function TrustedContactList() {
   const list = trustedContacts.useList();
+  const atLimit = (list.data?.length ?? 0) >= MAX_TRUSTED_CONTACTS;
   return (
     <>
       <PageHeader
         eyebrow="People"
         title={<>Trusted <em>contacts</em></>}
         description="People you trust to let us know when the time comes."
-        action={list.data?.length ? addButton : undefined}
+        action={list.data?.length && !atLimit ? addButton : undefined}
       />
       <RoleExplainer />
       <QueryView query={list} loadingLabel="Loading your trusted contacts">
@@ -63,17 +150,28 @@ export function TrustedContactList() {
             <EmptyState
               icon={ShieldCheck}
               title="No trusted contacts yet"
-              description="Choose one or two people you trust, such as a partner, a close friend or a family member."
+              description={`Choose people you trust, such as a partner, a close friend or a family member. ${LIMIT_COPY}`}
               action={addButton}
             />
           ) : (
-            <ul className="grid gap-3 md:grid-cols-2">
-              {contacts.map((c) => (
-                <li key={c.id}>
-                  <PersonCard person={c} href={`/trusted-contacts/${c.id}/edit`} />
-                </li>
-              ))}
-            </ul>
+            <div className="grid gap-6">
+              <ul className="grid gap-3 md:grid-cols-2">
+                {contacts.map((c) => (
+                  <li key={c.id}>
+                    <PersonCard
+                      person={c}
+                      href={`/trusted-contacts/${c.id}/edit`}
+                      extra={<InvitationBadge status={c.invitation.status} />}
+                    />
+                  </li>
+                ))}
+              </ul>
+              {atLimit && (
+                <p role="note" className="text-[15px] text-foreground-muted">
+                  {LIMIT_COPY} To choose someone else, open a contact and remove them first.
+                </p>
+              )}
+            </div>
           )
         }
       </QueryView>
@@ -97,15 +195,42 @@ const toInput = (v: TrustedContactValues): TrustedContactInput => ({
   mobile: toNull(v.mobile),
 });
 
+const addedToast = (c: TrustedContact) =>
+  c.invitation.status === 'PENDING'
+    ? `${c.firstName} was added and we’ve emailed them an invitation`
+    : c.invitation.status === 'NOT_SENT'
+      ? `${c.firstName} was added. We couldn’t send the invitation; you can resend it from their page`
+      : `${c.firstName} was added`;
+
 export function NewTrustedContact() {
   const router = useRouter();
+  const list = trustedContacts.useList();
   const create = trustedContacts.useCreate();
+  const back = { href: '/trusted-contacts', label: 'Trusted Contacts' };
+  // Reached directly at the limit: explain instead of a form the API would refuse.
+  if (!create.isSuccess && (list.data?.length ?? 0) >= MAX_TRUSTED_CONTACTS) {
+    return (
+      <>
+        <PageHeader back={back} title={<>Add a <em>trusted contact</em></>} />
+        <EmptyState
+          icon={ShieldCheck}
+          title="You’ve reached the limit"
+          description={`${LIMIT_COPY} To choose someone else, remove one of your current trusted contacts first.`}
+          action={
+            <Button asChild variant="outline">
+              <Link href={back.href}>Back to Trusted Contacts</Link>
+            </Button>
+          }
+        />
+      </>
+    );
+  }
   return (
     <>
       <PageHeader
-        back={{ href: '/trusted-contacts', label: 'Trusted Contacts' }}
+        back={back}
         title={<>Add a <em>trusted contact</em></>}
-        description="A first name and one way to reach them (email or mobile) are needed."
+        description="A first name and one way to reach them (email or mobile) are needed. With an email, we’ll send them an invitation."
       />
       <TrustedContactForm
         submitLabel="Add trusted contact"
@@ -114,7 +239,7 @@ export function NewTrustedContact() {
         onSubmit={(input) =>
           create.mutate(input, {
             onSuccess: (c) => {
-              toast.success(`${c.firstName} was added`);
+              toast.success(addedToast(c));
               router.push('/trusted-contacts');
             },
           })
@@ -162,6 +287,7 @@ export function EditTrustedContact({ id }: { id: string }) {
               />
             }
           />
+          <InvitationPanel contact={c} />
           <TrustedContactForm
             initial={c}
             submitLabel="Save changes"

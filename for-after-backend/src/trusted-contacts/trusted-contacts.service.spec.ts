@@ -1,10 +1,18 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { Prisma } from '../generated/prisma/client.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
 import { CreateTrustedContactDto } from './dto/create-trusted-contact.dto.js';
-import { TrustedContactsService } from './trusted-contacts.service.js';
+import type { TrustedContactInvitationsService } from './trusted-contact-invitations.service.js';
+import {
+  MAX_TRUSTED_CONTACTS,
+  TrustedContactsService,
+} from './trusted-contacts.service.js';
 
 const row = {
   id: 't1',
@@ -15,6 +23,7 @@ const row = {
   mobile: null,
   createdAt: new Date(),
   updatedAt: new Date(),
+  invitations: [],
 };
 
 const noMatch = () =>
@@ -31,11 +40,20 @@ const setup = () => {
     update: vi.fn().mockResolvedValue(row),
     count: vi.fn().mockResolvedValue(0),
   };
+  const $queryRaw = vi.fn().mockResolvedValue([]);
+  const db = { trustedContact, $queryRaw };
+  const invitations = { send: vi.fn().mockResolvedValue(true) };
   return {
     trustedContact,
-    service: new TrustedContactsService({
-      trustedContact,
-    } as unknown as PrismaService),
+    $queryRaw,
+    invitations,
+    service: new TrustedContactsService(
+      {
+        ...db,
+        $transaction: (fn: (tx: typeof db) => unknown) => fn(db),
+      } as unknown as PrismaService,
+      invitations as unknown as TrustedContactInvitationsService,
+    ),
   };
 };
 
@@ -81,6 +99,46 @@ describe('TrustedContactsService', () => {
     expect(data.ownerUserId).toBe('owner-a');
     expect(select).not.toHaveProperty('ownerUserId');
     expect(select).not.toHaveProperty('deletedAt');
+  });
+
+  it('create locks the Customer row before counting (max 2, Phase 10)', async () => {
+    const { trustedContact, $queryRaw, service } = setup();
+    trustedContact.count.mockResolvedValue(MAX_TRUSTED_CONTACTS - 1);
+    await service.create('owner-a', {
+      firstName: 'David',
+      mobile: '+61400000000',
+    });
+    expect(String($queryRaw.mock.calls[0][0].join(''))).toMatch(/FOR UPDATE/);
+    expect(trustedContact.count).toHaveBeenCalledWith({
+      where: { ownerUserId: 'owner-a', deletedAt: null },
+    });
+    expect(trustedContact.create).toHaveBeenCalled();
+  });
+
+  it('a third active contact is 409 and nothing is written', async () => {
+    const { trustedContact, invitations, service } = setup();
+    trustedContact.count.mockResolvedValue(MAX_TRUSTED_CONTACTS);
+    await expect(
+      service.create('owner-a', { firstName: 'Third', email: 'c@example.com' }),
+    ).rejects.toThrow(ConflictException);
+    expect(trustedContact.create).not.toHaveBeenCalled();
+    expect(invitations.send).not.toHaveBeenCalled();
+  });
+
+  it('create with an email sends the invitation; mobile-only does not (no SMS)', async () => {
+    const { invitations, service } = setup();
+    await service.create('owner-a', { firstName: 'D', email: 'd@example.com' });
+    expect(invitations.send).toHaveBeenCalledWith('owner-a', 't1', undefined);
+    invitations.send.mockClear();
+    await service.create('owner-a', { firstName: 'M', mobile: '+61400000000' });
+    expect(invitations.send).not.toHaveBeenCalled();
+  });
+
+  it('responses carry the invitation state, never invitation rows', async () => {
+    const { service } = setup();
+    const res = await service.findOwnedById('owner-a', 't1');
+    expect(res).not.toHaveProperty('invitations');
+    expect(res.invitation).toEqual({ status: 'NOT_SENT', sentAt: null });
   });
 
   it('lists only the owner’s non-deleted contacts, newest first', async () => {
@@ -135,6 +193,11 @@ describe('TrustedContactsService', () => {
     const { where, data } = trustedContact.update.mock.calls[0][0];
     expect(where).toEqual(ownedBy('owner-a', 't1'));
     expect(data.deletedAt).toBeInstanceOf(Date);
+    // A pending invitation dies with the relationship.
+    expect(data.invitations.updateMany).toMatchObject({
+      where: { status: 'PENDING' },
+      data: { status: 'CANCELLED' },
+    });
   });
 
   it('clearing email requires mobile to still be set, inside the UPDATE', async () => {

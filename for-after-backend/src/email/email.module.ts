@@ -13,8 +13,8 @@ export abstract class EmailConfig {
 }
 
 /**
- * Step 24. The provider is chosen from EMAIL_PROVIDER (resend | console |
- * disabled) and validated at startup; tests override EmailProvider with a fake.
+ * Step 24. The provider is chosen from EMAIL_PROVIDER (brevo | resend |
+ * console | disabled) and validated at startup; tests override EmailProvider with a fake.
  * Imported by each module that sends (OTP, death verification, release).
  */
 @Module({

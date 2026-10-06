@@ -33,13 +33,21 @@ export type ProfileInput = { firstName?: string; lastName?: string };
 export class UsersService {
   constructor(private readonly prisma: PrismaService) {}
 
-  /** For SessionAuthGuard, which strips passwordChangedAt before req.user. */
-  findById(
-    id: string,
-  ): Promise<(SafeUser & { passwordChangedAt: Date | null }) | null> {
+  /** For SessionAuthGuard, which strips the two revocation times before req.user. */
+  findById(id: string): Promise<
+    | (SafeUser & {
+        passwordChangedAt: Date | null;
+        emailChangedAt: Date | null;
+      })
+    | null
+  > {
     return this.prisma.user.findUnique({
       where: { id },
-      select: { ...safeUserSelect, passwordChangedAt: true },
+      select: {
+        ...safeUserSelect,
+        passwordChangedAt: true,
+        emailChangedAt: true,
+      },
     });
   }
 

@@ -96,9 +96,9 @@ flowchart LR
 | `NODE_ENV` | `production` (Secure cookies, trust one proxy hop) |
 | `COOKIE_DOMAIN`, `RECIPIENT_COOKIE_DOMAIN`, `TRUSTED_CONTACT_COOKIE_DOMAIN` | `.forafter.com.au` |
 | `FRONTEND_URL`, `WORDPRESS_URL` | production origins only |
-| `EMAIL_PROVIDER` | `resend` (startup refuses anything else in production) |
-| `RESEND_API_KEY` | secret manager only; a **Sending access** key |
-| `EMAIL_FROM_ADDRESS` | a sender on the domain verified in Resend ([email setup](email-production-setup.md)) |
+| `EMAIL_PROVIDER` | `brevo` (transactional email → Brevo; startup refuses anything but `brevo`/`resend` in production) |
+| `BREVO_API_KEY` | secret manager only; a v3 API key. Turn Brevo's authorised-IP blocking **on** (it is off for development) and add the production egress IPs |
+| `EMAIL_FROM_ADDRESS` | an address on a For After domain authenticated in Brevo ([email setup](email-production-setup.md)) |
 | `APP_BASE_URL` | `https://app.forafter.com.au` (https required) |
 | `DEATH_VERIFICATION_SAFEGUARD_SECONDS` | `1209600` (14 days) or the approved value; **never** a testing value like 60 |
 
@@ -119,7 +119,7 @@ These must be solved before Recipients or Trusted Contacts can use production:
 |---|---|
 | **Email provider** for OTP and safety notices (Step 17) | With `disabled` mode, codes and safety notices are never sent, so the Recipient Portal, Trusted Contact sign-in and death verification cannot be used |
 | **Admin 2FA** (Step 16) | Admins can verify deaths; production must not rely on a password alone |
-| **Death-case reopening rule** | One case per Customer: a cancelled/rejected case blocks all future reports ([death-verification.md](death-verification.md) §14) |
+| ~~**Death-case reopening rule**~~ ✅ | Resolved in Phase 10: a report after `CANCELLED`/`REJECTED` opens a new case ([death-verification.md](death-verification.md) §1.1) |
 | **Throttler storage in Redis** | Register/login limits are counted in memory per instance |
 | **Separate production bucket** | Development uses a Backblaze B2 dev bucket |
 | **Frontend** | Next.js app built locally (Steps 17–19) but not yet deployed; needs a CSP, the production cookie domain and the storage bucket CORS rule before launch ([task.md](task.md)) |

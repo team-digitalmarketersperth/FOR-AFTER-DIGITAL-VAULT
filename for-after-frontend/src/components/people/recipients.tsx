@@ -1,20 +1,26 @@
 'use client';
 
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Heart, Pencil, Trash2, UserPlus } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
+import { AlertCircle, ChevronLeft, ChevronRight, Heart, ImagePlus, Pencil, Trash2, UserPlus } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { useMemo, useState } from 'react';
 import { useForm, useWatch } from 'react-hook-form';
 import { toast } from 'sonner';
+import { FilePick, UploadProgress } from '@/components/media/media-manager';
 import { PersonAvatar, PersonCard } from '@/components/people/person-card';
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import { FormError, TextAreaField, TextField } from '@/components/shared/form-field';
 import { PageHeader } from '@/components/shared/page-header';
 import { EmptyState, QueryView, Spinner } from '@/components/shared/states';
 import { Button } from '@/components/ui/button';
+import { useRemoveMedia, useUpload } from '@/hooks/use-media';
 import { useUnsavedChanges } from '@/hooks/use-unsaved-changes';
 import { recipients } from '@/hooks/use-vault';
+import type { MediaScope } from '@/lib/api/media';
 import type { Recipient, RecipientInput } from '@/lib/api/people';
+import { queryKeys } from '@/lib/query/query-client';
 import { formatCalendarDate, fullName } from '@/lib/format';
 import { recipientSchema, toNull, type RecipientValues } from '@/schemas/vault';
 
@@ -28,18 +34,24 @@ const addButton = (
 );
 
 export function RecipientList() {
-  const list = recipients.useList();
+  const [page, setPage] = useState(1);
+  const list = recipients.usePage(page);
+  const pages = list.data?.pagination.pages ?? 1;
+  // Removing the last person on the last page: step back instead of showing an
+  // empty page while earlier pages still have people (a guarded update during
+  // render, React's pattern for state derived from new data).
+  if (list.data && !list.isPlaceholderData && page > Math.max(pages, 1)) setPage(Math.max(pages, 1));
   return (
     <>
       <PageHeader
         eyebrow="People"
         title={<>People <em>I love</em></>}
         description="The people your messages and memories are for."
-        action={list.data?.length ? addButton : undefined}
+        action={list.data?.pagination.total ? addButton : undefined}
       />
       <QueryView query={list} loadingLabel="Loading the people you love">
-        {(people) =>
-          people.length === 0 ? (
+        {({ items: people, pagination }) =>
+          pagination.total === 0 ? (
             <EmptyState
               icon={Heart}
               title="No one added yet"
@@ -47,21 +59,146 @@ export function RecipientList() {
               action={addButton}
             />
           ) : (
-            <ul className="grid gap-3 md:grid-cols-2">
-              {people.map((p) => (
-                <li key={p.id}>
-                  <PersonCard
-                    person={p}
-                    href={`/people/${p.id}`}
-                    extra={p.birthday ? <span>Birthday {formatCalendarDate(p.birthday)}</span> : undefined}
-                  />
-                </li>
-              ))}
-            </ul>
+            <>
+              <ul className="grid gap-3 md:grid-cols-2">
+                {people.map((p) => (
+                  <li key={p.id}>
+                    <PersonCard
+                      person={p}
+                      href={`/people/${p.id}`}
+                      photo={{ recipientId: p.id, photoId: p.photoId }}
+                      extra={p.birthday ? <span>Birthday {formatCalendarDate(p.birthday)}</span> : undefined}
+                    />
+                  </li>
+                ))}
+              </ul>
+              {pagination.pages > 1 && (
+                <Pager
+                  page={pagination.page}
+                  pages={pagination.pages}
+                  total={pagination.total}
+                  loading={list.isPlaceholderData}
+                  onPage={setPage}
+                />
+              )}
+            </>
           )
         }
       </QueryView>
     </>
+  );
+}
+
+/** Understated Previous / Next for People I Love (25 per page). */
+function Pager({
+  page,
+  pages,
+  total,
+  loading,
+  onPage,
+}: {
+  page: number;
+  pages: number;
+  total: number;
+  loading: boolean;
+  onPage: (page: number) => void;
+}) {
+  return (
+    <nav aria-label="People I Love pages" className="mt-8 flex items-center justify-between gap-4 border-t border-border pt-6">
+      <Button variant="ghost" size="sm" disabled={page <= 1 || loading} onClick={() => onPage(page - 1)}>
+        <ChevronLeft aria-hidden strokeWidth={1.5} />
+        Previous
+      </Button>
+      <p className="text-sm text-foreground-muted" aria-live="polite">
+        {loading ? <Spinner className="size-4" /> : `Page ${page} of ${pages} · ${total} people`}
+      </p>
+      <Button variant="ghost" size="sm" disabled={page >= pages || loading} onClick={() => onPage(page + 1)}>
+        Next
+        <ChevronRight aria-hidden strokeWidth={1.5} />
+      </Button>
+    </nav>
+  );
+}
+
+/**
+ * Phase 09: the optional private photo. Upload → verify → it becomes the photo
+ * (the old one stays until then); change and remove. Reuses the media uploader
+ * (direct PUT to private storage, progress, cancel, retry).
+ */
+function RecipientPhotoEditor({ recipient }: { recipient: Recipient }) {
+  const qc = useQueryClient();
+  const scope = useMemo<MediaScope>(() => ({ kind: 'recipients', id: recipient.id }), [recipient.id]);
+  const { state, upload, cancel, reset } = useUpload(scope);
+  const remove = useRemoveMedia(scope);
+  const [lastFile, setLastFile] = useState<File | null>(null);
+  const busy = state.phase === 'uploading' || state.phase === 'confirming';
+  // The detail, every list page and the picker carry photoId.
+  const refresh = () => qc.invalidateQueries({ queryKey: queryKeys.recipients });
+
+  const start = async (file: File) => {
+    setLastFile(file);
+    const hadPhoto = !!recipient.photoId;
+    const photo = await upload('PHOTO', file);
+    if (!photo) return;
+    await refresh();
+    toast.success(hadPhoto ? 'Photo changed' : 'Photo added');
+  };
+
+  return (
+    <div className="flex flex-col items-center gap-3 sm:w-44 sm:shrink-0">
+      <PersonAvatar person={recipient} size="lg" photo={{ recipientId: recipient.id, photoId: recipient.photoId }} />
+      {busy ? (
+        <UploadProgress state={state} onCancel={cancel} />
+      ) : (
+        <div className="flex flex-col items-center gap-1">
+          <FilePick
+            kind="PHOTO"
+            label={recipient.photoId ? 'Change photo' : 'Add a photo'}
+            icon={<ImagePlus aria-hidden strokeWidth={1.5} />}
+            onPick={(_, file) => void start(file)}
+          />
+          {recipient.photoId && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={remove.isPending}
+              onClick={() =>
+                remove.mutate(recipient.photoId!, {
+                  onSuccess: () => {
+                    void refresh();
+                    toast.success('Photo removed');
+                  },
+                })
+              }
+            >
+              {remove.isPending && <Spinner />}
+              Remove photo
+            </Button>
+          )}
+        </div>
+      )}
+      {state.phase === 'failed' && (
+        <div role="alert" className="grid w-full gap-2 rounded-md bg-danger/8 px-3 py-2 text-sm text-danger">
+          <span className="flex items-start gap-2">
+            <AlertCircle aria-hidden className="mt-0.5 size-4 shrink-0" />
+            {state.message}
+          </span>
+          <span className="flex gap-2">
+            {lastFile && (
+              <Button type="button" size="sm" variant="outline" onClick={() => void start(lastFile)}>
+                Try again
+              </Button>
+            )}
+            <Button type="button" size="sm" variant="ghost" onClick={reset}>
+              Dismiss
+            </Button>
+          </span>
+        </div>
+      )}
+      <FormError error={remove.error} />
+      <p className="text-center text-xs text-foreground-muted">Private: only you see this photo.</p>
+    </div>
   );
 }
 
@@ -110,7 +247,7 @@ export function RecipientDetail({ id }: { id: string }) {
             }
           />
           <section className="flex flex-col gap-8 rounded-xl border border-border bg-surface p-6 sm:flex-row sm:p-10">
-            <PersonAvatar person={p} size="lg" />
+            <RecipientPhotoEditor recipient={p} />
             <dl className="grid flex-1 gap-6 sm:grid-cols-2">
               <Detail label="Email" value={p.email} />
               <Detail label="Mobile" value={p.mobile} />

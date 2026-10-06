@@ -17,12 +17,18 @@ export type AuditActor = {
   userAgent?: string;
 };
 
+/** Phase 10: an invited Trusted Contact answering an invitation. Not a User. */
+export type TrustedContactAuditActor = Omit<AuditActor, 'type' | 'userId'> & {
+  type: typeof AuditActorType.TRUSTED_CONTACT;
+  userId: null;
+};
+
 // Scalars only, so a request body or object can never be copied in whole.
 export type AuditMetadata = Record<string, string | number | boolean | null>;
 
 export type AuditEntry = {
   eventType: AuditEventType;
-  actor: AuditActor;
+  actor: AuditActor | TrustedContactAuditActor;
   subjectType?: string;
   subjectId?: string;
   metadata?: AuditMetadata;

@@ -8,7 +8,9 @@ export type MediaScope =
   | { kind: 'messages'; id: string }
   | { kind: 'memory-vault'; id: string }
   // A released message, viewed by a signed-in Recipient (read-only).
-  | { kind: 'recipient/messages'; id: string };
+  | { kind: 'recipient/messages'; id: string }
+  // Phase 09: a Person I Love's profile photo (PHOTO only, one current).
+  | { kind: 'recipients'; id: string };
 
 export type MediaKind = 'PHOTO' | 'AUDIO';
 export type MediaStatus = 'PENDING_UPLOAD' | 'READY' | 'FAILED';
@@ -46,8 +48,15 @@ export const MAX_BYTES: Record<MediaKind, number> = {
   AUDIO: 100 * 1024 * 1024,
 };
 
+// Backend default RECIPIENT_PHOTO_MAX_BYTES (Phase 09); the server stays authoritative.
+export const RECIPIENT_PHOTO_MAX_BYTES = 5 * 1024 * 1024;
+
 /** Client-side check before asking for an upload URL; null when acceptable. */
-export function checkFile(kind: MediaKind, file: Pick<File, 'type' | 'size'>): string | null {
+export function checkFile(
+  kind: MediaKind,
+  file: Pick<File, 'type' | 'size'>,
+  maxBytes = MAX_BYTES[kind],
+): string | null {
   // file.type comes from the browser's sniffing/OS mapping, not only the name.
   const type = file.type.split(';')[0].trim().toLowerCase();
   if (!MIME_TYPES[kind].includes(type)) {
@@ -56,13 +65,14 @@ export function checkFile(kind: MediaKind, file: Pick<File, 'type' | 'size'>): s
       : 'Please choose an MP3, M4A, WebM or WAV audio file.';
   }
   if (file.size <= 0) return 'This file is empty.';
-  if (file.size > MAX_BYTES[kind]) {
-    return `This file is larger than ${MAX_BYTES[kind] / 1024 / 1024} MB.`;
+  if (file.size > maxBytes) {
+    return `This file is larger than ${maxBytes / 1024 / 1024} MB.`;
   }
   return null;
 }
 
-const base = (scope: MediaScope) => `/${scope.kind}/${scope.id}/media`;
+const base = (scope: MediaScope) =>
+  scope.kind === 'recipients' ? `/recipients/${scope.id}/photo` : `/${scope.kind}/${scope.id}/media`;
 
 export const mediaApi = {
   list: async (scope: MediaScope, signal?: AbortSignal) => {

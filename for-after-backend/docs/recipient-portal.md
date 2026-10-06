@@ -135,7 +135,7 @@ planned "3 OTP requests per minute"; the per-15-minute limits above replace that
 ### Delivery (provider-neutral)
 
 `RecipientOtpDelivery` (`sendOtp({ email, code, expiresInSeconds })`) is the only seam. Since Step 24 it emails the
-code through `EMAIL_PROVIDER` (`resend` in production; `console` prints it in development; `disabled` sends nothing),
+code through `EMAIL_PROVIDER` (`brevo`; `console` prints it in development; `disabled` sends nothing),
 directly rather than through a queue, so the plaintext code never sits in Redis. See
 [email-production-setup.md](email-production-setup.md). A released message also sends the Recipient one
 "A message is waiting for you" email (no content, a link to `/recipient/sign-in`).

@@ -1,6 +1,6 @@
 'use client';
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ApiError } from '@/lib/api/errors';
 import { memoryVaultApi, type Memory, type MemoryCategory, type MemoryInput } from '@/lib/api/memory-vault';
 import {
@@ -14,6 +14,7 @@ import {
 import {
   recipientsApi,
   trustedContactsApi,
+  type Page,
   type Recipient,
   type RecipientInput,
   type TrustedContact,
@@ -84,14 +85,40 @@ function resourceHooks<T extends { id: string }, Input>(
 }
 
 // Removing or renaming someone changes the recipient summaries on messages.
-export const recipients = resourceHooks<Recipient, RecipientInput>(queryKeys.recipients, recipientsApi, [
+// useList is everyone (the message picker); usePage is the People I Love list.
+const recipientHooks = resourceHooks<Recipient, RecipientInput>(queryKeys.recipients, recipientsApi, [
   queryKeys.recipients,
+  queryKeys.recipientPages,
   queryKeys.messages,
 ]);
-export const trustedContacts = resourceHooks<TrustedContact, TrustedContactInput>(
+export const recipients = {
+  ...recipientHooks,
+  usePage: (page: number) =>
+    useQuery<Page<Recipient>, ApiError>({
+      queryKey: queryKeys.recipientPage(page),
+      queryFn: ({ signal }) => recipientsApi.page(page, signal),
+      // The current page stays on screen while the next one loads.
+      placeholderData: keepPreviousData,
+    }),
+};
+const trustedContactHooks = resourceHooks<TrustedContact, TrustedContactInput>(
   queryKeys.trustedContacts,
   trustedContactsApi,
 );
+export const trustedContacts = {
+  ...trustedContactHooks,
+  /** Phase 10: send or resend the email invitation. */
+  useInvite: (id: string) => {
+    const qc = useQueryClient();
+    return useMutation<TrustedContact, ApiError, void>({
+      mutationFn: () => trustedContactsApi.invite(id),
+      onSuccess: (item) => {
+        qc.setQueryData(queryKeys.trustedContact(id), item);
+        return qc.invalidateQueries({ queryKey: queryKeys.trustedContacts, exact: true });
+      },
+    });
+  },
+};
 export const messages = resourceHooks<Message, MessageInput>(queryKeys.messages, messagesApi);
 
 // Memory Vault lists are filtered by category, so lists live under their own

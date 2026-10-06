@@ -93,13 +93,17 @@ export class ReleaseNotificationProcessor
         grant: {
           select: {
             recipientEmailNormalized: true,
-            message: { select: { status: true } },
+            recipient: { select: { firstName: true } },
+            message: { select: { status: true, deletedAt: true } },
           },
         },
       },
     });
     const to = row?.grant.recipientEmailNormalized;
-    if (!row || !to || row.grant.message.status !== 'RELEASED') return 'stale';
+    // Same rule as Recipient sign-in (eligibleGrant): never announce a message
+    // the Recipient could not then open.
+    const { status, deletedAt } = row?.grant.message ?? {};
+    if (!row || !to || status !== 'RELEASED' || deletedAt) return 'stale';
     if (row.status === 'SENT') return 'already_sent';
 
     try {
@@ -108,7 +112,10 @@ export class ReleaseNotificationProcessor
         to,
         // A retry after a lost response is not sent twice.
         idempotencyKey: `release-notification/${id}`,
-        ...messageReleased(this.config.settings.appBaseUrl),
+        ...messageReleased(
+          this.config.settings.appBaseUrl,
+          row.grant.recipient.firstName,
+        ),
       });
       await this.prisma.releaseNotification.update({
         where: { id },

@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma } from '../generated/prisma/client.js';
+import { paginate } from '../audit/audit-log.service.js';
+import { MediaAssetStatus, Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateRecipientDto } from './dto/create-recipient.dto.js';
 import { UpdateRecipientDto } from './dto/update-recipient.dto.js';
@@ -16,21 +17,34 @@ const recipientSelect = {
   privateNote: true,
   createdAt: true,
   updatedAt: true,
+  // Phase 09: the current photo's id only (or none). Its signed URL is asked
+  // for separately, when an avatar is actually shown.
+  photos: {
+    where: { status: MediaAssetStatus.READY, deletedAt: null },
+    select: { id: true },
+    take: 1,
+  },
 } satisfies Prisma.RecipientSelect;
 
 type RecipientRow = Prisma.RecipientGetPayload<{
   select: typeof recipientSelect;
 }>;
-export type RecipientResponse = Omit<RecipientRow, 'birthday'> & {
+export type RecipientResponse = Omit<RecipientRow, 'birthday' | 'photos'> & {
   birthday: string | null;
+  photoId: string | null;
+};
+export type RecipientPage = {
+  items: RecipientResponse[];
+  pagination: ReturnType<typeof paginate>;
 };
 
 // Same message whether the row is missing, deleted or someone else's.
 const NOT_FOUND = 'Recipient not found.';
 
-const toResponse = (row: RecipientRow): RecipientResponse => ({
+const toResponse = ({ photos, ...row }: RecipientRow): RecipientResponse => ({
   ...row,
   birthday: row.birthday?.toISOString().slice(0, 10) ?? null,
+  photoId: photos[0]?.id ?? null,
 });
 
 // Explicit field list, so nothing else from a request can reach the database.
@@ -65,14 +79,31 @@ export class RecipientsService {
     return toResponse(row);
   }
 
-  // ponytail: unpaginated; add take/cursor if customers reach hundreds of recipients.
-  async findAllForOwner(ownerUserId: string): Promise<RecipientResponse[]> {
-    const rows = await this.prisma.recipient.findMany({
-      where: { ownerUserId, deletedAt: null },
-      orderBy: { createdAt: 'desc' },
-      select: recipientSelect,
-    });
-    return rows.map(toResponse);
+  /**
+   * One page of the owner's live recipients, newest first (id breaks ties, so
+   * pages never overlap or skip). The count uses the same owner filter: no
+   * other Customer's rows are ever counted. A page past the end is empty.
+   */
+  async findAllForOwner(
+    ownerUserId: string,
+    page: number,
+    limit: number,
+  ): Promise<RecipientPage> {
+    const where = { ownerUserId, deletedAt: null };
+    const [total, rows] = await this.prisma.$transaction([
+      this.prisma.recipient.count({ where }),
+      this.prisma.recipient.findMany({
+        where,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * limit,
+        take: limit,
+        select: recipientSelect,
+      }),
+    ]);
+    return {
+      items: rows.map(toResponse),
+      pagination: paginate(page, limit, total),
+    };
   }
 
   async findOwnedById(

@@ -1,7 +1,11 @@
+'use client';
+
 import { ChevronRight, Mail, Phone } from 'lucide-react';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
+import { useAccessUrl } from '@/hooks/use-media';
 import { fullName, initials } from '@/lib/format';
+import { cn } from '@/lib/utils';
 
 type Person = {
   firstName: string;
@@ -11,18 +15,49 @@ type Person = {
   mobile: string | null;
 };
 
-export function PersonAvatar({ person, size = 'md' }: { person: Pick<Person, 'firstName' | 'lastName'>; size?: 'md' | 'lg' }) {
+/** A Recipient's photo (Phase 09): which Recipient, and its current photo id. */
+export type AvatarPhoto = { recipientId: string; photoId: string | null };
+
+/**
+ * Initials, or the private photo when there is one. The photo comes from a
+ * short-lived signed URL fetched only for avatars actually shown; initials
+ * stay visible while it loads or if it can't be loaded, never a broken image.
+ */
+export function PersonAvatar({
+  person,
+  size = 'md',
+  photo,
+}: {
+  person: Pick<Person, 'firstName' | 'lastName'>;
+  size?: 'md' | 'lg';
+  photo?: AvatarPhoto;
+}) {
   return (
     <span
       aria-hidden
-      className={
-        size === 'lg'
-          ? 'flex size-20 shrink-0 items-center justify-center rounded-full bg-primary-soft font-heading text-3xl text-primary'
-          : 'flex size-12 shrink-0 items-center justify-center rounded-full bg-primary-soft font-heading text-xl text-primary'
-      }
+      className={cn(
+        'relative flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary-soft font-heading text-primary',
+        size === 'lg' ? 'size-20 text-3xl' : 'size-12 text-xl',
+      )}
     >
       {initials(person)}
+      {photo?.photoId && <AvatarPhotoImage recipientId={photo.recipientId} photoId={photo.photoId} />}
     </span>
+  );
+}
+
+function AvatarPhotoImage({ recipientId, photoId }: { recipientId: string; photoId: string }) {
+  const access = useAccessUrl({ kind: 'recipients', id: recipientId }, photoId);
+  if (!access.data) return null;
+  return (
+    // Signed, private, short-lived: plain <img>, never next/image's server cache.
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={access.data.url}
+      alt=""
+      className="absolute inset-0 size-full object-cover"
+      onError={() => void access.refetch()}
+    />
   );
 }
 
@@ -46,13 +81,23 @@ export function ContactCues({ person }: { person: Pick<Person, 'email' | 'mobile
 }
 
 /** One person as a calm row-card: avatar, name, relationship, cues. */
-export function PersonCard({ person, href, extra }: { person: Person; href: string; extra?: ReactNode }) {
+export function PersonCard({
+  person,
+  href,
+  extra,
+  photo,
+}: {
+  person: Person;
+  href: string;
+  extra?: ReactNode;
+  photo?: AvatarPhoto;
+}) {
   return (
     <Link
       href={href}
       className="group flex items-center gap-4 rounded-lg border border-border bg-surface p-5 outline-none transition-colors hover:border-border-strong focus-visible:outline-2 focus-visible:outline-ring"
     >
-      <PersonAvatar person={person} />
+      <PersonAvatar person={person} photo={photo} />
       <span className="grid min-w-0 flex-1 gap-1">
         <span className="truncate font-heading text-2xl leading-tight">{fullName(person)}</span>
         <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-foreground-muted">

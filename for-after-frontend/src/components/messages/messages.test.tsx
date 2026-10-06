@@ -2,7 +2,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { Message } from '@/lib/api/messages';
-import { json, renderWithClient, routeFetch, router } from '@/test/utils';
+import { json, renderWithClient, routeFetch, router, page } from '@/test/utils';
 import { MessageDetail } from './message-detail';
 import { EditMessage, NewMessage } from './message-form';
 import { MessageList } from './message-list';
@@ -59,7 +59,7 @@ describe('Messages', () => {
 
   it('creates a draft with the chosen type and people; VIDEO is not offered', async () => {
     const api = routeFetch({
-      'GET /recipients': json(200, [person('r1', 'Sofia'), person('r2', 'Tom')]),
+      'GET /recipients': json(200, page([person('r1', 'Sofia'), person('r2', 'Tom')])),
       'POST /messages': json(201, message()),
     });
     renderWithClient(<NewMessage />);
@@ -87,7 +87,7 @@ describe('Messages', () => {
   it('edits a draft with PATCH', async () => {
     const api = routeFetch({
       'GET /messages/m1': json(200, message()),
-      'GET /recipients': json(200, [person('r1', 'Sofia')]),
+      'GET /recipients': json(200, page([person('r1', 'Sofia')])),
       'PATCH /messages/m1': json(200, message({ title: 'New title' })),
     });
     renderWithClient(<EditMessage id="m1" />);
@@ -100,7 +100,7 @@ describe('Messages', () => {
   });
 
   it('does not offer editing for a scheduled message: it explains unschedule-to-edit', async () => {
-    const api = routeFetch({ 'GET /messages/m1': json(200, message({ status: 'SCHEDULED' })), 'GET /recipients': json(200, []) });
+    const api = routeFetch({ 'GET /messages/m1': json(200, message({ status: 'SCHEDULED' })), 'GET /recipients': json(200, page([])) });
     renderWithClient(<EditMessage id="m1" />);
     expect(await screen.findByText('This message is scheduled')).toBeInTheDocument();
     expect(screen.getByText(/unschedule it first: it goes back to being a draft, and nothing in it is deleted/)).toBeInTheDocument();
@@ -226,7 +226,7 @@ describe('Scheduling a draft', () => {
 });
 
 describe('Creating a draft, then going to scheduling', () => {
-  const people = { 'GET /recipients': json(200, [person('r1', 'Sofia')]) };
+  const people = { 'GET /recipients': json(200, page([person('r1', 'Sofia')])) };
 
   async function fillTextDraft() {
     await userEvent.click(await screen.findByRole('checkbox', { name: /Sofia/ }));

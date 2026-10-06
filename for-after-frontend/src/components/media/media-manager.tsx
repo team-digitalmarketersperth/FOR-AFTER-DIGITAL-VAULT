@@ -113,7 +113,7 @@ export function MediaManager({
   );
 }
 
-function FilePick({
+export function FilePick({
   kind,
   label,
   icon,
@@ -148,7 +148,7 @@ function FilePick({
   );
 }
 
-function UploadProgress({
+export function UploadProgress({
   state,
   onCancel,
 }: {

@@ -9,6 +9,7 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
+import { ApiCookieAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { CustomerGuard } from '../auth/guards/customer.guard.js';
 import { SessionAuthGuard } from '../auth/guards/session-auth.guard.js';
@@ -20,9 +21,12 @@ import {
   MediaService,
   type UploadUrlResponse,
 } from './media.service.js';
+import { AUTH } from '../config/swagger.js';
 
 // Owner-only. File bytes never pass through here: clients PUT/GET the bucket
 // directly with the short-lived signed URLs returned below.
+@ApiTags('Media')
+@ApiCookieAuth(AUTH.customer)
 @Controller('messages/:messageId/media')
 @UseGuards(SessionAuthGuard, CustomerGuard)
 export class MediaController {

@@ -13,6 +13,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { ApiCookieAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { CustomerGuard } from '../auth/guards/customer.guard.js';
 import { SessionAuthGuard } from '../auth/guards/session-auth.guard.js';
@@ -31,6 +32,7 @@ import {
   type PromptWithResponse,
   type StoryResponse,
 } from './my-story.service.js';
+import { AUTH } from '../config/swagger.js';
 
 export const PROMPT_NOT_FOUND = 'Prompt not found.';
 
@@ -49,6 +51,8 @@ export class PromptKeyPipe implements PipeTransform<string, MyStoryPrompt> {
 }
 
 // The owner is always the session user; ownership is enforced in the service.
+@ApiTags('My Story')
+@ApiCookieAuth(AUTH.customer)
 @Controller('my-story/prompts')
 @UseGuards(SessionAuthGuard, CustomerGuard)
 export class MyStoryController {

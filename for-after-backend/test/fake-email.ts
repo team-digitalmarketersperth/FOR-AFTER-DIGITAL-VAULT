@@ -6,7 +6,7 @@ import {
 } from '../src/email/email-provider.js';
 
 /**
- * Step 24 test inbox: records every send (no network, no Resend). Failures can
+ * Step 24 test inbox: records every send (no network, no provider). Failures can
  * be queued to simulate a provider outage. It deliberately does NOT dedupe by
  * idempotency key, so tests prove the app itself sends once.
  */
@@ -14,9 +14,12 @@ export class FakeEmailProvider extends EmailProvider {
   readonly name = 'fake';
   readonly sent: EmailMessage[] = [];
   readonly failures: EmailSendError[] = [];
+  /** Failures for one address only, so other Recipients are unaffected. */
+  readonly failuresFor = new Map<string, EmailSendError[]>();
 
   send(message: EmailMessage) {
-    const failure = this.failures.shift();
+    const failure =
+      this.failuresFor.get(message.to)?.shift() ?? this.failures.shift();
     if (failure) return Promise.reject(failure);
     this.sent.push(message);
     return Promise.resolve({ providerMessageId: `fake-${this.sent.length}` });
@@ -39,5 +42,17 @@ export class FakeEmailProvider extends EmailProvider {
   failNext(count: number, code = 'rate_limit_exceeded', retryable = true) {
     for (let i = 0; i < count; i++)
       this.failures.push(new EmailSendError(code, retryable));
+  }
+
+  failNextFor(
+    email: string,
+    count: number,
+    code = 'rate_limit_exceeded',
+    retryable = true,
+  ) {
+    const queue = this.failuresFor.get(email) ?? [];
+    for (let i = 0; i < count; i++)
+      queue.push(new EmailSendError(code, retryable));
+    this.failuresFor.set(email, queue);
   }
 }

@@ -65,10 +65,14 @@ All responses are returned in JSON format. The standard error format includes th
 | `POST` | `/auth/logout` | Ends the Customer session only. Admins use `POST /admin-auth/logout` (audited `ADMIN_LOGOUT`) |
 | `GET` | `/auth/me` | Current user profile (also the profile read for account settings, Step 22) |
 | `POST` | `/auth/change-password` | Step 22, Customer only. Body exactly `{currentPassword, newPassword}` (new: 12–128, same rule as register, must differ). `200 {success: true}`; this browser gets a new session id, every other session of the Customer gets `401`. Wrong current password `400` (never `401`); 5/min per IP; audited `PASSWORD_CHANGED`. Admins `403`, Recipient/Trusted Contact `401` |
-| `POST` | `/auth/verify-email` | Verify email token |
-| `POST` | `/auth/resend-verification` | Resend activation |
-| `POST` | `/auth/forgot-password` | Request reset email |
-| `POST` | `/auth/reset-password` | Execute password reset |
+| `POST` | `/auth/verify-email` | Phase 04. `{token}` from the emailed link → `200 {verified: true}`, sets `emailVerifiedAt`. Wrong/expired/used → `400 "This link is invalid or has expired."`. 10/min per IP |
+| `POST` | `/auth/resend-verification` | Phase 04. `{email}` → always `202` with the same message; a new link only for an ACTIVE unverified account (max 3/hour per account). 10/hour per IP |
+| `POST` | `/auth/forgot-password` | Phase 04. `{email}` → always `202 {message: "If an account exists for that email, password reset instructions have been sent."}`; a 60-minute single-use link for an ACTIVE Customer (max 3/hour per account). 10/hour per IP |
+| `POST` | `/auth/reset-password` | Phase 04. `{token, newPassword}` (registration rule) → `200 {success: true}`; every existing session ends, none is created; audited `PASSWORD_RESET_COMPLETED`. Bad link `400` as above. 5/min per IP |
+| `POST` | `/auth/change-email` | Phase 08, Customer only. `{newEmail, currentPassword}` → `202 {pendingEmail}` (masked); emails a 24 h single-use link to the NEW address; `User.email` unchanged until confirmed. Wrong password `400`, same address `400`, address in use `409`, 3 links/hour per account (`429`); 5/min per IP |
+| `POST` | `/auth/change-email/resend` | Phase 08, Customer only. New link for the pending address (old one stops working) → `202 {pendingEmail}`; none pending `400`. 10/hour per IP |
+| `POST` | `/auth/change-email/cancel` | Phase 08, Customer only. Ends the pending request → `200 {success: true}` |
+| `POST` | `/auth/change-email/confirm` | Phase 08, public (the token authorizes only this). `{token}` → `200 {changed: true}`: email changed and verified, every session of the account ends, no session created, old address notified. Bad link `400 "This link is invalid or has expired."`; address taken meanwhile `409`. 10/min per IP |
 | `POST` | `/auth/2fa/*` | Planned optional Customer 2FA. Admin TOTP is built under `/admin-auth` (below) |
 
 ### Admin Auth (Step 16)
@@ -114,18 +118,22 @@ Details, limits and error rules: `docs/recipient-portal.md`.
 ### Users
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
-| `PATCH` | `/users/me` | Step 22, Customer only. Body: `firstName` and/or `lastName` (trimmed, 1–100, cannot be cleared or `null`). Any other field (email, role, status, id…) is `400`. Returns the same user as `GET /auth/me`. Admins `403`, Recipient/Trusted Contact `401`. There is no `/users/:id`. Email change (with verification) is not built; email is read-only |
+| `PATCH` | `/users/me` | Step 22, Customer only. Body: `firstName` and/or `lastName` (trimmed, 1–100, cannot be cleared or `null`). Any other field (email, role, status, id…) is `400`. Returns the same user as `GET /auth/me`. Admins `403`, Recipient/Trusted Contact `401`. There is no `/users/:id`. The email changes only through `POST /auth/change-email` (Phase 08) |
 
 Admin user listing is `/admin/users` (Step 16); there is deliberately no admin create/role-edit/delete API.
 
 ### Recipients (People I Love)
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
-| `GET` | `/recipients` | List loved ones |
+| `GET` | `/recipients` | Phase 09: one page of the Customer's live recipients, newest first (`createdAt` desc, `id` desc). `?page=1&limit=25` (limit max 100; `page`/`limit` must be whole numbers ≥ 1, anything else `400`) → `{items, pagination: {page, limit, total, pages}}`, the admin lists' envelope. `total` counts only this Customer's live recipients; a page past the end is empty. Each item has `photoId` (current photo, or `null`) |
 | `POST` | `/recipients` | Create recipient (body: `firstName`, `lastName`, `relationship`, `email`, `mobile`) |
 | `GET` | `/recipients/:id` | Get recipient |
 | `PATCH` | `/recipients/:id` | Update recipient |
-| `DELETE`| `/recipients/:id` | Remove recipient (soft delete, 204) |
+| `DELETE`| `/recipients/:id` | Remove recipient (soft delete, 204); its photo is soft-deleted and its object removed (best effort) |
+| `POST` | `/recipients/:id/photo/upload-url` | Phase 09. Body like media uploads (`kind: PHOTO`, `originalFileName`, `mimeType` JPEG/PNG/WebP, `sizeBytes` ≤ `RECIPIENT_PHOTO_MAX_BYTES`, 5 MB) → `{mediaAssetId, uploadUrl, expiresAt, requiredHeaders}` (10 min presigned PUT). Foreign/deleted recipient `404` |
+| `POST` | `/recipients/:id/photo/:photoId/complete` | HEAD-verifies size/type, then READY **and** current in one transaction (the previous photo is superseded only now; its object removed after commit, best effort). Not uploaded `409`, mismatch `400` (FAILED) |
+| `GET` | `/recipients/:id/photo/:photoId/access-url` | `{url, expiresAt}`: 5 min signed GET for the current READY photo only; never stored or logged |
+| `DELETE` | `/recipients/:id/photo/:photoId` | Removes the photo (or cancels a pending upload) → `204`; the Recipient shows initials (`photoId: null`) |
 
 "People I Love" = `Recipient`. All five routes require a session **and** the `CUSTOMER` role (others get 403).
 Every query is scoped to the session user's id (`ownerUserId`), which is never accepted from the body.
@@ -138,10 +146,11 @@ Responses never include `ownerUserId` or `deletedAt`.
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
 | `GET` | `/trusted-contacts` | List trusted contacts |
-| `POST` | `/trusted-contacts` | Add trusted contact (no invite is sent yet) |
+| `POST` | `/trusted-contacts` | Add trusted contact; with an email, the invitation is emailed (Phase 10). Third active contact → `409` |
 | `GET` | `/trusted-contacts/:id` | Get trusted contact |
 | `PATCH` | `/trusted-contacts/:id` | Update trusted contact |
-| `DELETE`| `/trusted-contacts/:id` | Remove trusted contact (soft delete, 204) |
+| `DELETE`| `/trusted-contacts/:id` | Remove trusted contact (soft delete, 204); a pending invitation is cancelled |
+| `POST` | `/trusted-contacts/:id/invitation` | Phase 10: send/resend the email invitation → `200` contact. No email `409`, already accepted `409`, 3/hour per contact `429`, send failed `503` |
 
 Same rules as Recipients: all five routes require a session **and** the `CUSTOMER` role (others get 403).
 Every query is scoped to the session user's id, which is never accepted from the body.
@@ -150,8 +159,11 @@ A non-UUID `:id` returns 400, and responses never include `ownerUserId` or `dele
 Body fields: `firstName` (required), `lastName`, `relationship`, `email`, `mobile`.
 **At least one of `email` / `mobile` is required, and must remain after any PATCH**: clearing the last one returns 400.
 A trusted contact is not a User and gets no access to the owner's content. Since Step 14 the contact can sign in by email OTP
-to report a death (see "Trusted Contact Auth & Portal" below); nothing is sent to them when they are added.
-There is no maximum per customer yet; the PRD says "1 or 2", but PROJECT_OVERVIEW �58 lists this as open.
+to report a death (see "Trusted Contact Auth & Portal" below).
+**Phase 10:** at most **2 active** Trusted Contacts per Customer (removed ones do not count; concurrent creates are
+serialised by a lock on the Customer row). Every response carries `invitation: {status, sentAt}` with status
+`PENDING | ACCEPTED | DECLINED | EXPIRED | NOT_SENT | UNAVAILABLE` (no email: SMS invitations are deferred). Details:
+[trusted-contact-auth.md](trusted-contact-auth.md) §9–11.
 
 ### Messages
 | Method | Endpoint | Description |
@@ -315,8 +327,11 @@ unknown and other people's Messages are all `404`. Replaces the planned `/recipi
 | `GET` | `/trusted-contact-auth/me` | `{authenticated: true, email}` |
 | `POST` | `/trusted-contact-auth/logout` | `204`, clears the Trusted Contact session and cookie |
 | `GET` | `/trusted-contact/accounts` | `[{trustedContactId, accountHolder: {displayName}, relationship, hasPreservedContent, deathVerificationStatus}]` |
-| `POST` | `/trusted-contact/accounts/:trustedContactId/death-reports` | `{reportedDateOfDeath?, note?, confirmReport: true}` → `201`; case opens `PENDING_VERIFICATION` and moves to `SAFEGUARD_ACTIVE` once the safety notice is sent (Step 15); same contact again `409`; closed case `409` |
-| `GET` | `/trusted-contact/accounts/:trustedContactId/death-verification` | `{status, reportedByYou, openedAt}` (`status` `null` when no case) |
+| `POST` | `/trusted-contact/accounts/:trustedContactId/death-reports` | `{reportedDateOfDeath?, note?, confirmReport: true}` → `201`; case opens `PENDING_VERIFICATION` and moves to `SAFEGUARD_ACTIVE` once the safety notice is sent (Step 15); same contact again `409`; after `CANCELLED`/`REJECTED` a new case is opened (Phase 10); `VERIFIED` `409` |
+| `GET` | `/trusted-contact/accounts/:trustedContactId/death-verification` | `{status, reportedByYou, openedAt, canReport}` about the current (newest) case (`status` `null` when no case) |
+| `POST` | `/trusted-contact/invitation/view` | Phase 10, no session: `{token}` → `{status, accountHolder: {displayName} \| null}`; unknown token `404` |
+| `POST` | `/trusted-contact/invitation/accept` | Phase 10, no session: `PENDING → ACCEPTED` (atomic); returns the view; creates no session |
+| `POST` | `/trusted-contact/invitation/decline` | Phase 10, no session: `PENDING → DECLINED`; returns the view |
 
 Trusted Contact session only; Customer and Recipient sessions get `401`, and a Trusted Contact session gets `401` on every
 Customer and Recipient route. A `:trustedContactId` that is not one of the signed-in email's active relationships is `404`.

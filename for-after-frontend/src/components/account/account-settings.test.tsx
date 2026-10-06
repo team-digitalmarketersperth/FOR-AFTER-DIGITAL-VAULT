@@ -282,6 +282,87 @@ describe('Account settings: password', () => {
   });
 });
 
+describe('Account settings: change email (Phase 08)', () => {
+  const emailDialog = () => within(screen.getByRole('dialog', { name: /Change email|Verification email sent/ }));
+  const openEmailDialog = async () => {
+    await userEvent.click(profile().getByRole('button', { name: 'Change email' }));
+    return screen.findByRole('dialog', { name: 'Change email' });
+  };
+  const fillEmail = async (newEmail: string, password: string) => {
+    await openEmailDialog();
+    if (newEmail) await userEvent.type(emailDialog().getByLabelText('New email'), newEmail);
+    if (password) await userEvent.type(emailDialog().getByLabelText('Current password'), password);
+    await userEvent.click(emailDialog().getByRole('button', { name: 'Send verification' }));
+  };
+
+  it('the email stays read-only text; the change opens a separate dialog', async () => {
+    await renderPage();
+    expect(profile().queryByRole('textbox', { name: /email/i })).not.toBeInTheDocument();
+    await openEmailDialog();
+    expect(emailDialog().getByLabelText('New email')).toHaveValue('');
+  });
+
+  it('validates before calling the API', async () => {
+    const { api } = await renderPage();
+    await fillEmail('not-an-email', '');
+    expect(await emailDialog().findByText('Enter a valid email address.')).toBeInTheDocument();
+    expect(emailDialog().getByText('Enter your current password.')).toBeInTheDocument();
+    expect(api.called('POST', '/auth/change-email')).toHaveLength(0);
+  });
+
+  it('sends the two fields, shows the masked pending address, and never touches the profile form', async () => {
+    const { api } = await renderPage({
+      'POST /auth/change-email': json(202, { pendingEmail: 'n***@example.com' }),
+      'POST /auth/change-email/resend': json(202, { pendingEmail: 'n***@example.com' }),
+    });
+    await fillEmail('new@example.com', 'StrongPassword123!');
+    expect(await screen.findByRole('dialog', { name: 'Verification email sent' })).toBeInTheDocument();
+    expect(emailDialog().getByText('n***@example.com')).toBeInTheDocument();
+    expect(api.called('POST', '/auth/change-email')).toEqual([
+      expect.objectContaining({ body: { newEmail: 'new@example.com', currentPassword: 'StrongPassword123!' } }),
+    ]);
+    // The dialog's submit must not reach the profile form around it.
+    expect(api.called('PATCH', '/users/me')).toHaveLength(0);
+    await userEvent.click(emailDialog().getByRole('button', { name: 'Resend link' }));
+    expect(await emailDialog().findByText('A new link is on its way.')).toBeInTheDocument();
+    expect(api.called('POST', '/auth/change-email/resend')).toHaveLength(1);
+    await userEvent.click(emailDialog().getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    // Nothing changed yet: the page still shows the current address.
+    expect(profile().getByText('ada@example.com')).toBeInTheDocument();
+  });
+
+  it('a wrong password shows the API message and clears only the password', async () => {
+    await renderPage({
+      'POST /auth/change-email': json(400, { message: 'Your current password is incorrect.' }),
+    });
+    await fillEmail('new@example.com', 'not-my-password');
+    expect(await emailDialog().findByText('Your current password is incorrect.')).toBeInTheDocument();
+    expect(emailDialog().getByLabelText('Current password')).toHaveValue('');
+    expect(emailDialog().getByLabelText('New email')).toHaveValue('new@example.com');
+    expect(router.replace).not.toHaveBeenCalledWith('/login');
+  });
+
+  it('an address in use shows the API conflict message', async () => {
+    await renderPage({
+      'POST /auth/change-email': json(409, { message: 'An account with this email already exists.' }),
+    });
+    await fillEmail('taken@example.com', 'StrongPassword123!');
+    expect(await emailDialog().findByText('An account with this email already exists.')).toBeInTheDocument();
+  });
+
+  it('cancelling a pending request closes the dialog', async () => {
+    const { api } = await renderPage({
+      'POST /auth/change-email': json(202, { pendingEmail: 'n***@example.com' }),
+      'POST /auth/change-email/cancel': json(200, { success: true }),
+    });
+    await fillEmail('new@example.com', 'StrongPassword123!');
+    await userEvent.click(await emailDialog().findByRole('button', { name: 'Cancel request' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(api.called('POST', '/auth/change-email/cancel')).toHaveLength(1);
+  });
+});
+
 describe('Account menu', () => {
   it('links to Account settings', async () => {
     await renderPage();

@@ -2,6 +2,7 @@ import { ConfigModule } from '@nestjs/config';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import session from 'express-session';
+import { ThrottlerStorage, ThrottlerStorageService } from '@nestjs/throttler';
 import request from 'supertest';
 import { AdminMfaService } from '../admin-auth/admin-mfa.service.js';
 import { configureApp } from '../config/app.setup.js';
@@ -12,6 +13,7 @@ import {
   UsersService,
 } from '../users/users.service.js';
 import { RedisService } from '../redis/redis.service.js';
+import { AuthTokensService } from './auth-tokens.service.js';
 import { AuthModule } from './auth.module.js';
 
 // In-memory stand-in for the database; the HTTP, validation, session and
@@ -105,6 +107,12 @@ describe('Auth HTTP flow', () => {
       .useValue(adminMfa)
       .overrideProvider(RedisService)
       .useValue({})
+      // Redis-backed in the app (redis-throttler.storage.spec + e2e); the
+      // throttler's own in-memory storage here keeps this test self-contained.
+      .overrideProvider(ThrottlerStorage)
+      .useClass(ThrottlerStorageService)
+      .overrideProvider(AuthTokensService)
+      .useValue({ sendVerification: vi.fn(async () => undefined) })
       .compile();
     users = moduleRef.get(UsersService);
     app = moduleRef.createNestApplication<NestExpressApplication>();
@@ -112,7 +120,9 @@ describe('Auth HTTP flow', () => {
     await app.init();
   };
 
-  beforeAll(boot);
+  // Boots a whole Nest app; under a full parallel run (Argon2-heavy suites)
+  // that can take longer than the 10 s default hook timeout.
+  beforeAll(boot, 30_000);
 
   afterAll(() => app.close());
 

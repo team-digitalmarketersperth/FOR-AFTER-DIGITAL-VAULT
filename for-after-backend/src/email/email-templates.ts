@@ -84,10 +84,19 @@ export const trustedContactSignInCode = (code: string, minutes: number) =>
     minutes,
   );
 
-/** To a Recipient after a release. No sender, title or content: just the way in. */
-export function messageReleased(appBaseUrl: string): RenderedEmail {
+/**
+ * To a Recipient after a release. No sender, title or content: just the way
+ * in. Greets by the Recipient's own first name; a neutral greeting without one.
+ */
+export function messageReleased(
+  appBaseUrl: string,
+  firstName?: string | null,
+): RenderedEmail {
   const url = `${appBaseUrl}/recipient/sign-in`;
+  const name = firstName?.replace(/\s+/g, ' ').trim();
+  const greeting = name ? `Hi ${name},` : 'Hello,';
   const lines = [
+    greeting,
     'Something has been left for you in For After.',
     'Sign in securely with this email address to view it. We will send you a one-time code.',
   ];
@@ -128,3 +137,140 @@ export function deathSafety(
     text: `For After\n\nPlease check your For After account\n\nHello ${displayName},\n\n${lines.join('\n\n')}\n\nSign in to For After: ${url}\n\n${note}\n\n${FOOTER}\n`,
   };
 }
+
+/**
+ * Phase 04. A single-use link that only works for its lifetime. The token is in
+ * the link (the only place it exists); no session, code or account details.
+ */
+function accountLink(
+  title: string,
+  firstName: string | null | undefined,
+  lines: string[],
+  label: string,
+  url: string,
+  note: string,
+): RenderedEmail {
+  const name = firstName?.replace(/\s+/g, ' ').trim();
+  const greeting = name ? `Hi ${name},` : 'Hello,';
+  return {
+    subject: title,
+    html: layout(
+      title,
+      `${[greeting, ...lines].map((l) => para(escape(l))).join('')}${button(label, url)}${para(`<span style="color:${C.muted};font-size:14px;">${escape(note)}</span>`)}`,
+      escape(
+        `${FOOTER} If the button doesn't work, copy this link into your browser: ${url}`,
+      ),
+    ),
+    text: `For After\n\n${title}\n\n${greeting}\n\n${lines.join('\n\n')}\n\n${label}: ${url}\n\n${note}\n\n${FOOTER}\n`,
+  };
+}
+
+const lifetime = (seconds: number) =>
+  seconds >= 172_800
+    ? `${Math.round(seconds / 86_400)} days`
+    : seconds >= 7200
+      ? `${Math.round(seconds / 3600)} hours`
+      : `${Math.max(1, Math.round(seconds / 60))} minutes`;
+
+export const verifyEmail = (
+  appBaseUrl: string,
+  token: string,
+  firstName: string | null | undefined,
+  expiresInSeconds: number,
+) =>
+  accountLink(
+    'Verify your For After email',
+    firstName,
+    ['Please verify your email address to continue using For After.'],
+    'Verify email',
+    `${appBaseUrl}/verify-email?token=${encodeURIComponent(token)}`,
+    `This link expires in ${lifetime(expiresInSeconds)} and can be used once. If you didn't create a For After account, you can ignore this email.`,
+  );
+
+export const resetPassword = (
+  appBaseUrl: string,
+  token: string,
+  firstName: string | null | undefined,
+  expiresInSeconds: number,
+) =>
+  accountLink(
+    'Reset your For After password',
+    firstName,
+    [
+      'We received a request to reset the password for your For After account.',
+      'Choose a new password with the button below. Your current password keeps working until you do.',
+    ],
+    'Reset password',
+    `${appBaseUrl}/reset-password?token=${encodeURIComponent(token)}`,
+    `This link expires in ${lifetime(expiresInSeconds)} and can be used once. If you didn't ask to reset your password, you can ignore this email; nothing will change.`,
+  );
+
+/** Phase 08: to the NEW address. The account's email changes only once this link is used. */
+export const changeEmail = (
+  appBaseUrl: string,
+  token: string,
+  firstName: string | null | undefined,
+  expiresInSeconds: number,
+) =>
+  accountLink(
+    'Verify your new For After email',
+    firstName,
+    [
+      'You asked to change the email address on your For After account.',
+      'Verify this new email address to complete the change. Until you do, nothing changes.',
+    ],
+    'Verify new email',
+    `${appBaseUrl}/settings/verify-email-change?token=${encodeURIComponent(token)}`,
+    `This link expires in ${lifetime(expiresInSeconds)} and can be used once. If you didn't ask for this, you can ignore this email.`,
+  );
+
+/**
+ * Phase 08: to the OLD address after a confirmed change. No link, no token and
+ * not the new address: only that it happened.
+ */
+export function emailChanged(
+  firstName: string | null | undefined,
+): RenderedEmail {
+  const title = 'Your For After email address was changed';
+  const name = firstName?.replace(/\s+/g, ' ').trim();
+  const lines = [
+    name ? `Hi ${name},` : 'Hello,',
+    'The email address on your For After account was just changed, and every device was signed out. This address no longer signs in to the account.',
+    "If you made this change, there's nothing more to do. If you didn't, contact For After support straight away.",
+  ];
+  return {
+    subject: title,
+    html: layout(
+      title,
+      lines.map((l) => para(escape(l))).join(''),
+      escape(FOOTER),
+    ),
+    text: `For After\n\n${title}\n\n${lines.join('\n\n')}\n\n${FOOTER}\n`,
+  };
+}
+
+/**
+ * Phase 10: to a newly nominated Trusted Contact (email only; SMS invitations
+ * are deferred). The account holder's display name and the role, nothing else:
+ * no preserved content, relationship label or account holder email. The link
+ * only opens the accept/decline page; it signs no one in.
+ */
+export const trustedContactInvitation = (
+  appBaseUrl: string,
+  token: string,
+  accountHolderName: string,
+  expiresInSeconds: number,
+) => {
+  const name = accountHolderName.replace(/\s+/g, ' ').trim();
+  return accountLink(
+    `You've been invited to be a Trusted Contact for ${name}`,
+    null,
+    [
+      `${name} has invited you to be one of their Trusted Contacts on For After.`,
+      'As a Trusted Contact, you may help confirm important account events, including letting For After know if they pass away. You will not be given access to their private messages or memories.',
+    ],
+    'Review invitation',
+    `${appBaseUrl}/trusted-contact/invitation?token=${encodeURIComponent(token)}`,
+    `This link expires in ${lifetime(expiresInSeconds)}. If you weren't expecting this, you can ignore this email; nothing happens unless you accept.`,
+  );
+};

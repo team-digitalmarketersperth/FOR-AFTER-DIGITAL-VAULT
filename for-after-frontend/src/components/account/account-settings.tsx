@@ -18,14 +18,23 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
-import { useChangePassword, useCurrentUser, useUpdateProfile } from '@/hooks/use-auth';
+import {
+  useCancelEmailChange,
+  useChangePassword,
+  useCurrentUser,
+  useRequestEmailChange,
+  useResendEmailChange,
+  useUpdateProfile,
+} from '@/hooks/use-auth';
 import { useUnsavedChanges } from '@/hooks/use-unsaved-changes';
 import type { CurrentUser } from '@/lib/api/auth';
 import { formatMonthYear, fullName, humanize, initials } from '@/lib/format';
 import {
+  changeEmailSchema,
   changePasswordSchema,
   PASSWORD_HINT,
   profileSchema,
+  type ChangeEmailValues,
   type ChangePasswordValues,
   type ProfileValues,
 } from '@/schemas/auth';
@@ -134,15 +143,18 @@ function ProfileForm({ user }: { user: CurrentUser }) {
             />
           </fieldset>
 
-          {/* Read-only: changing it needs a verified email-change flow, which doesn't exist yet. */}
-          <dl className="grid gap-1.5 rounded-lg bg-surface-muted px-5 py-4">
-            <dt className="flex items-center gap-2 text-sm font-medium">
-              Email address
-              <Lock aria-hidden strokeWidth={1.5} className="size-3.5 text-foreground-muted" />
-            </dt>
-            <dd className="text-[15px] break-all">{user.email}</dd>
-            <dd className="text-sm text-foreground-muted">Used to sign in to For After.</dd>
-          </dl>
+          {/* Read-only here: a change goes through a link sent to the new address (Phase 08). */}
+          <div className="flex flex-col gap-4 rounded-lg bg-surface-muted px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <dl className="grid min-w-0 gap-1.5">
+              <dt className="flex items-center gap-2 text-sm font-medium">
+                Email address
+                <Lock aria-hidden strokeWidth={1.5} className="size-3.5 text-foreground-muted" />
+              </dt>
+              <dd className="text-[15px] break-all">{user.email}</dd>
+              <dd className="text-sm text-foreground-muted">Used to sign in to For After.</dd>
+            </dl>
+            <ChangeEmailDialog />
+          </div>
         </div>
 
         <div className="flex justify-end border-t border-border px-6 py-5 sm:px-10">
@@ -284,6 +296,146 @@ function ChangePasswordDialog() {
             </Button>
           </DialogFooter>
         </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+const EMPTY_EMAIL_CHANGE: ChangeEmailValues = { newEmail: '', currentPassword: '' };
+
+/**
+ * Phase 08. Nothing changes here: the API emails a link to the new address and
+ * the account's email changes only when that link is used (then every session
+ * ends, so the Customer signs in again). The dialog lives inside the profile
+ * form in the React tree, so its submit must not bubble to that form.
+ */
+function ChangeEmailDialog() {
+  const request = useRequestEmailChange();
+  const resend = useResendEmailChange();
+  const cancel = useCancelEmailChange();
+  const [open, setOpen] = useState(false);
+  const [pendingEmail, setPendingEmail] = useState<string | null>(null);
+  const form = useForm<ChangeEmailValues>({
+    resolver: zodResolver(changeEmailSchema),
+    defaultValues: EMPTY_EMAIL_CHANGE,
+  });
+  const { errors } = form.formState;
+  const busy = request.isPending || resend.isPending || cancel.isPending;
+
+  // The password never outlives the dialog.
+  const onOpenChange = (next: boolean) => {
+    if (busy) return;
+    setOpen(next);
+    if (!next) {
+      form.reset(EMPTY_EMAIL_CHANGE);
+      request.reset();
+      resend.reset();
+      cancel.reset();
+      setPendingEmail(null);
+    }
+  };
+
+  const submit = form.handleSubmit((values) => {
+    if (request.isPending) return;
+    request.mutate(values, {
+      onSuccess: ({ pendingEmail }) => {
+        form.reset(EMPTY_EMAIL_CHANGE);
+        setPendingEmail(pendingEmail);
+      },
+      onError: () => form.resetField('currentPassword'),
+    });
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogTrigger asChild>
+        <Button type="button" variant="outline" className="w-full shrink-0 sm:w-auto">
+          Change email
+        </Button>
+      </DialogTrigger>
+      <DialogContent
+        className="max-h-[calc(100dvh-2rem)] gap-6 overflow-y-auto rounded-xl bg-surface p-7 sm:max-w-md sm:p-8"
+        showCloseButton={false}
+      >
+        {pendingEmail ? (
+          <>
+            <DialogHeader className="gap-3">
+              <DialogTitle className="text-[28px] leading-tight font-normal">Verification email sent</DialogTitle>
+              <DialogDescription className="text-[15px] leading-relaxed text-foreground-muted">
+                We&apos;ve sent a verification link to <strong className="font-semibold text-foreground">{pendingEmail}</strong>.
+                Your email stays the same until you open it. The link expires in 24 hours.
+              </DialogDescription>
+            </DialogHeader>
+            <FormError error={resend.error ?? cancel.error} />
+            {resend.isSuccess && <p className="text-sm text-foreground-muted">A new link is on its way.</p>}
+            <DialogFooter className="mx-0 mb-0 flex-col-reverse gap-3 rounded-none border-0 bg-transparent p-0 sm:flex-row">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={busy}
+                onClick={() => cancel.mutate(undefined, { onSuccess: () => onOpenChange(false) })}
+              >
+                {cancel.isPending && <Spinner />}
+                Cancel request
+              </Button>
+              <Button type="button" variant="outline" disabled={busy || resend.isSuccess} onClick={() => resend.mutate()}>
+                {resend.isPending && <Spinner />}
+                Resend link
+              </Button>
+              <Button type="button" disabled={busy} onClick={() => onOpenChange(false)}>
+                Done
+              </Button>
+            </DialogFooter>
+          </>
+        ) : (
+          <>
+            <DialogHeader className="gap-3">
+              <DialogTitle className="text-[28px] leading-tight font-normal">Change email</DialogTitle>
+              <DialogDescription className="text-[15px] leading-relaxed text-foreground-muted">
+                We&apos;ll send a link to your new address. Once you open it, your email changes and you&apos;ll
+                sign in again with the new one.
+              </DialogDescription>
+            </DialogHeader>
+            <form
+              noValidate
+              onSubmit={(event) => {
+                event.stopPropagation();
+                void submit(event);
+              }}
+              className="grid gap-6"
+            >
+              <FormError error={request.error} />
+              <fieldset disabled={request.isPending} className="grid gap-5">
+                <legend className="sr-only">New email</legend>
+                <TextField
+                  id="newEmail"
+                  label="New email"
+                  type="email"
+                  autoComplete="email"
+                  inputMode="email"
+                  error={errors.newEmail?.message}
+                  {...form.register('newEmail')}
+                />
+                <PasswordField
+                  id="emailChangePassword"
+                  label="Current password"
+                  autoComplete="current-password"
+                  error={errors.currentPassword?.message}
+                  {...form.register('currentPassword')}
+                />
+              </fieldset>
+              <DialogFooter className="mx-0 mb-0 flex-col-reverse gap-3 rounded-none border-0 bg-transparent p-0 sm:flex-row">
+                <Button type="button" variant="outline" disabled={request.isPending} onClick={() => onOpenChange(false)}>
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={request.isPending}>
+                  {request.isPending && <Spinner />}
+                  {request.isPending ? 'Sending…' : 'Send verification'}
+                </Button>
+              </DialogFooter>
+            </form>
+          </>
+        )}
       </DialogContent>
     </Dialog>
   );

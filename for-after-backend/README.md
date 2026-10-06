@@ -108,6 +108,7 @@ Copy `.env.example` to `.env`. **Never commit `.env`.**
 |---|:--:|---|
 | `NODE_ENV` | no | `development` (`production` enables secure cookies and trusts one proxy hop) |
 | `PORT` | no | `4000` |
+| `SWAGGER_ENABLED` | no | `true` \| `false`. Unset: Swagger is on only with `NODE_ENV=development`, so test and production stay off unless set to `true` (e.g. staging). Anything else fails startup |
 | `DATABASE_URL` | ✅ | `postgresql://postgres:<password>@localhost:5432/for_after` |
 | `REDIS_URL` | ✅ | `redis://localhost:6379` (`rediss://` for TLS) |
 | `SESSION_SECRET` | ✅ | random, at least 32 characters |
@@ -122,8 +123,9 @@ Copy `.env.example` to `.env`. **Never commit `.env`.**
 | `TRUSTED_CONTACT_OTP_PEPPER` | ✅ | random, at least 32 characters, **different** from the Recipient pepper |
 | `TRUSTED_CONTACT_OTP_*`, `TRUSTED_CONTACT_SESSION_TTL_SECONDS`, `TRUSTED_CONTACT_COOKIE_DOMAIN` | no | same settings for Trusted Contacts ([trusted contact auth](docs/trusted-contact-auth.md)) |
 | `DEATH_VERIFICATION_SAFEGUARD_SECONDS` | no | `1209600` (14 days); local testing may use `60`; stored per case when it starts |
-| `EMAIL_PROVIDER` | ✅ in production | `resend` (required in production), `console` (`NODE_ENV=development` only) or `disabled` (default elsewhere). Sign-in codes, release and safety emails ([email setup](docs/email-production-setup.md)) |
-| `RESEND_API_KEY`, `EMAIL_FROM_ADDRESS`, `EMAIL_FROM_NAME`, `APP_BASE_URL` | with `resend` | server-side Resend key, a sender on a domain verified in Resend, display name, app origin for links |
+| `EMAIL_PROVIDER` | ✅ in production | `brevo` (selected; production requires `brevo` or the optional `resend`), `console` (`NODE_ENV=development` only) or `disabled` (default elsewhere). Sign-in codes, release and safety emails ([email setup](docs/email-production-setup.md)) |
+| `BREVO_API_KEY`, `EMAIL_FROM_ADDRESS`, `EMAIL_FROM_NAME`, `APP_BASE_URL` | with `brevo` | server-side Brevo v3 API key, a sender verified in Brevo, display name, app origin for links |
+| `RESEND_API_KEY` | with `resend` only | optional, inactive Resend adapter; never required for Brevo |
 | `EMAIL_SEND_TIMEOUT_MS`, `EMAIL_QUEUE_NAME`, `EMAIL_JOB_*`, `EMAIL_RECONCILE_INTERVAL_SECONDS` | no | email timeout and the `email-delivery` queue |
 | `DEATH_VERIFICATION_QUEUE_NAME`, `DEATH_VERIFICATION_RECONCILE_INTERVAL_SECONDS`, `DEATH_VERIFICATION_JOB_*` | no | safeguard queue settings ([death verification](docs/death-verification.md)) |
 | `ADMIN_TOTP_ENCRYPTION_KEY` | ✅ | 32 random bytes, **base64** (`openssl rand -base64 32`); encrypts admin TOTP secrets. Dedicated key |
@@ -165,6 +167,13 @@ PostgreSQL or Redis is unreachable.
 
 Base path `/api/v1`, except health checks. There are **three separate principals**, each with its own HttpOnly
 cookie. No cookie works on another principal's routes (`401`). Postman stores and resends cookies automatically.
+
+**Swagger / OpenAPI:** `http://localhost:4000/api/docs` (UI) and `/api/docs-json` (document) when `SWAGGER_ENABLED`
+allows it (default: development only). Each route shows its cookie session scheme (`customer-session`,
+`admin-session`, `recipient-session`, `trusted-contact-session`); there are no bearer tokens. DTO schemas come from the
+Nest CLI Swagger plugin (`nest-cli.json`), so they appear in `npm run build` / `start:dev` builds. "Try it out" sends
+requests from the docs origin, which the CSRF Origin check refuses for POST/PATCH/DELETE unless it is in
+`FRONTEND_URL`; use the frontend or Postman for writes.
 
 | Principal | Cookie | Signs in with |
 |---|---|---|
@@ -271,6 +280,7 @@ These apply to every module; follow them in new code.
 | **Trusted Contact routes** | `TrustedContactSessionAuthGuard` only; every query goes through the signed-in email's active `TrustedContact` rows. Foreign or removed ids are `404`. No access to any Customer content. |
 | **One OTP engine, separate secrets** | Recipient and Trusted Contact codes share `src/otp-auth/` but use separate peppers, Redis namespaces, cookies and guards. |
 | **Soft delete** | `DELETE` sets `deletedAt`; rows are kept for history. |
+| **Errors never leak internals** | A global filter (`src/config/global-exception.filter.ts`) keeps every `HttpException` (400, 401, 403, 404, 409, 429, 503, validation) exactly as Nest renders it. Anything unexpected is `{ "statusCode": 500, "message": "Internal server error", "traceId": "…" }` in every environment (`traceId` only when Nest Observe is on; quote it to support). The server logs the error class, a safe code and stack frames, never the message. |
 | **Private data stays private** | `ownerUserId`, `deletedAt` and `passwordHash` are never returned; personal data, request bodies, OTPs, session ids and report notes are never logged. Tests use fictional data only. |
 
 ---

@@ -6,6 +6,7 @@ import { ApiError, isApiError } from '@/lib/api/errors';
 import {
   checkFile,
   mediaApi,
+  RECIPIENT_PHOTO_MAX_BYTES,
   putToStorage,
   type AccessUrl,
   type MediaAsset,
@@ -66,7 +67,7 @@ export function useUpload(scope: MediaScope) {
 
   const upload = useCallback(
     async (kind: MediaKind, file: File): Promise<MediaAsset | null> => {
-      const problem = checkFile(kind, file);
+      const problem = checkFile(kind, file, scope.kind === 'recipients' ? RECIPIENT_PHOTO_MAX_BYTES : undefined);
       if (problem) {
         setState({ phase: 'failed', fileName: file.name, message: problem });
         return null;

@@ -53,6 +53,11 @@ describe('Death verification workflow (e2e)', () => {
     noah: at('dv.noah'),
     ruth: at('dv.ruth'),
     olga: at('dv.olga'),
+    // Phase 10: reopening after a closed case.
+    pia: at('dv.pia'),
+    ivan: at('dv.ivan'),
+    vera: at('dv.vera'),
+    cora: at('dv.cora'),
     admin: at('dv.admin'),
   };
   const DAVID = at('dv.david');
@@ -100,9 +105,11 @@ describe('Death verification workflow (e2e)', () => {
     await agent.post(api('/auth/login')).send({ email, password }).expect(200);
     return agent;
   };
+  // The Customer's current (newest) case: there may be several (Phase 10).
   const caseOf = (email: string) =>
     prisma.deathVerificationCase.findFirstOrThrow({
       where: { owner: { email } },
+      orderBy: [{ openedAt: 'desc' }, { id: 'desc' }],
     });
   const statusOf = async (id: string) =>
     (await prisma.message.findUniqueOrThrow({ where: { id } })).status;
@@ -333,10 +340,12 @@ describe('Death verification workflow (e2e)', () => {
         .get(api(`/trusted-contact/accounts/${ids.lisaTc}/death-verification`))
         .expect(200);
       expect(Object.keys(tc.body).sort()).toEqual([
+        'canReport',
         'openedAt',
         'reportedByYou',
         'status',
       ]);
+      expect(tc.body.canReport).toBe(false);
     });
 
     it('admin cannot verify during the safeguard (409), no override exists', async () => {
@@ -713,6 +722,240 @@ describe('Death verification workflow (e2e)', () => {
       kase = await caseOf(email);
       expect(kase.status).toBe('SAFEGUARD_ACTIVE');
       expect(kase.safetyNoticeAttemptCount).toBe(2);
+    });
+  });
+
+  describe('reopening after a closed case (Phase 10)', () => {
+    const EVE = at('dv.eve');
+    const OPEN = [
+      'PENDING_VERIFICATION',
+      'SAFEGUARD_ACTIVE',
+      'READY_FOR_REVIEW',
+    ] as const;
+    const casesOf = (email: string) =>
+      prisma.deathVerificationCase.findMany({
+        where: { owner: { email } },
+        orderBy: [{ openedAt: 'asc' }, { id: 'asc' }],
+        include: {
+          reports: { select: { reportedByTrustedContactId: true } },
+          auditEvents: {
+            orderBy: { createdAt: 'asc' },
+            select: { eventType: true, actorTrustedContactId: true },
+          },
+        },
+      });
+    const openCount = (email: string) =>
+      prisma.deathVerificationCase.count({
+        where: { owner: { email }, status: { in: [...OPEN] } },
+      });
+    const addEve = async (key: keyof typeof users) => {
+      const id = (
+        await agents[key]
+          .post(api('/trusted-contacts'))
+          .send({ firstName: 'Eve', email: EVE })
+          .expect(201)
+      ).body.id as string;
+      agents.eve ??= await otpSignIn('trusted-contact-auth', EVE);
+      return id;
+    };
+    const reportAs = (agent: Agent, tcId: string) =>
+      agent
+        .post(api(`/trusted-contact/accounts/${tcId}/death-reports`))
+        .send({ confirmReport: true });
+    const confirmAlive = (key: keyof typeof users) =>
+      agents[key]
+        .post(api('/death-verification/me/confirm-alive'))
+        .send({ confirmAlive: true });
+    const accountStatus = async (email: string) =>
+      (await prisma.user.findUniqueOrThrow({ where: { email } })).status;
+
+    it('CANCELLED: the next report opens case 2; case 1 is untouched; the full safety workflow runs again', async () => {
+      const { tcId, messageIds } = await setupCustomer('pia', [
+        { title: 'Pia on death', schedule: { triggerType: 'ON_DEATH' } },
+      ]);
+      const first = (await report(tcId)).body.caseId as string;
+      await confirmAlive('pia').expect(200);
+      const closed = await prisma.deathVerificationCase.findUniqueOrThrow({
+        where: { id: first },
+      });
+      expect(closed.status).toBe('CANCELLED');
+
+      const status = await agents.david
+        .get(api(`/trusted-contact/accounts/${tcId}/death-verification`))
+        .expect(200);
+      expect(status.body).toMatchObject({
+        status: 'CANCELLED',
+        reportedByYou: true,
+        canReport: true,
+      });
+
+      const second = (await report(tcId)).body;
+      expect(second.caseId).not.toBe(first);
+      expect(second.status).toBe('PENDING_VERIFICATION');
+
+      // Case 1 is immutable history: not a single field changed.
+      expect(
+        await prisma.deathVerificationCase.findUniqueOrThrow({
+          where: { id: first },
+        }),
+      ).toEqual(closed);
+      const [one, two] = await casesOf(users.pia);
+      expect(one.id).toBe(first);
+      expect(one.auditEvents.map((e) => e.eventType)).toContain(
+        'CUSTOMER_CONFIRMED_ALIVE',
+      );
+      expect(two.reopenedFromCaseId).toBe(first);
+      expect(two.auditEvents.slice(0, 2)).toEqual([
+        { eventType: 'CASE_REOPENED', actorTrustedContactId: tcId },
+        { eventType: 'REPORT_RECEIVED', actorTrustedContactId: tcId },
+      ]);
+      expect(await openCount(users.pia)).toBe(1);
+
+      // Same workflow: a new safety notice, then the safeguard, then review.
+      expect(notices.some((n) => n.caseId === second.caseId)).toBe(true);
+      await toReadyForReview(users.pia);
+      const me = await agents.pia
+        .get(api('/death-verification/me'))
+        .expect(200);
+      expect(me.body).toMatchObject({
+        status: 'READY_FOR_REVIEW',
+        canConfirmAlive: true,
+      });
+      // A report verifies nothing and releases nothing.
+      expect(await statusOf(messageIds[0])).toBe('SCHEDULED');
+      expect(await accountStatus(users.pia)).toBe('ACTIVE');
+      // The same contact cannot file twice into the open case.
+      await reportAs(agents.david, tcId).expect(409);
+      expect(await openCount(users.pia)).toBe(1);
+    });
+
+    it('the database itself refuses a second open case, or any case next to a VERIFIED one', async () => {
+      for (const email of [users.pia, users.lisa]) {
+        const { id } = await prisma.user.findUniqueOrThrow({
+          where: { email },
+        });
+        await expect(
+          prisma.deathVerificationCase.create({ data: { ownerUserId: id } }),
+        ).rejects.toMatchObject({ code: 'P2002' });
+      }
+    });
+
+    it('REJECTED: another active Trusted Contact opens case 2; it is reviewed and verified normally', async () => {
+      const { tcId, messageIds } = await setupCustomer('ivan', [
+        { title: 'Ivan on death', schedule: { triggerType: 'ON_DEATH' } },
+      ]);
+      const eveTc = await addEve('ivan');
+      const first = (await report(tcId)).body.caseId as string;
+      await toReadyForReview(users.ivan);
+      await agents.admin
+        .post(api(`/admin/death-verifications/${first}/reject`))
+        .send({ confirmRejection: true, decisionNote: 'Fictional rejection.' })
+        .expect(200);
+
+      const second = (await reportAs(agents.eve, eveTc).expect(201)).body;
+      expect(second.caseId).not.toBe(first);
+      const [one, two] = await casesOf(users.ivan);
+      expect(one).toMatchObject({ id: first, status: 'REJECTED' });
+      expect(one.reports).toEqual([{ reportedByTrustedContactId: tcId }]);
+      expect(two).toMatchObject({ reopenedFromCaseId: first });
+      expect(two.auditEvents[0]).toEqual({
+        eventType: 'CASE_REOPENED',
+        actorTrustedContactId: eveTc,
+      });
+
+      // A report alone: no PASSED, no release. Only the admin's verification.
+      await toReadyForReview(users.ivan);
+      expect(await statusOf(messageIds[0])).toBe('SCHEDULED');
+      expect(await accountStatus(users.ivan)).toBe('ACTIVE');
+      await verify(second.caseId).expect(200);
+      expect(await accountStatus(users.ivan)).toBe('PASSED');
+      await until(async () => (await statusOf(messageIds[0])) === 'RELEASED');
+
+      // History stays queryable for admins: both cases, the old one unchanged.
+      const old = await agents.admin
+        .get(api(`/admin/death-verifications/${first}`))
+        .expect(200);
+      expect(old.body).toMatchObject({
+        status: 'REJECTED',
+        reopenedFromCaseId: null,
+      });
+      const latest = await agents.admin
+        .get(api(`/admin/death-verifications/${second.caseId}`))
+        .expect(200);
+      expect(latest.body).toMatchObject({
+        status: 'VERIFIED',
+        reopenedFromCaseId: first,
+      });
+    });
+
+    it('VERIFIED / PASSED is never reopened: no new case, no second release', async () => {
+      const releases = () =>
+        prisma.messageRelease.count({
+          where: { message: { owner: { email: users.lisa } } },
+        });
+      const before = await releases();
+      await reportAs(agents.david, ids.lisaTc).expect(409);
+      const status = await agents.david
+        .get(api(`/trusted-contact/accounts/${ids.lisaTc}/death-verification`))
+        .expect(200);
+      expect(status.body).toMatchObject({
+        status: 'VERIFIED',
+        canReport: false,
+      });
+      expect(await casesOf(users.lisa)).toHaveLength(1);
+      expect(await releases()).toBe(before);
+    });
+
+    it('race: two Trusted Contacts reporting after CANCELLED open exactly one new case', async () => {
+      const { tcId } = await setupCustomer('vera');
+      const eveTc = await addEve('vera');
+      await report(tcId);
+      await confirmAlive('vera').expect(200);
+      const [a, b] = await Promise.all([
+        reportAs(agents.david, tcId),
+        reportAs(agents.eve, eveTc),
+      ]);
+      expect([a.status, b.status]).toEqual([201, 201]);
+      expect(a.body.caseId).toBe(b.body.caseId);
+      const cases = await casesOf(users.vera);
+      expect(cases).toHaveLength(2);
+      expect(cases[0].status).toBe('CANCELLED');
+      expect(OPEN).toContain(cases[1].status);
+      expect(cases[1].reports).toHaveLength(2);
+      expect(
+        cases[1].auditEvents.filter((e) => e.eventType === 'CASE_REOPENED'),
+      ).toHaveLength(1);
+      expect(await openCount(users.vera)).toBe(1);
+    });
+
+    it('race: a report during confirm-alive never builds on stale state', async () => {
+      const { tcId } = await setupCustomer('cora');
+      const eveTc = await addEve('cora');
+      const first = (await report(tcId)).body.caseId as string;
+      const [alive, late] = await Promise.all([
+        confirmAlive('cora'),
+        reportAs(agents.eve, eveTc),
+      ]);
+      expect(alive.status).toBe(200);
+      expect(late.status).toBe(201);
+      const cases = await casesOf(users.cora);
+      expect(cases[0]).toMatchObject({ id: first, status: 'CANCELLED' });
+      if (late.body.caseId === first) {
+        // The report committed first and was then cancelled with its case.
+        expect(cases).toHaveLength(1);
+        expect(cases[0].reports).toHaveLength(2);
+      } else {
+        // The cancel committed first: the report saw CANCELLED and reopened.
+        expect(cases).toHaveLength(2);
+        expect(cases[0].reports).toEqual([
+          { reportedByTrustedContactId: tcId },
+        ]);
+        expect(cases[1]).toMatchObject({
+          reopenedFromCaseId: first,
+          reports: [{ reportedByTrustedContactId: eveTc }],
+        });
+      }
+      expect(await openCount(users.cora)).toBeLessThanOrEqual(1);
     });
   });
 });

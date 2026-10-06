@@ -1,10 +1,10 @@
-# 🤝 For After — Trusted Contact Authentication & Portal (Step 14)
+# 🤝 For After — Trusted Contacts: Authentication, Portal, Invitations (Step 14, Phase 10)
 
 | | |
 |---|---|
-| **Status** | ✅ Built in Step 14 · 20 e2e + 23 unit tests · Postman folders 14–15 |
-| **Frontend** | Step 19 (`for-after-frontend`): `/trusted-contact/sign-in`, `/trusted-contact/accounts`, account status page, death-report form with explicit confirmation; its own session gate and sign-out |
-| **Not yet** | Email provider, SMS OTP, invitations, evidence upload (death verification itself was built in Step 15) |
+| **Status** | ✅ Step 14 (email OTP + portal), Step 24 (email delivery), Phase 10 (maximum 2, email invitations, permission model, new case after a closed one) |
+| **Frontend** | Step 19: `/trusted-contact/sign-in`, `/trusted-contact/accounts`, account status page, death-report form. Phase 10: `/trusted-contact/invitation?token=…`, invitation status + resend and the 2-contact limit in FE-11 |
+| **Deferred** | ⏸️ SMS OTP and SMS invitations (no Twilio, no `SmsProvider`) · evidence upload |
 | **Related** | [Death verification](death-verification.md) · [Authentication](authentication.md) · [Recipient Portal](recipient-portal.md) |
 
 ## 🧭 Contents
@@ -17,7 +17,10 @@
 6. [Accounts](#6-accounts)
 7. [Logging](#7-logging)
 8. [Configuration](#8-configuration)
-9. [Not built yet](#9-not-built-yet)
+9. [Maximum per Customer (Phase 10)](#9-maximum-per-customer-phase-10)
+10. [Email invitations (Phase 10)](#10-email-invitations-phase-10)
+11. [Permission model (Phase 10)](#11-permission-model-phase-10)
+12. [Deferred / not built](#12-deferred--not-built)
 
 ---
 
@@ -32,10 +35,12 @@ passing. Step 14 lets that person sign in with an **email one-time code** and fi
 - A report does **not** verify death, mark anyone dead, or release anything. Since Step 15 it starts the account
   holder's safety notice and safeguard window; only an admin can then verify ([death-verification.md](death-verification.md)).
 - Trusted Contacts **cannot** verify, reject or release anything, and they never see other reporters, the report count,
-  the verified time of death or admin notes. Their status view (`status`, `reportedByYou`, `openedAt`) may now show any
-  of `PENDING_VERIFICATION`, `SAFEGUARD_ACTIVE`, `READY_FOR_REVIEW`, `VERIFIED`, `REJECTED`, `CANCELLED`.
-- While the case is open (pending, safeguard, review), further contacts can still add their own report; once it is
-  closed, reports get `409`.
+  the verified time of death or admin notes. Their status view (`status`, `reportedByYou`, `openedAt`, `canReport`)
+  describes the Customer's **current (newest)** case and may show any of `PENDING_VERIFICATION`, `SAFEGUARD_ACTIVE`,
+  `READY_FOR_REVIEW`, `VERIFIED`, `REJECTED`, `CANCELLED`.
+- While the case is open (pending, safeguard, review), further contacts can still add their own report (one each).
+  **Phase 10:** after a `CANCELLED` or `REJECTED` case, a report from any active Trusted Contact opens a **new** case
+  that runs the full workflow again; after `VERIFIED` reports get `409` ([death-verification.md](death-verification.md) §1).
 
 ## 1. Three separate principals
 
@@ -76,7 +81,11 @@ Base: `/api/v1`.
 | `POST` | `/trusted-contact-auth/logout` | none | `204`, session destroyed, cookie cleared |
 | `GET` | `/trusted-contact/accounts` | TC session | the Customers who list this email |
 | `POST` | `/trusted-contact/accounts/:trustedContactId/death-reports` | TC session | `201` report receipt |
-| `GET` | `/trusted-contact/accounts/:trustedContactId/death-verification` | TC session | high-level case status |
+| `GET` | `/trusted-contact/accounts/:trustedContactId/death-verification` | TC session | high-level status of the current case + `canReport` |
+| `POST` | `/trusted-contacts/:id/invitation` | Customer | Phase 10: send/resend the email invitation → `200` contact |
+| `POST` | `/trusted-contact/invitation/view` | none (token) | Phase 10: `{status, accountHolder}` |
+| `POST` | `/trusted-contact/invitation/accept` | none (token) | Phase 10: `PENDING → ACCEPTED`; no session |
+| `POST` | `/trusted-contact/invitation/decline` | none (token) | Phase 10: `PENDING → DECLINED` |
 
 ## 4. OTP flow
 
@@ -107,8 +116,8 @@ instances): 5 requests per email, 20 per IP, 30 verifies per IP → `429`. Keys 
 ## 5. Delivery
 
 Provider-neutral `TrustedContactOtpDelivery.sendOtp({email, code, expiresInSeconds})`. Since Step 24 it emails the
-code through `EMAIL_PROVIDER` (see [email-production-setup.md](email-production-setup.md)); `console` (development
-only) prints it to the API terminal.
+code through `EMAIL_PROVIDER` (see [email-production-setup.md](email-production-setup.md)): `brevo` delivers it to the
+inbox; `console` (development only) prints it to the API terminal. Ineligible emails get the same `202` and no code.
 
 Startup also fails if `TRUSTED_CONTACT_OTP_PEPPER` is missing or shorter than 32 characters.
 
@@ -144,7 +153,8 @@ email is the signed-in email, not deleted, with a non-deleted Customer. Anything
 Categories: `trusted_contact_otp_requested`, `trusted_contact_otp_verified`, `trusted_contact_otp_invalid`,
 `trusted_contact_otp_rate_limited`, `trusted_contact_session_created`, `trusted_contact_session_logout`,
 `trusted_contact_accounts_viewed`, `death_report_submitted`, `death_report_duplicate`,
-`death_verification_status_viewed`. Logs carry masked emails, an 8-character challenge prefix and row ids only. Never
+`death_verification_status_viewed`, `death_case_reopened`, `trusted_contact_invitation_sent`,
+`trusted_contact_invitation_failed`, `trusted_contact_invitation_accepted`, `trusted_contact_invitation_declined`. Logs carry masked emails, an 8-character challenge prefix and row ids only. Never
 the code (outside dev console mode), its hash, the pepper, session ids, report notes or Customer content.
 
 ## 8. Configuration
@@ -152,12 +162,84 @@ the code (outside dev console mode), its hash, the pepper, session ids, report n
 See `.env.example`: `TRUSTED_CONTACT_OTP_TTL_SECONDS`, `TRUSTED_CONTACT_OTP_MAX_ATTEMPTS`,
 `TRUSTED_CONTACT_OTP_REQUEST_LIMIT`, `TRUSTED_CONTACT_OTP_REQUEST_WINDOW_SECONDS`,
 `TRUSTED_CONTACT_OTP_IP_REQUEST_LIMIT`, `TRUSTED_CONTACT_OTP_VERIFY_IP_LIMIT`, `TRUSTED_CONTACT_OTP_PEPPER` (required),
-`TRUSTED_CONTACT_SESSION_TTL_SECONDS`, `TRUSTED_CONTACT_COOKIE_DOMAIN`.
+`TRUSTED_CONTACT_SESSION_TTL_SECONDS`, `TRUSTED_CONTACT_COOKIE_DOMAIN`, `TRUSTED_CONTACT_INVITATION_TTL_SECONDS`
+(Phase 10, default 604800 = 7 days: a technical default, no product-approved lifetime exists).
 
-## 9. Not built yet
+## 9. Maximum per Customer (Phase 10)
 
-SMS OTP, a real email provider, invitations to Trusted Contacts, Trusted Contact editing of Recipient details, any
-content access or sharing, evidence upload, second-contact confirmation. The verification workflow itself (safety
-notice, safeguard, admin decision) was built in Step 15 (`docs/death-verification.md`).
+**Product decision (final for V1): at most 2 active Trusted Contacts per Customer.** Active = `deletedAt = null`;
+removed (soft-deleted) contacts do not count, so removing one frees a place. Editing is always allowed.
 
-Tests: `src/trusted-contact-auth/trusted-contact-auth.service.spec.ts`, `test/trusted-contact-portal.e2e-spec.ts`.
+- `POST /trusted-contacts` returns `409 You can nominate up to 2 trusted contacts. Remove one to add someone else.` for
+  a third. The API is authoritative; FE-11 hides "Add" at the limit and explains it (`MAX_TRUSTED_CONTACTS`, one
+  constant per repo).
+- **Concurrency:** the count and the insert run in one transaction that first takes `SELECT … FROM "User" WHERE id = $owner
+  FOR UPDATE`. Concurrent creates for the same Customer are serialised, so a plain count-then-insert race cannot end
+  with 3. Other Customers are not blocked. The same row lock serialises invitation sends and death reports for that
+  Customer. (e2e: five concurrent creates at 1 contact → exactly one `201`, four `409`.)
+
+## 10. Email invitations (Phase 10)
+
+**Email only.** SMS invitations are deferred: a mobile-only contact is a valid record, but no invitation can be
+delivered (`invitation.status = UNAVAILABLE`, `POST …/invitation` → `409`), and nothing pretends one was sent.
+
+```text
+Customer adds a contact with an email ──► invitation PENDING + email (EmailProvider → Brevo)
+                                           │  link: ${APP_BASE_URL}/trusted-contact/invitation?token=<token>
+invitee opens the link ──► view ──► accept → ACCEPTED   (no session; sign-in stays email OTP)
+                                 └─► decline → DECLINED  (no access; the Customer may resend)
+```
+
+- **Model** `TrustedContactInvitation`: `trustedContactId`, `emailNormalized` (the address it was sent to), `tokenHash`
+  (unique), `status` (`PENDING | ACCEPTED | DECLINED | CANCELLED`), `expiresAt`, `acceptedAt`, `declinedAt`,
+  `cancelledAt`. `EXPIRED` is not stored: it is a `PENDING` row past `expiresAt`. A partial unique index allows at most
+  one `PENDING` row per contact. Migration `20261006050907_trusted_contact_invitations_and_case_history`.
+- **Token:** 32 bytes from `crypto.randomBytes`, base64url. Only its SHA-256 is stored; the raw token exists only in the
+  email. It is never logged, audited, queued or returned by the API. Sent straight through `EmailProvider` (template
+  `trusted-contact-invitation`), not the email queue, so it never sits in Redis job data (same rule as Phase 04 links).
+- **Send / resend** (`POST /trusted-contacts/:id/invitation`, owning Customer only; foreign/removed id → `404`): cancels
+  any `PENDING` invitation and issues a new token in one transaction, so only the newest link works. At most 3 per
+  contact per hour (`429`). Already `ACCEPTED` → `409`. Allowed again after `DECLINED` or expiry. If the email cannot be
+  sent, the new link is cancelled and the API answers `503` (on create the contact is kept and shows `NOT_SENT`).
+- **Accept / decline** (token in the POST body, never the URL path): one conditional update, so exactly one answer wins.
+  It only succeeds while the invitation is `PENDING`, unexpired, and the relationship still exists (contact not deleted,
+  Customer not deleted) **with the same email it was sent to**. Changing a contact's email or removing the contact
+  therefore makes the old link unusable (removal also marks it `CANCELLED`). The answer returns the resulting view; the
+  page shows `ACCEPTED`, `DECLINED`, `EXPIRED` or `CANCELLED` states without a name once the link is dead.
+- **Accepting grants nothing.** It records consent. The Trusted Contact still signs in by email OTP, and every portal
+  request still re-checks the live `TrustedContact` row.
+- **What the Customer sees** (`invitation` on every `/trusted-contacts` response): `{status, sentAt}` with status
+  `PENDING | ACCEPTED | DECLINED | EXPIRED | NOT_SENT | UNAVAILABLE`. Never the token or its hash.
+- **Audit** (`AuditLog`): `TRUSTED_CONTACT_INVITATION_SENT` (actor `CUSTOMER`), `…_ACCEPTED` / `…_DECLINED` (actor
+  `TRUSTED_CONTACT`, no user id), subject `TrustedContact/<id>`. No addresses, tokens or session ids.
+
+## 11. Permission model (Phase 10)
+
+**Product decision (V1).** Enforced server-side by the guards and queries above; the frontend only mirrors it.
+
+| A Trusted Contact **may** | A Trusted Contact **may not** |
+| :-- | :-- |
+| sign in with the existing email OTP (own cookie, own session) | read any Message (body, title), media or signed URL |
+| see the Customer's display name (and the relationship label: existing behaviour, still an open product question) | see Recipients or their email/mobile |
+| see `hasPreservedContent` (a boolean only) | open Memory Vault, My Story or My Wishes |
+| see the current case status (+ `reportedByYou`, `openedAt`, `canReport`) | see Customer settings, schedules or private notes |
+| report the Customer's death; add a supporting report to an open case | see other Trusted Contacts or other reporters |
+| start a **new** case after a `CANCELLED` / `REJECTED` one | verify, reject, release or mark anyone `PASSED` |
+| accept or decline their invitation | bypass the safety notice, the safeguard or admin review; use any admin route |
+
+"Report / verify death" here means **reporting and confirming the claim**: the report opens (or joins) a case that then
+runs the same safety notice → safeguard → admin review. Only an admin's verification sets `VERIFIED`, `PASSED`,
+`verifiedDeathAt` and activates ON_DEATH / AFTER_DEATH releases ([death-verification.md](death-verification.md)).
+
+## 12. Deferred / not built
+
+- ⏸️ **SMS OTP for mobile-only Trusted Contacts:** deferred (post-MVP). Sign-in is email only; a mobile-only contact
+  cannot sign in yet.
+- ⏸️ **SMS invitations:** deferred. No Twilio, no `SmsProvider`.
+- Not built: Trusted Contact editing of Recipient details, any content access or sharing, evidence upload,
+  second-contact confirmation logic.
+
+Tests: `src/trusted-contact-auth/trusted-contact-auth.service.spec.ts`,
+`src/trusted-contacts/trusted-contacts.service.spec.ts`, `src/trusted-contacts/trusted-contact-invitations.service.spec.ts`,
+`test/trusted-contact-portal.e2e-spec.ts`, `test/trusted-contact-invitations.e2e-spec.ts` (maximum + invitations),
+`test/death-verification.e2e-spec.ts` (new case after a closed one). Frontend: `e2e/trusted-contacts.spec.ts`.

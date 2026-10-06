@@ -67,7 +67,34 @@ export const changePasswordSchema = z
     message: 'Choose a password that is different from your current one.',
   });
 
+// forgot-password and resend-verification.
+export const emailOnlySchema = z.object({ email });
+
+// ResetPasswordDto: the same new-password rule as registration.
+export const resetPasswordSchema = z
+  .object({
+    newPassword,
+    confirmNewPassword: z.string().min(1, 'Enter your new password again.'),
+  })
+  .refine((v) => v.newPassword === v.confirmNewPassword, {
+    path: ['confirmNewPassword'],
+    message: "The passwords don't match.",
+  });
+
+// ChangeEmailDto: the new address (same rule as registration) and the current
+// password, checked by the API. "Same as now" is the API's call (it normalizes).
+export const changeEmailSchema = z.object({
+  newEmail: email,
+  currentPassword: z
+    .string()
+    .min(1, 'Enter your current password.')
+    .max(128, 'Password must be 128 characters or fewer.'),
+});
+
 export type LoginValues = z.infer<typeof loginSchema>;
+export type ChangeEmailValues = z.infer<typeof changeEmailSchema>;
+export type EmailOnlyValues = z.infer<typeof emailOnlySchema>;
+export type ResetPasswordValues = z.infer<typeof resetPasswordSchema>;
 export type RegisterValues = z.infer<typeof registerSchema>;
 export type ProfileValues = z.infer<typeof profileSchema>;
 export type ChangePasswordValues = z.infer<typeof changePasswordSchema>;

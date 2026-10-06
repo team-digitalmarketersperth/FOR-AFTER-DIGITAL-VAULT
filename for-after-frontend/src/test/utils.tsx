@@ -19,6 +19,17 @@ export const customer: CurrentUser = {
   createdAt: '2026-09-01T00:00:00.000Z',
 };
 
+/** The API's list envelope (Phase 09) for one page holding `items`. */
+export const page = <T,>(items: T[], over: { page?: number; total?: number; pages?: number; limit?: number } = {}) => ({
+  items,
+  pagination: {
+    page: over.page ?? 1,
+    limit: over.limit ?? 25,
+    total: over.total ?? items.length,
+    pages: over.pages ?? (items.length ? 1 : 0),
+  },
+});
+
 export const json = (status: number, body?: unknown) =>
   new Response(body === undefined ? null : JSON.stringify(body), {
     status,

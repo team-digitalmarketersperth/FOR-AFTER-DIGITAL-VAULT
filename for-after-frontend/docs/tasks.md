@@ -51,8 +51,8 @@
 | FE-7 | `/dev-login`, real 404 in production builds | ✅ | 17 | `app/(auth)/dev-login`, `src/proxy.ts` |
 | FE-8 | Register / login pages | ✅ | 17 | `app/(auth)` |
 | FE-9 | Account settings: name, read-only email, password change | ✅ | 22 | `components/account/account-settings.tsx`, `app/(dashboard)/settings` |
-| FE-10 | People I Love: list, add, view, edit, remove | ✅ | 18 | `components/people/recipients.tsx` |
-| FE-11 | Trusted Contacts (Customer side): list, add, edit, remove | ✅ | 18 | `components/people/trusted-contacts.tsx` |
+| FE-10 | People I Love: list (25 per page, Previous / Next), add, view, edit, remove, private photo (Phase 09) | ✅ | 18 | `components/people/recipients.tsx`, `person-card.tsx` |
+| FE-11 | Trusted Contacts (Customer side): list, add, edit, remove; Phase 10: max 2, invitation status, send/resend | ✅ | 18, Phase 10 | `components/people/trusted-contacts.tsx` |
 | FE-12 | Messages: drafts, content type, recipients | ✅ | 18 | `components/messages/` |
 | FE-13 | Message media: direct upload with progress + cancel, previews, delete | ✅ | 18 | `components/media/media-manager.tsx` |
 | FE-14 | Browser audio recorder | ✅ | 18 | `components/media/audio-recorder.tsx` (E2E with Chromium's fake microphone) |
@@ -68,13 +68,22 @@
 | FE-24 | Trusted Contact sign-in: email → 6-digit code | ✅ | 19 | `components/portals/trusted-contact.tsx` |
 | FE-25 | Accounts list (name, preserved-content flag, case status) | ✅ | 19 | `AccountList` |
 | FE-26 | Death report form (date, note, summary, explicit confirmation, 409 states) | ✅ | 19 | `ReportForm` |
-| FE-27 | Case status page (all six statuses) | ✅ | 19 | `AccountStatus`, `lib/death-verification.ts` |
+| FE-27 | Case status page (all six statuses); Phase 10: "Submit a new death report" after a closed case (API `canReport`) | ✅ | 19, Phase 10 | `AccountStatus`, `lib/death-verification.ts` |
+| — | Phase 10: invitation page `/trusted-contact/invitation?token=…` (view, accept, decline; no session) | ✅ | Phase 10 | `TrustedContactInvitation` |
 | FE-28 | Admin portal: password + mandatory TOTP sign-in/enrolment (+ recovery codes), users, death-verification review, audit log, queues | ✅ | 20 | `components/admin/`, `app/admin/` |
 | FE-29 | WordPress login/signup forms | ⬜ | — | WordPress side |
 | FE-30 | Shared `.forafter.com.au` cookie + redirect to the app | ⬜ | — | Deployment config |
 
 Also built, outside the FE list: the Customer death-verification **safety banner** with "I'm still alive"
 (`components/layout/safety-banner.tsx`, Step 19).
+
+Also built (backend Phase 04): `/verify-email`, `/forgot-password` and `/reset-password` in `app/(auth)` with
+`components/auth/account-links.tsx`. Verify runs once from the emailed link (signed in or not) and offers a new link
+when it is used or expired; resend and forgot-password always show the API's generic answer (no account enumeration),
+resend then has a 60 s cooldown; reset reuses the registration password rule, signs nobody in and points to `/login`.
+Register → `/login?registered=1` now says a verification link is being emailed; login links to "Forgotten your
+password?". Tests: `account-links.test.tsx` (10) and `e2e/account-recovery.spec.ts` (4, needs an API with
+`EMAIL_PROVIDER=console`: `E2E_BACKEND_LOG` + `E2E_EMAIL_API`).
 
 ---
 
@@ -156,7 +165,10 @@ Also built, outside the FE list: the Customer death-verification **safety banner
   `current-password`/`new-password`, inline "Password updated. Other devices have been signed out.").
 - A wrong current password is a 400, so it never signs the browser out; 401 still returns to `/login`; network errors
   keep typed values. Admin audit log now labels the `CUSTOMER` actor and `PASSWORD_CHANGED`.
-- Email change is **not** built: it needs a verification design and the production email provider.
+- Email change (Phase 08): the email stays read-only text with a "Change email" dialog (new address + current
+  password → "Verification email sent" with the masked address, resend, cancel); `/settings/verify-email-change`
+  (in `app/(auth)`, opens with or without a session) confirms, clears the private cache and asks for a sign-in with
+  the new address. Tests in `account-settings.test.tsx`, `account-links.test.tsx` and `e2e/account-recovery.spec.ts`.
 - Tests: 14 component tests (199 total); `e2e/account.spec.ts` 3 Playwright tests against the real API (name persists
   across reload and greeting, wrong current password, change → other device 401, old password refused, new works).
   Checked at 375/768/1280/1440 px (no horizontal scroll; panels ≤ 768 px).
@@ -188,12 +200,12 @@ Also built, outside the FE list: the Customer death-verification **safety banner
 
 ### Step 24 — Transactional email (backend; small frontend changes)
 - Sign-in codes, "a message is waiting for you" after a release, and the account-holder safety notice are emailed
-  through Resend (backend `docs/email-production-setup.md`). No frontend copy change was needed: the code step already
+  through the backend email provider, Brevo since 2026-10-05 (backend `docs/email-production-setup.md`). No frontend copy change was needed: the code step already
   shows the API's neutral message and "Sent to …".
 - Admin queues: the new `email-delivery` queue appears with its failed jobs shown as "Email <id>" (never an address).
 - Playwright: `portals.spec` reads codes (and checks the release email) from the console provider's
   `[DEV ONLY] Email (<kind>) to …` lines in `E2E_BACKEND_LOG`; run the API with `EMAIL_PROVIDER=console`.
-- Real email from the For After domain waits on verifying the domain in Resend (manual).
+- Real email from a For After domain waits on authenticating it in Brevo (manual). The frontend never knows the provider.
 
 ---
 
@@ -216,9 +228,9 @@ Also built, outside the FE list: the Customer death-verification **safety banner
 - [ ] Brand confirmation: inferred colours, and the rights to reuse the site's logo and photos in the app.
 
 **Product decisions the frontend follows but does not make**
-- No Trusted Contact invitations or "invitation sent" states (no invitation API).
+- Trusted Contacts: at most 2 (Phase 10); invitations by email only (no SMS), shown as pending / accepted / declined / expired / not sent / no invitation.
 - No recipient downloads, no SMS codes, no evidence upload, no second-contact confirmation.
-- After a case is closed (including "I'm still alive"), the backend accepts no new reports for that account.
+- After a case is closed without a death (CANCELLED / REJECTED), a new report starts a new case (Phase 10); after VERIFIED no report is accepted. The portal follows the API's `canReport`.
 
 ---
 

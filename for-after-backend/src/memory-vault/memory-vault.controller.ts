@@ -11,6 +11,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { ApiCookieAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { CustomerGuard } from '../auth/guards/customer.guard.js';
 import { SessionAuthGuard } from '../auth/guards/session-auth.guard.js';
@@ -31,9 +32,12 @@ import {
   type MemoryResponse,
   MemoryVaultService,
 } from './memory-vault.service.js';
+import { AUTH } from '../config/swagger.js';
 
 // The owner is always the session user; ownership is enforced in the services.
 // Media bytes never pass through here (signed URLs, as for message media).
+@ApiTags('Memory Vault')
+@ApiCookieAuth(AUTH.customer)
 @Controller('memory-vault')
 @UseGuards(SessionAuthGuard, CustomerGuard)
 export class MemoryVaultController {

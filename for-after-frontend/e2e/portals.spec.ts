@@ -1,6 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import fs from 'node:fs';
-import { API } from './helpers';
+import { API, emailFromLog } from './helpers';
 
 // Step 19: Recipient and Trusted Contact portals, Customer safety banner.
 // Customer B (vault.setup.ts) owns the fictional test data here.
@@ -14,26 +14,9 @@ const RUN = Date.now();
 
 test.use({ storageState: 'e2e/.auth/b.json' });
 
-const masked = (email: string) => email.replace(/^(.)[^@]*@/, '$1***@').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-/**
- * Step 24: with EMAIL_PROVIDER=console the API prints each email it would send
- * ("[DEV ONLY] Email (<kind>) to s***@… | subject | plain text"). Waits for the
- * next one of `kind` to this (masked) address after `from` bytes.
- */
-async function emailFromLog(kind: string, email: string, from: number) {
-  const pattern = new RegExp(`\\[DEV ONLY\\] Email \\(${kind}\\) to ${masked(email)} \\| [^\\n]*`);
-  for (let i = 0; i < 40; i++) {
-    const match = fs.readFileSync(LOG!, 'utf8').slice(from).match(pattern);
-    if (match) return match[0];
-    await new Promise((r) => setTimeout(r, 250));
-  }
-  throw new Error(`No ${kind} email for ${email.replace(/^(.)[^@]*@/, '$1***@')} in ${LOG}`);
-}
-
 async function codeFromLog(label: 'Recipient' | 'Trusted Contact', email: string, from: number) {
   const kind = label === 'Recipient' ? 'recipient-otp' : 'trusted-contact-otp';
-  return (await emailFromLog(kind, email, from)).match(/Your sign-in code is (\d{6})/)![1];
+  return (await emailFromLog(LOG!, kind, email, from)).match(/Your sign-in code is (\d{6})/)![1];
 }
 
 // Optional: when the API on :4000 runs in a terminal you can't tee, start a second
@@ -146,7 +129,7 @@ test.describe('with the dev OTP log', () => {
       .toBe('RELEASED');
     // Step 24: the release queued one minimal "a message is waiting" email,
     // with a sign-in link and nothing of the message itself.
-    const notice = await emailFromLog('message-released', email, logStart);
+    const notice = await emailFromLog(LOG!, 'message-released', email, logStart);
     expect(notice).toContain('A message is waiting for you');
     expect(notice).toContain('/recipient/sign-in');
     expect(notice).not.toContain('Released letter');

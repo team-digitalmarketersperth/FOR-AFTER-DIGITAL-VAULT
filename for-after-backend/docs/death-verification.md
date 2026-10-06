@@ -7,7 +7,8 @@
 |---|---|
 | **Built** | Report intake (Step 14) · safety notice, safeguard window, confirm-alive, admin verify/reject, death-trigger activation and release (Step 15) |
 | **Frontend** | Step 19 (`for-after-frontend`): Trusted Contact report form and status page; Customer safety banner with "I'm still alive" (confirm-alive) on every dashboard page. Admin review UI is not built |
-| **Not built** | Evidence upload, second-contact confirmation, production email provider, reopening a closed case, admin review UI |
+| **Phase 10** | A Customer has a history of cases: a report after `CANCELLED`/`REJECTED` opens a NEW case (§1.1); at most one open case; `VERIFIED` never reopens |
+| **Not built** | Evidence upload, second-contact confirmation |
 | **Related** | [Trusted Contact auth](trusted-contact-auth.md) · [Scheduling](scheduling.md) · [Message release](message-release.md) · [Threat model](../threat-model.md) |
 
 > ⚠️ **REPORT ≠ VERIFICATION ≠ RELEASE.** A Trusted Contact report never marks anyone dead. Two reports never verify
@@ -64,8 +65,43 @@ REPORT → SAFETY NOTICE → SAFEGUARD → READY_FOR_REVIEW → ADMIN VERIFIED �
 | `REJECTED` ⛔ | Admin could not verify | Terminal |
 | `CANCELLED` ⛔ | Customer confirmed they are alive | Terminal |
 
-Terminal cases never move to another terminal state through any API (e.g. no `VERIFIED → CANCELLED`, no
-`REJECTED → VERIFIED`). Recovery from a wrong decision is a future, separately designed workflow.
+Terminal cases never move to another state through any API (e.g. no `VERIFIED → CANCELLED`, no
+`REJECTED → VERIFIED`, no `CANCELLED → PENDING_VERIFICATION`). Recovery from a wrong decision is a future, separately
+designed workflow.
+
+### 1.1 A new case after a closed one (Phase 10)
+
+**Product decision:** a terminal `REJECTED` or `CANCELLED` case remains immutable history. A later legitimate Trusted
+Contact report creates a **new** case. Only one open case may exist per Customer. `VERIFIED` (account `PASSED`) is
+never reopened.
+
+```text
+Case 1: report → … → CANCELLED (Customer alive)  or  REJECTED (admin)      ← kept exactly as it was
+          later: any active Trusted Contact reports
+Case 2: PENDING_VERIFICATION (reopenedFromCaseId = case 1) → safety notice → safeguard → review → admin decision
+```
+
+| Customer's current case | A Trusted Contact report… |
+|---|---|
+| none | opens case 1 |
+| `PENDING_VERIFICATION` / `SAFEGUARD_ACTIVE` / `READY_FOR_REVIEW` | joins it (one report per contact per case; a second → `409`) |
+| `CANCELLED` / `REJECTED` | opens a NEW case linked by `reopenedFromCaseId`; audit `CASE_REOPENED` + `REPORT_RECEIVED` on it |
+| `VERIFIED` | `409 This account is not accepting new reports.`; no case, no release |
+
+- **Who:** any active Trusted Contact of that Customer (the same one or another); nothing ties a new case to an old
+  reporter. Removed contacts get `404`, as before.
+- **Same safety:** the new case starts at `PENDING_VERIFICATION` and goes through the same safety notice, safeguard,
+  confirm-alive and admin verification. A report never sets `PASSED`, `verifiedDeathAt` or releases anything.
+- **One open case, guaranteed by PostgreSQL:** the old `ownerUserId` unique index is replaced by the partial unique index
+  `DeathVerificationCase_one_live_per_owner` on `ownerUserId WHERE status IN (PENDING_VERIFICATION, SAFEGUARD_ACTIVE,
+  READY_FOR_REVIEW, VERIFIED)`. Two open cases, or any case beside a `VERIFIED` one, cannot exist.
+- **Concurrency:** `submitReport` locks the Customer's `User` row (`FOR UPDATE`), so concurrent reports are serialised:
+  two contacts reporting at once after `CANCELLED` produce exactly one new case with both reports. It then reads the
+  current case with `… ORDER BY "openedAt" DESC, id DESC LIMIT 1 FOR UPDATE`, which waits for an in-flight confirm-alive
+  or admin decision and sees its committed status, so a new case is never opened from stale state.
+- **Who sees what:** Customer and Trusted Contact routes describe the **current (newest)** case only. Admins see every
+  case in `GET /admin/death-verifications` and each case's own reports, audit trail and `reopenedFromCaseId` in the
+  detail view; `GET /admin/users/:id` shows the current case.
 
 ---
 
@@ -77,10 +113,11 @@ Terminal cases never move to another terminal state through any API (e.g. no `VE
 { "reportedDateOfDeath": "2026-09-28", "note": "Fictional test report.", "confirmReport": true }
 ```
 
-- One `DeathVerificationCase` per Customer (`ownerUserId` unique); each Trusted Contact files at most one `DeathReport`
-  per case (`409 A report has already been submitted for this account.`).
+- At most one open `DeathVerificationCase` per Customer (Phase 10, §1.1; earlier: one case ever); each Trusted Contact
+  files at most one `DeathReport` per case (`409 A report has already been submitted for this account.`).
 - Reports are accepted while the case is **open** (`PENDING_VERIFICATION`, `SAFEGUARD_ACTIVE`, `READY_FOR_REVIEW`):
-  a second contact's report is supporting information for the admin. A closed case refuses reports (`409`).
+  a second contact's report is supporting information for the admin. After `CANCELLED`/`REJECTED` a report opens a new
+  case; after `VERIFIED` it is refused (`409`).
 - `reportedDateOfDeath` is reporter-provided information only (date-only, not in the future). It is **never** used as
   the verified time of death.
 - `confirmReport: true` is a deliberate-action safeguard, not a legal attestation. `note` ≤ 2000 chars, never logged.
@@ -105,7 +142,7 @@ report → PENDING_VERIFICATION → send safety notice → success?
   their note, Message titles/content, recipients, Memory Vault, My Story or My Wishes.
 - **Delivery** (Step 24): an email through `EMAIL_PROVIDER` ([email setup](email-production-setup.md)), subject
   "Action needed on your For After account", a link to the sign-in page only (confirming stays a signed-in action),
-  Resend idempotency key `death-safety/<caseId>`. With `EMAIL_PROVIDER=disabled` every send **fails**, so no safeguard
+  idempotency key `death-safety/<caseId>`. With `EMAIL_PROVIDER=disabled` every send **fails**, so no safeguard
   can start; `console` (development only) prints the email to the API terminal.
 - **Failure:** the case stays `PENDING_VERIFICATION`, `safetyNoticeAttemptCount` / `safetyNoticeLastAttemptAt` record
   the attempt (no provider error text is stored), the report is kept, and the reconciler retries each interval. Each
@@ -255,7 +292,8 @@ PostgreSQL is the source of truth; Redis/BullMQ only accelerates execution.
 
 ## 9. Data model
 
-**`DeathVerificationCase`** (extended): `status` (6 values), `openedAt`, `resolvedAt`, `safetyNoticeSentAt`,
+**`DeathVerificationCase`** (extended): `ownerUserId` (many per Customer since Phase 10; partial unique index above),
+`reopenedFromCaseId` (Phase 10, plain id), `status` (6 values), `openedAt`, `resolvedAt`, `safetyNoticeSentAt`,
 `safetyNoticeLastAttemptAt`, `safetyNoticeAttemptCount`, `safeguardStartedAt`, `safeguardEndsAt`, `verifiedAt`,
 `verifiedDeathAt`, `verifiedByUserId`, `rejectedAt`, `rejectedByUserId`, `cancelledAt`, `adminDecisionNote`,
 `deathTriggersActivatedAt`. Admin ids are plain history columns (no FK).
@@ -270,20 +308,22 @@ case is cancelled, rejected or verified.
 `dueAt`, timestamps.
 
 Migrations: `add_death_report_intake`, `death_report_owner_deletion` (Step 14), `add_death_verification_workflow`
-(Step 15, additive only). Details: [database.md](database.md).
+(Step 15, additive only), `trusted_contact_invitations_and_case_history` (Phase 10: drops the `ownerUserId` unique
+index, adds the partial one and `reopenedFromCaseId`; existing cases and ids are untouched). Details: [database.md](database.md).
 
 ---
 
 ## 10. Audit trail and logging
 
-**Audit events** (written in the same transaction as the change): `REPORT_RECEIVED`, `SAFETY_NOTICE_SENT`,
+**Audit events** (written in the same transaction as the change): `REPORT_RECEIVED`, `CASE_REOPENED` (Phase 10: on the
+new case, actor = the reporting Trusted Contact; the previous case is the case's `reopenedFromCaseId`), `SAFETY_NOTICE_SENT`,
 `SAFEGUARD_STARTED`, `SAFEGUARD_ELAPSED`, `CUSTOMER_CONFIRMED_ALIVE`, `ADMIN_VERIFIED`, `ADMIN_REJECTED`,
 `DEATH_TRIGGER_ACTIVATION_STARTED`, `DEATH_TRIGGER_ACTIVATION_COMPLETED`. Visible to admins only.
 
 **Log categories:** `death_report_submitted`, `death_report_duplicate`, `death_safety_notice_sent`,
 `death_safety_notice_failed`, `death_safeguard_started`, `death_safeguard_ready_for_review`, `death_safeguard_stale_job`,
 `death_customer_confirmed_alive`, `death_admin_verified`, `death_admin_rejected`, `death_trigger_activation_created`,
-`death_trigger_release_queued`, `death_reconciliation_error`, `death_verification_status_viewed`.
+`death_trigger_release_queued`, `death_reconciliation_error`, `death_verification_status_viewed`, `death_case_reopened`.
 
 Logs carry ids, masked emails and categories only. **Never:** report notes, admin decision notes, Message content,
 My Story, My Wishes, OTPs, session ids, secrets or presigned URLs. There is no `death_verified` log without an admin.
@@ -335,9 +375,12 @@ My Story, My Wishes, OTPs, session ids, secrets or presigned URLs. There is no `
 automatic/consensus verification (deliberately never), production email/SMS notice (Step 17), full admin backend and
 admin 2FA (Step 16), recovery/reversal of a wrong decision, `ANNUAL_AFTER_DEATH`.
 
+**Resolved (Phase 10):** reopening. A closed `CANCELLED`/`REJECTED` case stays as history and a later report opens a
+new case (§1.1).
+
 **Open decisions:**
-- 🔴 **Reopening:** one case per Customer, so after `CANCELLED` or `REJECTED` no Trusted Contact can ever report that
-  Customer's death again. The approved design needs a reopening rule before production.
+- Should a Customer who keeps getting false reports be protected from repeated new cases (e.g. a cool-down)? Today each
+  new case sends a new safety notice; Trusted Contacts are limited to 2 and each can file one report per case.
 - Should a Customer's "I am alive" response carry a note (not supported in Step 15)?
 - Should Trusted Contacts or Recipients ever see `verifiedDeathAt`?
 - May admins reject before `READY_FOR_REVIEW` (currently no)?

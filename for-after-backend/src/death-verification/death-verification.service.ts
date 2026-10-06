@@ -36,6 +36,21 @@ export const CASE_NOT_FOUND = 'Death verification case not found.';
 export const NO_OPEN_CASE = 'There is no death report for this account.';
 export const CASE_CLOSED = 'This death verification case is already closed.';
 
+/**
+ * Terminal without a death: a later report opens a new case (Phase 10).
+ * VERIFIED is never reopened.
+ */
+export const REOPENABLE_STATUSES: Status[] = [
+  Status.CANCELLED,
+  Status.REJECTED,
+];
+
+/** A Customer's current case: the newest. At most one is open or VERIFIED. */
+const LATEST = [
+  { openedAt: 'desc' },
+  { id: 'desc' },
+] satisfies Prisma.DeathVerificationCaseOrderByWithRelationInput[];
+
 /** The already-authorized relationship row a report is filed through. */
 export type Reporter = Pick<
   TrustedContact,
@@ -50,10 +65,13 @@ export type DeathReportReceipt = {
   message: string;
 };
 
+/** About the Customer's current (newest) case. */
 export type DeathVerificationStatus = {
   status: DeathVerificationCaseStatus | null;
   reportedByYou: boolean;
   openedAt: Date | null;
+  // Whether this contact may file a report now (submitReport stays authoritative).
+  canReport: boolean;
 };
 
 export type CustomerDeathVerificationStatus = {
@@ -86,7 +104,9 @@ const displayName = (u: {
  * "I am alive" response, and the explicit admin decision (Step 15). Every
  * state change is a conditional update in a transaction, so exactly one of
  * confirm-alive / verify / reject can win; the loser gets 409. Only VERIFIED
- * activates death-triggered Messages; a report never does.
+ * activates death-triggered Messages; a report never does. A Customer has a
+ * history of cases (Phase 10); everything Customer- and Trusted-Contact-facing
+ * reads the newest one.
  */
 @Injectable()
 export class DeathVerificationService {
@@ -104,22 +124,45 @@ export class DeathVerificationService {
     dto: CreateDeathReportDto,
   ): Promise<DeathReportReceipt> {
     let receipt: DeathReportReceipt;
+    let reopenedFrom: string | undefined;
     try {
       receipt = await this.prisma.$transaction(async (tx) => {
-        // Race-safe find-or-create: INSERT ... ON CONFLICT DO NOTHING.
-        await tx.deathVerificationCase.createMany({
-          data: [{ ownerUserId: reporter.ownerUserId }],
-          skipDuplicates: true,
-        });
-        const found = await tx.deathVerificationCase.findUniqueOrThrow({
-          where: { ownerUserId: reporter.ownerUserId },
-          select: { id: true, status: true },
-        });
-        // Further reports are supporting information while the case is open.
-        // ponytail: one case per Customer, so a closed case (VERIFIED,
-        // REJECTED, CANCELLED) accepts no reports until reopening is designed.
-        if (!OPEN_STATUSES.includes(found.status)) {
+        // Serialises every report for this Customer, so two reporters can
+        // never both open a case. The partial unique index
+        // "DeathVerificationCase_one_live_per_owner" is the backstop.
+        await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${reporter.ownerUserId}::uuid FOR UPDATE`;
+        // The current case, row-locked: confirm-alive and admin decisions do
+        // not take the User lock, so this waits for any in-flight one and
+        // returns its committed status, never a stale one.
+        const [current] = await tx.$queryRaw<
+          { id: string; status: DeathVerificationCaseStatus }[]
+        >`SELECT id, status FROM "DeathVerificationCase"
+          WHERE "ownerUserId" = ${reporter.ownerUserId}::uuid
+          ORDER BY "openedAt" DESC, id DESC LIMIT 1 FOR UPDATE`;
+        let found: { id: string; status: DeathVerificationCaseStatus };
+        if (current && OPEN_STATUSES.includes(current.status)) {
+          // Further reports are supporting information while a case is open.
+          found = current;
+        } else if (current && !REOPENABLE_STATUSES.includes(current.status)) {
+          // VERIFIED: a verified death is never reopened.
           throw new ConflictException(NOT_ACCEPTING_REPORTS);
+        } else {
+          // No case yet, or the last one closed without a death (CANCELLED /
+          // REJECTED): a NEW case. The closed one stays untouched as history.
+          found = await tx.deathVerificationCase.create({
+            data: {
+              ownerUserId: reporter.ownerUserId,
+              reopenedFromCaseId: current?.id ?? null,
+            },
+            select: { id: true, status: true },
+          });
+          if (current) {
+            await audit(tx, found.id, 'CASE_REOPENED', {
+              type: 'TRUSTED_CONTACT',
+              trustedContactId: reporter.id,
+            });
+            reopenedFrom = current.id;
+          }
         }
         // The (case, trusted contact) unique index rejects a second report.
         const report = await tx.deathReport.create({
@@ -159,6 +202,11 @@ export class DeathVerificationService {
       throw err;
     }
     // Ids only: never the note, names or contact details.
+    if (reopenedFrom) {
+      this.logger.log(
+        `death_case_reopened case ${receipt.caseId} from ${reopenedFrom} trusted_contact ${reporter.id}`,
+      );
+    }
     this.logger.log(
       `death_report_submitted case ${receipt.caseId} report ${receipt.reportId} trusted_contact ${reporter.id}`,
     );
@@ -171,8 +219,9 @@ export class DeathVerificationService {
 
   /** High-level status only: no other reporters, reports, counts or notes. */
   async getStatus(reporter: Reporter): Promise<DeathVerificationStatus> {
-    const found = await this.prisma.deathVerificationCase.findUnique({
+    const found = await this.prisma.deathVerificationCase.findFirst({
       where: { ownerUserId: reporter.ownerUserId },
+      orderBy: LATEST,
       select: {
         status: true,
         openedAt: true,
@@ -186,10 +235,15 @@ export class DeathVerificationService {
     this.logger.log(
       `death_verification_status_viewed trusted_contact ${reporter.id}`,
     );
+    const reportedByYou = (found?.reports.length ?? 0) > 0;
     return {
       status: found?.status ?? null,
-      reportedByYou: (found?.reports.length ?? 0) > 0,
+      reportedByYou,
       openedAt: found?.openedAt ?? null,
+      canReport:
+        !found ||
+        REOPENABLE_STATUSES.includes(found.status) ||
+        (OPEN_STATUSES.includes(found.status) && !reportedByYou),
     };
   }
 
@@ -199,8 +253,9 @@ export class DeathVerificationService {
   async getCustomerStatus(
     ownerUserId: string,
   ): Promise<CustomerDeathVerificationStatus> {
-    const found = await this.prisma.deathVerificationCase.findUnique({
+    const found = await this.prisma.deathVerificationCase.findFirst({
       where: { ownerUserId },
+      orderBy: LATEST,
       select: { status: true, safeguardEndsAt: true },
     });
     return {
@@ -219,15 +274,14 @@ export class DeathVerificationService {
   ): Promise<CustomerDeathVerificationStatus> {
     const now = new Date();
     const caseId = await this.prisma.$transaction(async (tx) => {
-      const { count } = await tx.deathVerificationCase.updateMany({
+      // At most one case is open (partial unique index).
+      const [cancelled] = await tx.deathVerificationCase.updateManyAndReturn({
         where: { ownerUserId, status: { in: OPEN_STATUSES } },
         data: { status: Status.CANCELLED, cancelledAt: now, resolvedAt: now },
-      });
-      if (!count) return null;
-      const { id } = await tx.deathVerificationCase.findUniqueOrThrow({
-        where: { ownerUserId },
         select: { id: true },
       });
+      if (!cancelled) return null;
+      const { id } = cancelled;
       await audit(tx, id, 'CUSTOMER_CONFIRMED_ALIVE', {
         type: 'CUSTOMER',
         userId: ownerUserId,
@@ -235,9 +289,9 @@ export class DeathVerificationService {
       return id;
     });
     if (!caseId) {
-      const found = await this.prisma.deathVerificationCase.findUnique({
+      const found = await this.prisma.deathVerificationCase.findFirst({
         where: { ownerUserId },
-        select: { status: true },
+        select: { id: true },
       });
       if (!found) throw new NotFoundException(NO_OPEN_CASE);
       throw new ConflictException(CASE_CLOSED);
@@ -310,6 +364,7 @@ export class DeathVerificationService {
       select: {
         id: true,
         status: true,
+        reopenedFromCaseId: true,
         openedAt: true,
         resolvedAt: true,
         safetyNoticeSentAt: true,

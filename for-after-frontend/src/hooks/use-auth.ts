@@ -9,11 +9,13 @@ import {
 import {
   authApi,
   isAdminMfaChallenge,
+  type ChangeEmailInput,
   type ChangePasswordInput,
   type CurrentUser,
   type LoginInput,
   type ProfileInput,
   type RegisterInput,
+  type ResetPasswordInput,
 } from '@/lib/api/auth';
 import { ApiError, isApiError } from '@/lib/api/errors';
 import { queryKeys, resetPrivateCache } from '@/lib/query/query-client';
@@ -107,5 +109,64 @@ export function useChangePassword() {
   return useMutation<{ success: true }, ApiError, ChangePasswordInput>({
     mutationFn: authApi.changePassword,
     gcTime: 0,
+  });
+}
+
+// Phase 04. Verifying changes emailVerifiedAt, so a signed-in /auth/me is refreshed.
+export function useVerifyEmail() {
+  const queryClient = useQueryClient();
+  return useMutation<{ verified: true }, ApiError, string>({
+    mutationFn: authApi.verifyEmail,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.me }),
+  });
+}
+
+export function useResendVerification() {
+  return useMutation<{ message: string }, ApiError, string>({
+    mutationFn: authApi.resendVerification,
+  });
+}
+
+export function useForgotPassword() {
+  return useMutation<{ message: string }, ApiError, string>({
+    mutationFn: authApi.forgotPassword,
+  });
+}
+
+// gcTime 0: the variables hold the new password.
+export function useResetPassword() {
+  return useMutation<{ success: true }, ApiError, ResetPasswordInput>({
+    mutationFn: authApi.resetPassword,
+    gcTime: 0,
+  });
+}
+
+// Phase 08. gcTime 0: the variables hold the current password.
+export function useRequestEmailChange() {
+  return useMutation<{ pendingEmail: string }, ApiError, ChangeEmailInput>({
+    mutationFn: authApi.requestEmailChange,
+    gcTime: 0,
+  });
+}
+
+export function useResendEmailChange() {
+  return useMutation<{ pendingEmail: string }, ApiError, void>({
+    mutationFn: () => authApi.resendEmailChange(),
+  });
+}
+
+export function useCancelEmailChange() {
+  return useMutation<{ success: true }, ApiError, void>({
+    mutationFn: () => authApi.cancelEmailChange(),
+  });
+}
+
+// A confirmed change ends every session of the account, this browser's too:
+// drop all private data now instead of showing the old account until a 401.
+export function useConfirmEmailChange() {
+  const queryClient = useQueryClient();
+  return useMutation<{ changed: true }, ApiError, string>({
+    mutationFn: authApi.confirmEmailChange,
+    onSuccess: () => switchSession(queryClient, null),
   });
 }

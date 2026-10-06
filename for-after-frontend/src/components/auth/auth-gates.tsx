@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, type ReactNode } from 'react';
 import { DashboardShell } from '@/components/layout/dashboard-shell';
 import { ErrorState, PageLoader, Spinner } from '@/components/shared/states';
@@ -72,11 +72,15 @@ function NotACustomer() {
   );
 }
 
+const LINK_PAGES = new Set(['/verify-email', '/settings/verify-email-change']);
+
 /** Wraps sign-in pages: a signed-in Customer goes straight to the dashboard. */
 export function GuestGate({ children }: { children: ReactNode }) {
   const router = useRouter();
   const { data: user, isPending } = useCurrentUser();
-  const isCustomer = user?.role === 'CUSTOMER';
+  // Emailed links work whether or not this browser is signed in.
+  const pathname = usePathname();
+  const isCustomer = user?.role === 'CUSTOMER' && !LINK_PAGES.has(pathname);
 
   useEffect(() => {
     if (isCustomer) router.replace('/dashboard');

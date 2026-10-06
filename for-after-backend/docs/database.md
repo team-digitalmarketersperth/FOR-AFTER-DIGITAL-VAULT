@@ -93,7 +93,10 @@ model TrustedContact {
   // status columns. Step 14 adds email OTP sign-in (Redis sessions only, nothing
   // stored here) and death reports (docs/trusted-contact-auth.md). Being a trusted
   // contact grants NO access to the owner's content (messages, media, vault,
-  // story, wishes).
+  // story, wishes). Phase 10: at most 2 active (deletedAt null) per owner,
+  // enforced in the service under a FOR UPDATE lock on the owner's User row;
+  // email invitations live in TrustedContactInvitation (token SHA-256 only,
+  // one PENDING per contact by a partial unique index; docs/trusted-contact-auth.md §10).
   id           String    @id @default(uuid()) @db.Uuid
   ownerUserId  String    @db.Uuid
   firstName    String
@@ -315,12 +318,15 @@ model MediaAsset {
 }
 
 model DeathVerificationCase {
-  // Step 14 intake + Step 15 workflow (docs/death-verification.md). One canonical
-  // case per Customer. Report → safety notice → safeguard → READY_FOR_REVIEW →
+  // Step 14 intake + Step 15 workflow (docs/death-verification.md). Phase 10: many
+  // cases per Customer over time, at most ONE open or VERIFIED (partial unique index
+  // "DeathVerificationCase_one_live_per_owner"); a report after CANCELLED/REJECTED
+  // opens a new case with reopenedFromCaseId. Report → safety notice → safeguard → READY_FOR_REVIEW →
   // admin VERIFIED / REJECTED, or CANCELLED by the Customer. Only VERIFIED
   // activates death triggers; the verify transaction also sets User.status=PASSED.
   id                        String                      @id @default(uuid()) @db.Uuid
-  ownerUserId               String                      @unique @db.Uuid
+  ownerUserId               String                      @db.Uuid   // not unique since Phase 10
+  reopenedFromCaseId        String?                     @db.Uuid   // Phase 10: the closed case this follows
   status                    DeathVerificationCaseStatus @default(PENDING_VERIFICATION)
   openedAt                  DateTime                    @default(now())
   resolvedAt                DateTime?                   // set with every terminal status

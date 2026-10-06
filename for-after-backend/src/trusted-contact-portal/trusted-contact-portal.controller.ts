@@ -7,6 +7,7 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
+import { ApiCookieAuth, ApiTags } from '@nestjs/swagger';
 import {
   DeathVerificationService,
   type DeathReportReceipt,
@@ -22,9 +23,12 @@ import {
   type TrustedAccount,
   TrustedContactPortalService,
 } from './trusted-contact-portal.service.js';
+import { AUTH } from '../config/swagger.js';
 
 // Trusted Contact session only; Customer and Recipient sessions get 401.
 // No route here reads Messages, media, Memory Vault, My Story or My Wishes.
+@ApiTags('Trusted Contact portal')
+@ApiCookieAuth(AUTH.trustedContact)
 @Controller('trusted-contact/accounts')
 @UseGuards(TrustedContactSessionAuthGuard)
 export class TrustedContactPortalController {

@@ -10,6 +10,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { ApiCookieAuth, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { adminActor } from '../audit/audit-log.service.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
@@ -27,12 +28,15 @@ import {
   RejectDeathCaseDto,
   VerifyDeathCaseDto,
 } from './dto/death-verification-decision.dto.js';
+import { AUTH } from '../config/swagger.js';
 
 /**
  * The account holder's view of a death report about them. Works while the
  * case is open; after VERIFIED the account is PASSED, so the session guard
  * already refuses these routes (401).
  */
+@ApiTags('Death verification (Customer)')
+@ApiCookieAuth(AUTH.customer)
 @Controller('death-verification/me')
 @UseGuards(SessionAuthGuard, CustomerGuard)
 export class CustomerDeathVerificationController {
@@ -60,6 +64,8 @@ export class CustomerDeathVerificationController {
  * SUPER_ADMIN with completed MFA only; Customers get 403, Recipient/Trusted
  * Contact sessions 401. Detail views and decisions write AuditLog rows.
  */
+@ApiTags('Admin')
+@ApiCookieAuth(AUTH.admin)
 @Controller('admin/death-verifications')
 @UseGuards(SessionAuthGuard, AdminGuard)
 export class AdminDeathVerificationController {

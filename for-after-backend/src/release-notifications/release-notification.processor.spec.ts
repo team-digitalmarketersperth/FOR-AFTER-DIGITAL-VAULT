@@ -18,7 +18,8 @@ const row = (over: object = {}) => ({
   status: 'PENDING',
   grant: {
     recipientEmailNormalized: 'sofia@example.com',
-    message: { status: 'RELEASED' },
+    recipient: { firstName: 'Sofia' },
+    message: { status: 'RELEASED', deletedAt: null },
   },
   ...over,
 });
@@ -73,6 +74,7 @@ describe('ReleaseNotificationProcessor', () => {
       }),
     ]);
     expect(sent[0].text).toContain('https://app.example.com/recipient/sign-in');
+    expect(sent[0].text).toContain('Hi Sofia,');
     expect(update).toHaveBeenCalledWith({
       where: { id: ID },
       data: expect.objectContaining({
@@ -92,6 +94,17 @@ describe('ReleaseNotificationProcessor', () => {
         grant: {
           recipientEmailNormalized: 'a@b.co',
           message: { status: 'SCHEDULED' },
+        },
+      }),
+      'stale',
+    ],
+    [
+      'message deleted after release',
+      row({
+        grant: {
+          recipientEmailNormalized: 'a@b.co',
+          recipient: { firstName: 'A' },
+          message: { status: 'RELEASED', deletedAt: new Date() },
         },
       }),
       'stale',

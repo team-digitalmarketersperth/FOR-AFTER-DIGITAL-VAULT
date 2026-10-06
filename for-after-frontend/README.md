@@ -123,9 +123,10 @@ is reused) and run `npx playwright test --project=vault --project=production-bui
 | Safety banner on every Customer page | The account holder | the Customer session; `/death-verification/me` |
 
 - The three sessions are separate: each portal has its own gate, query namespace (`['recipient', …]`, `['trusted-contact', …]`) and sign-out, and a 401 in one never signs the others out.
-- **Codes in development** are emailed through the API's `EMAIL_PROVIDER`; with `console` they are printed only in the API terminal (`[DEV ONLY] Email (recipient-otp) to s***@example.com | … Your sign-in code is 123456 …`). The UI never shows or fetches them.
+- **Codes in development** are emailed through the API's `EMAIL_PROVIDER`; with `console` they are printed only in the API terminal (`[DEV ONLY] Email (recipient-otp) to s***@example.com | … Your sign-in code is 123456 …`); with `brevo` (the backend's real provider) they arrive in the inbox. The UI never shows or fetches them, and never knows which provider is used. Playwright OTP tests need the API on `console`.
 - **E2E:** the OTP flows in `e2e/portals.spec.ts` run only when the backend output is teed to a file and `E2E_BACKEND_LOG` points at it:
   `npm run start:dev | tee backend.log` (backend), then `E2E_BACKEND_LOG=../for-after-backend/backend.log npx playwright test --project=vault` (frontend). The Recipient test waits about 2 minutes for a real FIXED_DATE release.
+- **Phase 10 E2E** (`e2e/trusted-contacts.spec.ts`: invitation → accept → OTP sign-in, the 2-contact limit, a new death report after a closed case) also needs `E2E_BACKEND_LOG`, and reads the invitation link from the console email. `E2E_BASE_URL` points the `development` project at another app origin, e.g. a build served on :3100 that talks to a second API started with `EMAIL_PROVIDER=console`: `E2E_BASE_URL=http://localhost:3100 NEXT_PUBLIC_API_BASE_URL=http://localhost:4001/api/v1 E2E_BACKEND_LOG=… npx playwright test --project=development e2e/trusted-contacts.spec.ts`. Never run it against an API using `brevo`: adding a contact emails a real invitation.
 
 ## Admin Portal (Step 20)
 

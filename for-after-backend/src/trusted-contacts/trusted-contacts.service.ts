@@ -1,10 +1,20 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma } from '../generated/prisma/client.js';
+import {
+  Prisma,
+  TrustedContactInvitationStatus,
+} from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import {
+  type InvitationState,
+  invitationState,
+  latestInvitation,
+  TrustedContactInvitationsService,
+} from './trusted-contact-invitations.service.js';
 import {
   CONTACT_METHOD_REQUIRED,
   CreateTrustedContactDto,
@@ -21,11 +31,26 @@ const trustedContactSelect = {
   mobile: true,
   createdAt: true,
   updatedAt: true,
+  invitations: latestInvitation,
 } satisfies Prisma.TrustedContactSelect;
 
-export type TrustedContactResponse = Prisma.TrustedContactGetPayload<{
+type Row = Prisma.TrustedContactGetPayload<{
   select: typeof trustedContactSelect;
 }>;
+
+export type TrustedContactResponse = Omit<Row, 'invitations'> & {
+  invitation: { status: InvitationState; sentAt: Date | null };
+};
+
+// Never the token, its hash or the address it was sent to.
+const toResponse = ({ invitations, ...row }: Row): TrustedContactResponse => ({
+  ...row,
+  invitation: invitationState(row.email, invitations[0]),
+});
+
+/** Phase 10 product decision: at most two active Trusted Contacts per Customer. */
+export const MAX_TRUSTED_CONTACTS = 2;
+export const MAX_REACHED = `You can nominate up to ${MAX_TRUSTED_CONTACTS} trusted contacts. Remove one to add someone else.`;
 
 // Same message whether the row is missing, deleted or someone else's.
 const NOT_FOUND = 'Trusted contact not found.';
@@ -41,7 +66,10 @@ const toData = (dto: UpdateTrustedContactDto) => ({
 
 @Injectable()
 export class TrustedContactsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly invitations: TrustedContactInvitationsService,
+  ) {}
 
   // Every read and write goes through this filter: ownership is part of the
   // query itself, never checked after fetching by id alone.
@@ -49,22 +77,44 @@ export class TrustedContactsService {
     return { id, ownerUserId, deletedAt: null };
   }
 
-  create(
+  /**
+   * Count and insert under a lock on the Customer's User row, so concurrent
+   * creates are serialised: a plain count-then-create could let two requests
+   * both see one contact and end with three. Soft-deleted rows do not count.
+   * With an email, the invitation is then sent (best effort: a failed send
+   * leaves the contact with invitation NOT_SENT, and the Customer can resend).
+   */
+  async create(
     ownerUserId: string,
     dto: CreateTrustedContactDto,
+    meta?: { ip?: string; userAgent?: string },
   ): Promise<TrustedContactResponse> {
-    return this.prisma.trustedContact.create({
-      data: { ...toData(dto), firstName: dto.firstName, ownerUserId },
-      select: trustedContactSelect,
+    const { id } = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${ownerUserId}::uuid FOR UPDATE`;
+      const active = await tx.trustedContact.count({
+        where: { ownerUserId, deletedAt: null },
+      });
+      if (active >= MAX_TRUSTED_CONTACTS) {
+        throw new ConflictException(MAX_REACHED);
+      }
+      return tx.trustedContact.create({
+        data: { ...toData(dto), firstName: dto.firstName, ownerUserId },
+        select: { id: true },
+      });
     });
+    if (dto.email) await this.invitations.send(ownerUserId, id, meta);
+    return this.findOwnedById(ownerUserId, id);
   }
 
-  findAllForOwner(ownerUserId: string): Promise<TrustedContactResponse[]> {
-    return this.prisma.trustedContact.findMany({
+  async findAllForOwner(
+    ownerUserId: string,
+  ): Promise<TrustedContactResponse[]> {
+    const rows = await this.prisma.trustedContact.findMany({
       where: { ownerUserId, deletedAt: null },
       orderBy: { createdAt: 'desc' },
       select: trustedContactSelect,
     });
+    return rows.map(toResponse);
   }
 
   async findOwnedById(
@@ -76,7 +126,7 @@ export class TrustedContactsService {
       select: trustedContactSelect,
     });
     if (!row) throw new NotFoundException(NOT_FOUND);
-    return row;
+    return toResponse(row);
   }
 
   // At least one contact method must remain. Clearing one is only allowed
@@ -101,9 +151,22 @@ export class TrustedContactsService {
     return this.updateOwned(ownerUserId, id, toData(dto), keepsContactMethod);
   }
 
-  // Soft delete: future death verification will reference trusted contacts.
+  // Soft delete: death reports keep referencing the row. A pending invitation
+  // is cancelled with it (acceptance also re-checks deletedAt).
   async remove(ownerUserId: string, id: string): Promise<void> {
-    await this.updateOwned(ownerUserId, id, { deletedAt: new Date() });
+    const now = new Date();
+    await this.updateOwned(ownerUserId, id, {
+      deletedAt: now,
+      invitations: {
+        updateMany: {
+          where: { status: TrustedContactInvitationStatus.PENDING },
+          data: {
+            status: TrustedContactInvitationStatus.CANCELLED,
+            cancelledAt: now,
+          },
+        },
+      },
+    });
   }
 
   private async updateOwned(
@@ -116,11 +179,13 @@ export class TrustedContactsService {
     >,
   ): Promise<TrustedContactResponse> {
     try {
-      return await this.prisma.trustedContact.update({
-        where: { ...this.owned(ownerUserId, id), ...keepsContactMethod },
-        data,
-        select: trustedContactSelect,
-      });
+      return toResponse(
+        await this.prisma.trustedContact.update({
+          where: { ...this.owned(ownerUserId, id), ...keepsContactMethod },
+          data,
+          select: trustedContactSelect,
+        }),
+      );
     } catch (err) {
       if (
         !(err instanceof Prisma.PrismaClientKnownRequestError) ||

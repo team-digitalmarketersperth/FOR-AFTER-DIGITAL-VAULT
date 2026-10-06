@@ -4,9 +4,17 @@ import { Resend } from 'resend';
 import { maskEmail } from '../auth/dto/register.dto.js';
 import { positiveInt } from '../media/media.service.js';
 
-/** The four transactional emails For After sends (Step 24). Nothing else. */
+/** The transactional emails For After sends (Step 24, Phase 04). Nothing else. */
 export type EmailKind =
-  'recipient-otp' | 'trusted-contact-otp' | 'message-released' | 'death-safety';
+  | 'recipient-otp'
+  | 'trusted-contact-otp'
+  | 'message-released'
+  | 'death-safety'
+  | 'verify-email'
+  | 'reset-password'
+  | 'change-email'
+  | 'email-changed'
+  | 'trusted-contact-invitation';
 
 export type EmailMessage = {
   kind: EmailKind;
@@ -14,7 +22,11 @@ export type EmailMessage = {
   subject: string;
   html: string;
   text: string;
-  /** Same key → the provider sends once (Resend keeps keys for 24 hours). */
+  /**
+   * Same key → the provider sends once where it supports keys (Brevo:
+   * `Idempotency-Key` email header; Resend: 24 hours). The app's own guards
+   * (SENT rows, claimed attempts) come first.
+   */
   idempotencyKey?: string;
 };
 
@@ -34,7 +46,7 @@ export class EmailSendError extends Error {
 
 /**
  * The one way the app sends email. Business code (OTP, release, death
- * verification) depends on this, never on Resend, so the provider can change
+ * verification) depends on this, never on Brevo or Resend, so the provider can change
  * without touching them. Implementations throw EmailSendError on failure.
  */
 export abstract class EmailProvider {
@@ -54,7 +66,7 @@ const RETRYABLE = new Set([
   'internal_server_error',
 ]);
 
-/** Production. Logs ids and categories only: never the key, body or code. */
+/** Optional, not active. Logs ids and categories only: never the key, body or code. */
 export class ResendEmailProvider extends EmailProvider {
   readonly name = 'resend';
   private readonly logger = new Logger('ResendEmailProvider');
@@ -113,6 +125,95 @@ export class ResendEmailProvider extends EmailProvider {
   }
 }
 
+export const BREVO_SEND_URL = 'https://api.brevo.com/v3/smtp/email';
+
+// Brevo `code` values on a 4xx that a later attempt can fix. Everything else
+// on a 4xx (invalid_parameter, missing_parameter, unauthorized, unverified
+// sender, insufficient_credits, duplicate_request, …) is permanent.
+const BREVO_RETRYABLE_CODES = new Set(['too_many_requests']);
+const SAFE_CODE = /^[a-z][a-z0-9_]{0,63}$/;
+
+/**
+ * Brevo transactional email over its REST API (no SDK). Logs ids and
+ * categories only: never the key, body or code. One attempt per call; retries
+ * belong to the caller (BullMQ backoff, the death-verification reconciler).
+ */
+export class BrevoEmailProvider extends EmailProvider {
+  readonly name = 'brevo';
+  private readonly logger = new Logger('BrevoEmailProvider');
+
+  constructor(
+    private readonly apiKey: string,
+    private readonly sender: { name: string; email: string },
+    private readonly timeoutMs: number,
+    private readonly fetchFn: typeof fetch = fetch,
+  ) {
+    super();
+  }
+
+  async send(message: EmailMessage) {
+    const { kind, to, subject, html, text, idempotencyKey } = message;
+    try {
+      let res: Response;
+      try {
+        res = await this.fetchFn(BREVO_SEND_URL, {
+          method: 'POST',
+          headers: {
+            'api-key': this.apiKey,
+            'content-type': 'application/json',
+            accept: 'application/json',
+          },
+          body: JSON.stringify({
+            sender: this.sender,
+            to: [{ email: to }],
+            subject,
+            htmlContent: html,
+            textContent: text,
+            tags: [kind.replaceAll('-', '_')],
+            // Brevo reads the idempotency key from the email headers object.
+            ...(idempotencyKey
+              ? { headers: { 'Idempotency-Key': idempotencyKey } }
+              : {}),
+          }),
+          signal: AbortSignal.timeout(this.timeoutMs),
+          redirect: 'error',
+        });
+      } catch (err) {
+        const timedOut =
+          err instanceof Error &&
+          (err.name === 'TimeoutError' || err.name === 'AbortError');
+        throw new EmailSendError(timedOut ? 'timeout' : 'network_error', true);
+      }
+      const body = (await res.json().catch(() => null)) as {
+        messageId?: unknown;
+        code?: unknown;
+      } | null;
+      if (!res.ok) throw brevoError(res.status, body?.code);
+      const id = typeof body?.messageId === 'string' ? body.messageId : null;
+      this.logger.log(`email_sent ${kind} to ${maskEmail(to)} id ${id}`);
+      return { providerMessageId: id };
+    } catch (err) {
+      const failure =
+        err instanceof EmailSendError
+          ? err
+          : new EmailSendError('network_error', true);
+      this.logger.warn(
+        `email_send_failed ${kind} to ${maskEmail(to)} (code: ${failure.code}, retryable: ${failure.retryable})`,
+      );
+      throw failure;
+    }
+  }
+}
+
+/** Status + Brevo's short `code` only; the message text is never kept. */
+const brevoError = (status: number, code: unknown): EmailSendError => {
+  const safe =
+    typeof code === 'string' && SAFE_CODE.test(code) ? code : `http_${status}`;
+  if (status === 429) return new EmailSendError('rate_limit_exceeded', true);
+  if (status >= 500) return new EmailSendError(safe, true);
+  return new EmailSendError(safe, BREVO_RETRYABLE_CODES.has(safe));
+};
+
 /**
  * Local development only (refused unless NODE_ENV=development): prints the
  * plain-text email, sign-in codes included, so codes can be read from the API
@@ -140,18 +241,23 @@ export class DisabledEmailProvider extends EmailProvider {
 }
 
 const URL_RE = /^https?:\/\/[^\s/]+(:\d+)?$/;
+const ADDRESS_RE = /^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+$/;
+/** Providers that really deliver; production must use one of them. */
+const REAL_PROVIDERS = ['brevo', 'resend'];
 
 /** Server-side only. Validated at startup; secrets are never logged. */
 export const emailSettings = (config: ConfigService) => {
   const nodeEnv = config.get<string>('NODE_ENV');
   const provider = config.get<string>('EMAIL_PROVIDER') || 'disabled';
-  if (!['resend', 'console', 'disabled'].includes(provider)) {
+  if (![...REAL_PROVIDERS, 'console', 'disabled'].includes(provider)) {
     throw new Error(
-      'EMAIL_PROVIDER must be "resend", "console" or "disabled".',
+      'EMAIL_PROVIDER must be "brevo", "resend", "console" or "disabled".',
     );
   }
-  if (nodeEnv === 'production' && provider !== 'resend') {
-    throw new Error('EMAIL_PROVIDER must be "resend" in production.');
+  if (nodeEnv === 'production' && !REAL_PROVIDERS.includes(provider)) {
+    throw new Error(
+      'EMAIL_PROVIDER must be "brevo" or "resend" in production.',
+    );
   }
   if (provider === 'console' && nodeEnv !== 'development') {
     throw new Error(
@@ -184,15 +290,30 @@ export const createEmailProvider = (config: ConfigService): EmailProvider => {
   const settings = emailSettings(config);
   if (settings.provider === 'console') return new ConsoleEmailProvider();
   if (settings.provider === 'disabled') return new DisabledEmailProvider();
-  const apiKey = config.get<string>('RESEND_API_KEY');
+  // Only the selected provider's key is required.
+  const keyName =
+    settings.provider === 'brevo' ? 'BREVO_API_KEY' : 'RESEND_API_KEY';
+  const apiKey = config.get<string>(keyName);
   if (!apiKey)
-    throw new Error('RESEND_API_KEY is not set (EMAIL_PROVIDER=resend).');
-  if (!/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(settings.fromAddress)) {
     throw new Error(
-      'EMAIL_FROM_ADDRESS must be a sender address on a domain verified in Resend.',
+      `${keyName} is not set (EMAIL_PROVIDER=${settings.provider}).`,
+    );
+  if (!ADDRESS_RE.test(settings.fromAddress)) {
+    throw new Error(
+      settings.provider === 'brevo'
+        ? 'EMAIL_FROM_ADDRESS must be a sender verified in Brevo (Senders, Domains & Dedicated IPs).'
+        : 'EMAIL_FROM_ADDRESS must be a sender address on a domain verified in Resend.',
+    );
+  }
+  const fromName = settings.fromName.replace(/["\\<>\r\n]/g, '');
+  if (settings.provider === 'brevo') {
+    return new BrevoEmailProvider(
+      apiKey,
+      { name: fromName, email: settings.fromAddress },
+      settings.timeoutMs,
     );
   }
   // Name quoted, so a comma or angle bracket in it can't change the header.
-  const from = `"${settings.fromName.replace(/["\\<>\r\n]/g, '')}" <${settings.fromAddress}>`;
+  const from = `"${fromName}" <${settings.fromAddress}>`;
   return new ResendEmailProvider(new Resend(apiKey), from, settings.timeoutMs);
 };

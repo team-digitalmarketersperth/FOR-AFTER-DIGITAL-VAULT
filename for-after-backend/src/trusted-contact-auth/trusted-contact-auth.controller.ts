@@ -8,6 +8,7 @@ import {
   Res,
   UseGuards,
 } from '@nestjs/common';
+import { ApiCookieAuth, ApiTags } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 // Same DTOs as the Recipient Portal: email in, then challengeId + 6 digits.
 import {
@@ -24,11 +25,13 @@ import {
   readTrustedContactSessionId,
   TrustedContactSessionAuthGuard,
 } from './trusted-contact-session.guard.js';
+import { AUTH } from '../config/swagger.js';
 
 type TrustedContactMe = { authenticated: true; email: string };
 
 // Trusted Contact sign-in. Separate from /auth (Customers) and
 // /recipient-auth: own cookie, own Redis sessions, no password, no User.
+@ApiTags('Trusted Contact auth')
 @Controller('trusted-contact-auth')
 export class TrustedContactAuthController {
   constructor(private readonly auth: TrustedContactAuthService) {}
@@ -62,6 +65,7 @@ export class TrustedContactAuthController {
     return { authenticated: true, email: principal.emailNormalized };
   }
 
+  @ApiCookieAuth(AUTH.trustedContact)
   @Get('me')
   @UseGuards(TrustedContactSessionAuthGuard)
   me(
@@ -71,6 +75,7 @@ export class TrustedContactAuthController {
   }
 
   // Safe to call with or without a valid session.
+  @ApiCookieAuth(AUTH.trustedContact)
   @Post('logout')
   @HttpCode(204)
   async logout(

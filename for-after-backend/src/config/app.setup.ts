@@ -1,9 +1,12 @@
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { TracerService } from '@nestjs/observe';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import type { NextFunction, Request, Response } from 'express';
 import session, { type SessionData, type Store } from 'express-session';
 import helmet from 'helmet';
+import { GlobalExceptionFilter } from './global-exception.filter.js';
+import { setupSwagger } from './swagger.js';
 
 export const SESSION_COOKIE = 'for_after_session';
 // Admins have their own session (Step 23 follow-up), so a Customer and an admin
@@ -113,6 +116,10 @@ export function configureApp(
       transform: true,
     }),
   );
+  app.useGlobalFilters(
+    new GlobalExceptionFilter(app.getHttpAdapter(), currentTracer(app)),
+  );
+  setupSwagger(app, config);
 
   // Production runs behind the AWS load balancer that terminates TLS. Trusting
   // one proxy hop lets secure cookies be issued and gives the throttler the real client IP.
@@ -146,3 +153,12 @@ export function configureApp(
       : customerSession(req, res, next),
   );
 }
+
+/** Observe's tracer (for the trace id in 500s), or null when Observe is off. */
+const currentTracer = (app: NestExpressApplication) => {
+  try {
+    return app.get(TracerService, { strict: false });
+  } catch {
+    return null;
+  }
+};

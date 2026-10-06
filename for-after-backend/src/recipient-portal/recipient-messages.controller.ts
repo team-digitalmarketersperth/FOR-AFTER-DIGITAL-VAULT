@@ -5,6 +5,7 @@ import {
   ParseUUIDPipe,
   UseGuards,
 } from '@nestjs/common';
+import { ApiCookieAuth, ApiTags } from '@nestjs/swagger';
 import type { AccessUrlResponse } from '../media/media.service.js';
 import type { RecipientPrincipal } from '../recipient-auth/recipient-auth.service.js';
 import {
@@ -17,9 +18,12 @@ import {
   type RecipientMessageSummary,
   RecipientMessagesService,
 } from './recipient-messages.service.js';
+import { AUTH } from '../config/swagger.js';
 
 // Read-only by design: no create, update, delete, upload or schedule routes.
 // Recipient session only; a Customer session is never accepted here.
+@ApiTags('Recipient portal')
+@ApiCookieAuth(AUTH.recipient)
 @Controller('recipient/messages')
 @UseGuards(RecipientSessionAuthGuard)
 export class RecipientMessagesController {

@@ -846,6 +846,10 @@ Exact permissions remain a client/business decision.
 
 > ✅ **As built (Step 14):** identity is verified by email code at sign-in (no invitation step yet). Effective
 > permissions today: `REPORT_DEATH` and `VIEW_VERIFICATION_STATUS`. The rest are not built.
+>
+> ✅ **Phase 10 (2026-10-06):** maximum 2 active Trusted Contacts per Customer; email invitation with accept/decline (SMS
+> invitations and SMS OTP deferred); formal V1 permission model ([trusted-contact-auth.md](trusted-contact-auth.md) §11):
+> report death and start a new case after a `REJECTED`/`CANCELLED` one, never any preserved content.
 
 ---
 

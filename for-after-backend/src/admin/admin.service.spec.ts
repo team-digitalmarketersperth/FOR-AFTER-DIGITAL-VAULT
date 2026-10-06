@@ -50,7 +50,7 @@ const setup = () => {
                 messages: 4,
                 memoryVaultItems: 3,
               },
-              deathVerificationCase: null,
+              deathVerificationCases: [],
             }
           : null;
       }),
@@ -186,6 +186,14 @@ describe('AdminService', () => {
       ]) {
         expect(select).not.toHaveProperty(field);
       }
+      // Phase 10: the current case is the newest one, chosen deterministically.
+      expect(select).toMatchObject({
+        deathVerificationCases: {
+          orderBy: [{ openedAt: 'desc' }, { id: 'desc' }],
+          take: 1,
+        },
+      });
+      expect(res.deathVerification).toBeNull();
       expect(audit).toEqual([
         expect.objectContaining({
           eventType: 'ADMIN_VIEWED_USER',

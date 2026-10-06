@@ -15,10 +15,17 @@ export default async function LoginPage({ searchParams }: PageProps<'/login'>) {
       />
       {registered === '1' && (
         <Alert className="mb-6 border-border bg-primary-soft">
-          <AlertDescription>Your account has been created. Please sign in.</AlertDescription>
+          <AlertDescription>
+            Your account has been created. We&apos;re emailing you a link to verify your address; you can sign in now.
+          </AlertDescription>
         </Alert>
       )}
       <LoginForm />
+      <p className="mt-5 text-sm">
+        <Link href="/forgot-password" className="rounded-sm font-semibold text-primary underline underline-offset-4 outline-none focus-visible:outline-2 focus-visible:outline-ring">
+          Forgotten your password?
+        </Link>
+      </p>
       <p className="mt-8 text-sm text-foreground-muted">
         New to For After?{' '}
         <Link href="/register" className="rounded-sm font-semibold text-primary underline underline-offset-4 outline-none focus-visible:outline-2 focus-visible:outline-ring">

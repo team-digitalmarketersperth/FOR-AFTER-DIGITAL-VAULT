@@ -8,7 +8,7 @@ import { portalKeys, queryKeys } from '@/lib/query/query-client';
 import { json, renderWithClient, routeFetch, router } from '@/test/utils';
 import { PortalGate, PortalShell } from './portal-shell';
 import { RecipientSignIn, ReleasedMessageList, ReleasedMessageView } from './recipient';
-import { AccountList, AccountStatus, ReportForm, TrustedContactSignIn } from './trusted-contact';
+import { AccountList, AccountStatus, ReportForm, TrustedContactInvitation, TrustedContactSignIn } from './trusted-contact';
 
 vi.mock('next/navigation', () => ({ useRouter: () => router, usePathname: () => '/recipient/messages' }));
 
@@ -233,21 +233,44 @@ describe('Trusted Contact portal (FE-24 to FE-27)', () => {
   it.each([...CASE_STATUSES, null] as (CaseStatus | null)[])('describes the %s status humanely', async (status) => {
     routeFetch({
       'GET /trusted-contact/accounts': json(200, [account({ deathVerificationStatus: status })]),
-      'GET /trusted-contact/accounts/t1/death-verification': json(200, { status, reportedByYou: false, openedAt: status ? '2026-09-20T00:00:00Z' : null }),
+      // As the API answers: only a VERIFIED case can never be reported again.
+      'GET /trusted-contact/accounts/t1/death-verification': json(200, {
+        status,
+        reportedByYou: false,
+        openedAt: status ? '2026-09-20T00:00:00Z' : null,
+        canReport: status !== 'VERIFIED',
+      }),
     });
     renderWithClient(<AccountStatus id="t1" />);
     const copy = REPORTER_STATUS[status ?? 'NONE'];
     expect(await screen.findByRole('heading', { name: copy.label })).toBeInTheDocument();
     expect(screen.getByText(copy.description)).toBeInTheDocument();
     expect(screen.queryByText(status ?? 'NONE')).not.toBeInTheDocument(); // never the raw enum
-    const canReport = status === null || ['PENDING_VERIFICATION', 'SAFEGUARD_ACTIVE', 'READY_FOR_REVIEW'].includes(status);
-    expect(screen.queryByRole('link', { name: 'Submit a death report' }) !== null).toBe(canReport);
+    const closed = status === 'CANCELLED' || status === 'REJECTED';
+    expect(screen.queryByRole('link', { name: 'Submit a death report' }) !== null).toBe(status !== 'VERIFIED' && !closed);
+    // Phase 10: after a closed case a new report starts a new verification.
+    expect(screen.queryByRole('link', { name: 'Submit a new death report' }) !== null).toBe(closed);
+    if (status === 'VERIFIED') expect(screen.getByText("This account isn't accepting new reports.")).toBeInTheDocument();
+  });
+
+  it('a contact who reported into a closed case may report again (the API decides)', async () => {
+    routeFetch({
+      'GET /trusted-contact/accounts': json(200, [account({ deathVerificationStatus: 'CANCELLED' })]),
+      'GET /trusted-contact/accounts/t1/death-verification': json(200, {
+        status: 'CANCELLED',
+        reportedByYou: true,
+        openedAt: '2026-09-20T00:00:00Z',
+        canReport: true,
+      }),
+    });
+    renderWithClient(<ReportForm id="t1" />);
+    expect(await screen.findByRole('button', { name: 'Submit report' })).toBeInTheDocument();
   });
 
   const reportRoutes = (reportResponse: Response) =>
     routeFetch({
       'GET /trusted-contact/accounts': json(200, [account()]),
-      'GET /trusted-contact/accounts/t1/death-verification': json(200, { status: null, reportedByYou: false, openedAt: null }),
+      'GET /trusted-contact/accounts/t1/death-verification': json(200, { status: null, reportedByYou: false, openedAt: null, canReport: true }),
       'POST /trusted-contact/accounts/t1/death-reports': reportResponse,
     });
 
@@ -294,8 +317,8 @@ describe('Trusted Contact portal (FE-24 to FE-27)', () => {
           : json(200, [account()])) as unknown as Response,
       'GET /trusted-contact/accounts/t1/death-verification': () =>
         json(200, reported
-          ? { status: 'PENDING_VERIFICATION', reportedByYou: true, openedAt: '2026-09-30T00:00:00Z' }
-          : { status: null, reportedByYou: false, openedAt: null }),
+          ? { status: 'PENDING_VERIFICATION', reportedByYou: true, openedAt: '2026-09-30T00:00:00Z', canReport: false }
+          : { status: null, reportedByYou: false, openedAt: null, canReport: true }),
       'POST /trusted-contact/accounts/t1/death-reports': () => {
         reported = true;
         return json(201, { caseId: 'c', reportId: 'r', status: 'PENDING_VERIFICATION', reportedAt: '2026-09-30T00:00:00Z', message: 'ok' });
@@ -324,6 +347,60 @@ describe('Trusted Contact portal (FE-24 to FE-27)', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Submit report' }));
     expect(await screen.findByRole('heading', { name: 'You’ve already submitted a report' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'See the status' })).toHaveAttribute('href', '/trusted-contact/accounts/t1');
+  });
+});
+
+describe('Trusted Contact invitation page (Phase 10)', () => {
+  const TOKEN = 'k'.repeat(43);
+  const pending = { status: 'PENDING', accountHolder: { displayName: 'Lisa Rossi' } };
+
+  it('shows who invited them and the role, then accepts without signing anyone in', async () => {
+    const api = routeFetch({
+      'POST /trusted-contact/invitation/view': json(200, pending),
+      'POST /trusted-contact/invitation/accept': json(200, { ...pending, status: 'ACCEPTED' }),
+    });
+    renderWithClient(<TrustedContactInvitation token={TOKEN} />);
+    expect(await screen.findByRole('heading', { name: /trusted contact for Lisa Rossi/ })).toBeInTheDocument();
+    expect(screen.getByText(/not be given access to their private preserved messages/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Accept invitation' }));
+    expect(await screen.findByRole('heading', { name: 'You’ve accepted the invitation' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Go to trusted contact sign-in' })).toHaveAttribute('href', '/trusted-contact/sign-in');
+    expect(api.called('POST', '/trusted-contact/invitation/accept')[0].body).toEqual({ token: TOKEN });
+    // Accepting is not a sign-in: no session route is called.
+    expect(api.calls.some((c) => c.path.includes('-auth/'))).toBe(false);
+  });
+
+  it('decline', async () => {
+    routeFetch({
+      'POST /trusted-contact/invitation/view': json(200, pending),
+      'POST /trusted-contact/invitation/decline': json(200, { ...pending, status: 'DECLINED' }),
+    });
+    renderWithClient(<TrustedContactInvitation token={TOKEN} />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Decline' }));
+    expect(await screen.findByRole('heading', { name: 'You’ve declined the invitation' })).toBeInTheDocument();
+  });
+
+  it.each([
+    ['ACCEPTED', 'You’ve accepted the invitation'],
+    ['DECLINED', 'You’ve declined the invitation'],
+    ['EXPIRED', 'This invitation has expired'],
+    ['CANCELLED', 'This invitation is no longer valid'],
+  ])('an already %s invitation offers no buttons', async (status, heading) => {
+    routeFetch({ 'POST /trusted-contact/invitation/view': json(200, { status, accountHolder: null }) });
+    renderWithClient(<TrustedContactInvitation token={TOKEN} />);
+    expect(await screen.findByRole('heading', { name: heading })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Accept invitation' })).not.toBeInTheDocument();
+  });
+
+  it('an unknown or missing token is an invalid link, without calling the API for a missing one', async () => {
+    routeFetch({ 'POST /trusted-contact/invitation/view': json(404, { statusCode: 404, message: 'This invitation link is invalid.' }) });
+    const { unmount } = renderWithClient(<TrustedContactInvitation token={TOKEN} />);
+    expect(await screen.findByRole('heading', { name: 'This invitation link isn’t valid' })).toBeInTheDocument();
+    unmount();
+    const api = routeFetch({});
+    renderWithClient(<TrustedContactInvitation />);
+    expect(screen.getByRole('heading', { name: 'This invitation link isn’t valid' })).toBeInTheDocument();
+    expect(api.calls).toHaveLength(0);
   });
 });
 

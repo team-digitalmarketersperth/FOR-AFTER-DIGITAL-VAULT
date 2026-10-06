@@ -11,6 +11,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { ApiCookieAuth, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { adminActor, AuditLogService } from '../audit/audit-log.service.js';
 import { AdminGuard } from '../auth/guards/admin.guard.js';
@@ -24,11 +25,14 @@ import {
   ReactivateUserDto,
   SuspendUserDto,
 } from './dto/admin.dto.js';
+import { AUTH } from '../config/swagger.js';
 
 // Every admin route: a Customer session (or none) → 401/403; Recipient and
 // Trusted Contact cookies are never read here, so they get 401. The Step 15
 // death-verification routes live in DeathVerificationModule with the same guards.
 
+@ApiTags('Admin')
+@ApiCookieAuth(AUTH.admin)
 @Controller('admin/dashboard')
 @UseGuards(SessionAuthGuard, AdminGuard)
 export class AdminDashboardController {
@@ -40,6 +44,8 @@ export class AdminDashboardController {
   }
 }
 
+@ApiTags('Admin')
+@ApiCookieAuth(AUTH.admin)
 @Controller('admin/users')
 @UseGuards(SessionAuthGuard, AdminGuard)
 export class AdminUsersController {
@@ -77,6 +83,8 @@ export class AdminUsersController {
 }
 
 /** Read-only: there is no route that updates or deletes an audit row. */
+@ApiTags('Admin')
+@ApiCookieAuth(AUTH.admin)
 @Controller('admin/audit-logs')
 @UseGuards(SessionAuthGuard, AdminGuard)
 export class AdminAuditController {
@@ -96,6 +104,8 @@ export class AdminAuditController {
   }
 }
 
+@ApiTags('Admin')
+@ApiCookieAuth(AUTH.admin)
 @Controller('admin/system/queues')
 @UseGuards(SessionAuthGuard, AdminGuard)
 export class AdminQueuesController {

@@ -8,6 +8,7 @@ import {
   Res,
   UseGuards,
 } from '@nestjs/common';
+import { ApiCookieAuth, ApiTags } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 import {
   RequestRecipientOtpDto,
@@ -23,11 +24,13 @@ import {
   readRecipientSessionId,
   RecipientSessionAuthGuard,
 } from './recipient-session.guard.js';
+import { AUTH } from '../config/swagger.js';
 
 type RecipientMe = { authenticated: true; email: string };
 
 // Recipient Portal sign-in. Separate from /auth (Customers): own cookie, own
 // Redis sessions, no password, no User record.
+@ApiTags('Recipient auth')
 @Controller('recipient-auth')
 export class RecipientAuthController {
   constructor(private readonly auth: RecipientAuthService) {}
@@ -57,6 +60,7 @@ export class RecipientAuthController {
     return { authenticated: true, email: principal.emailNormalized };
   }
 
+  @ApiCookieAuth(AUTH.recipient)
   @Get('me')
   @UseGuards(RecipientSessionAuthGuard)
   me(@CurrentRecipient() recipient: RecipientPrincipal): RecipientMe {
@@ -64,6 +68,7 @@ export class RecipientAuthController {
   }
 
   // Safe to call with or without a valid session.
+  @ApiCookieAuth(AUTH.recipient)
   @Post('logout')
   @HttpCode(204)
   async logout(

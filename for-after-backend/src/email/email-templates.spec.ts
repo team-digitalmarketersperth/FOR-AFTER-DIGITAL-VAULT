@@ -1,8 +1,12 @@
 import {
+  changeEmail,
   deathSafety,
+  emailChanged,
   messageReleased,
   recipientSignInCode,
+  resetPassword,
   trustedContactSignInCode,
+  verifyEmail,
 } from './email-templates.js';
 
 const APP = 'https://app.example.com';
@@ -57,6 +61,20 @@ describe('Email templates (Step 24)', () => {
     expect(e.text).not.toMatch(/token|code=|session/i);
   });
 
+  it('message released: greets by first name, neutral without one, escaped', () => {
+    expect(messageReleased(APP, ' Sofia ').text).toContain(
+      'A message is waiting for you\n\nHi Sofia,\n\nSomething has been left',
+    );
+    for (const missing of [undefined, null, '', '   ']) {
+      const e = messageReleased(APP, missing);
+      expect(e.text).toContain('\n\nHello,\n\n');
+      expect(e.text).not.toContain('Hi ');
+    }
+    const e = messageReleased(APP, '<i>Eve</i>');
+    expect(e.html).toContain('Hi &#60;i&#62;Eve&#60;/i&#62;,');
+    expect(e.html).not.toContain('<i>Eve');
+  });
+
   it('death safety: calm, sign-in link only (no confirm-alive link), no reporter details', () => {
     const e = deathSafety('Lisa Test', APP);
     expect(e.html).toContain(`href="${APP}/login"`);
@@ -74,5 +92,38 @@ describe('Email templates (Step 24)', () => {
       '&#60;b onmouseover=&#34;x&#34;&#62;Eve&#60;/b&#62; &#38; co',
     );
     expect(e.html).not.toContain('<b onmouseover');
+  });
+
+  it('verify email and reset password: one single-use link with the token, its lifetime, nothing else', () => {
+    const TOKEN = 'T'.repeat(43);
+    const verify = verifyEmail(APP, TOKEN, 'Lisa', 86_400);
+    const reset = resetPassword(APP, TOKEN, null, 3_600);
+    expect(verify.subject).toBe('Verify your For After email');
+    expect(reset.subject).toBe('Reset your For After password');
+    expect(verify.html).toContain(`href="${APP}/verify-email?token=${TOKEN}"`);
+    expect(reset.html).toContain(`href="${APP}/reset-password?token=${TOKEN}"`);
+    expect(verify.text).toContain('Hi Lisa,');
+    expect(reset.text).toContain('Hello,');
+    expect(verify.text).toContain('expires in 24 hours and can be used once');
+    expect(reset.text).toContain('expires in 60 minutes and can be used once');
+    for (const e of [verify, reset]) {
+      expect(e.subject).not.toContain(TOKEN);
+      expect(e.text).not.toMatch(/password is|session|code is/i);
+    }
+  });
+
+  it('change email: link to the settings page; the old-address notice has no link or token', () => {
+    const TOKEN = 'C'.repeat(43);
+    const verify = changeEmail(APP, TOKEN, 'Lisa', 86_400);
+    expect(verify.subject).toBe('Verify your new For After email');
+    expect(verify.html).toContain(
+      `href="${APP}/settings/verify-email-change?token=${TOKEN}"`,
+    );
+    expect(verify.text).toContain('Until you do, nothing changes.');
+    const notice = emailChanged('Lisa');
+    expect(notice.subject).toBe('Your For After email address was changed');
+    expect(notice.text).toContain('Hi Lisa,');
+    expect(notice.html).not.toContain('href=');
+    expect(notice.text).not.toMatch(/token|password is|@/);
   });
 });

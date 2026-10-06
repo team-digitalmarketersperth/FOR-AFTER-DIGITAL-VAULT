@@ -10,6 +10,7 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
+import { ApiCookieAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { CustomerGuard } from '../auth/guards/customer.guard.js';
 import { SessionAuthGuard } from '../auth/guards/session-auth.guard.js';
@@ -17,8 +18,11 @@ import type { SafeUser } from '../users/users.service.js';
 import { CreateMessageDto } from './dto/create-message.dto.js';
 import { UpdateMessageDto } from './dto/update-message.dto.js';
 import { type MessageResponse, MessagesService } from './messages.service.js';
+import { AUTH } from '../config/swagger.js';
 
 // The owner is always the session user; ownership is enforced in the service.
+@ApiTags('Messages')
+@ApiCookieAuth(AUTH.customer)
 @Controller('messages')
 @UseGuards(SessionAuthGuard, CustomerGuard)
 export class MessagesController {

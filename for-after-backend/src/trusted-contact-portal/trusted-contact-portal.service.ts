@@ -46,7 +46,12 @@ export class TrustedContactPortalService {
             memoryVaultItems: anyActive,
             myStoryResponses: anyActive,
             myWishResponses: anyActive,
-            deathVerificationCase: { select: { status: true } },
+            // The current (newest) case only.
+            deathVerificationCases: {
+              orderBy: [{ openedAt: 'desc' }, { id: 'desc' }],
+              take: 1,
+              select: { status: true },
+            },
           },
         },
       },
@@ -68,7 +73,7 @@ export class TrustedContactPortalService {
           owner.myStoryResponses.length +
           owner.myWishResponses.length >
         0,
-      deathVerificationStatus: owner.deathVerificationCase?.status ?? null,
+      deathVerificationStatus: owner.deathVerificationCases[0]?.status ?? null,
     }));
   }
 

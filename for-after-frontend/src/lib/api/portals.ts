@@ -68,10 +68,13 @@ export type TrustedAccount = {
   deathVerificationStatus: CaseStatus | null;
 };
 
+/** About the account holder's current (newest) case. */
 export type CaseStatusForReporter = {
   status: CaseStatus | null;
   reportedByYou: boolean;
   openedAt: string | null;
+  /** The API's answer to "may this contact report now?" (after a closed case: yes). */
+  canReport: boolean;
 };
 
 export type DeathReportInput = {
@@ -116,4 +119,22 @@ export const deathVerificationApi = {
       method: 'POST',
       body: { confirmAlive: true },
     }),
+};
+
+// ─── Trusted Contact invitation (Phase 10) ─────────────────────────────────
+
+/** The emailed link's token is the only credential; no session is involved. */
+export type InvitationView = {
+  status: 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'EXPIRED' | 'CANCELLED';
+  /** Null once the invitation can no longer be used. */
+  accountHolder: { displayName: string } | null;
+};
+
+const invitationCall = (action: 'view' | 'accept' | 'decline') => (token: string) =>
+  apiRequest<InvitationView>(`/trusted-contact/invitation/${action}`, { method: 'POST', body: { token } });
+
+export const invitationApi = {
+  view: invitationCall('view'),
+  accept: invitationCall('accept'),
+  decline: invitationCall('decline'),
 };

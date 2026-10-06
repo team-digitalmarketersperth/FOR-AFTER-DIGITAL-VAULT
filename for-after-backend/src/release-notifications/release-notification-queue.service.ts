@@ -96,6 +96,8 @@ export class ReleaseNotificationQueue implements OnModuleDestroy {
       where: {
         status: 'PENDING',
         createdAt: { lte: new Date(now.getTime() - RECONCILE_GRACE_MS) },
+        // Only rows the worker would send; others would be re-queued forever.
+        grant: { message: { status: 'RELEASED', deletedAt: null } },
       },
       orderBy: { createdAt: 'asc' },
       take: 200,
