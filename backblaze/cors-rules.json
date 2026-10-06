@@ -2,7 +2,8 @@
   {
     "corsRuleName": "forAfterLocalUpload",
     "allowedOrigins": [
-      "http://localhost:3000"
+      "http://localhost:3000",
+      "https://joyful-reflection-production-d6d1.up.railway.app"
     ],
     "allowedHeaders": [
       "content-type"
