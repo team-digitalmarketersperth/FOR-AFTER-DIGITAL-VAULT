@@ -72,7 +72,7 @@ Each phase lists **Done** items first, then **To do**. "Backend ready" means the
 |  23   | Audit + security           | 🟡 `AuditLog` + admin events (Step 16) + `PASSWORD_CHANGED` (Step 22); full app audit (Step 23); other customer events, export, deletion open                                            | 2 (+1 partly) / 7  |
 |  24   | Testing                    | 🟡 Backend tests + Postman done; frontend 199 component + Playwright green (Step 22); §50 security cases, load test open                                                                 |       5 / 7        |
 |  25   | WordPress integration      | ⬜ Not started                                                                                                                                                                           |       0 / 3        |
-|  26   | Staging                    | ⬜ Not started                                                                                                                                                                           |       0 / 6        |
+|  26   | Staging                    | 🟡 Railway client demo live (frontend, API, PostgreSQL, Redis); CI, separate secrets, worker process, QA open                                                                           |       2 / 6        |
 |  27   | Production                 | ⬜ Not started                                                                                                                                                                           |       0 / 9        |
 |  FE   | **Frontend (all apps)**    | 🟡 Customer app + vault + portals (Steps 17–19) + Admin Portal (Step 20) + Account settings (Step 22); billing, WordPress open                                                           |    **27 / 30**     |
 
@@ -794,11 +794,17 @@ actions, role management (deliberately no API).
 - [ ] Shared cookie domain `.forafter.com.au`, CORS for WordPress origin
 - [ ] Redirect to `app.forafter.com.au/dashboard` after login → **FE-30**
 
-### 26 · Staging — ⬜ 0 of 6
+### 26 · Staging — 🟡 2 of 6
 
-- [ ] Choose hosting (recommended AWS Sydney `ap-southeast-2`)
-- [ ] Dockerfile(s) for API and worker
-- [ ] Managed PostgreSQL and Redis
+Client demo on Railway (2026-10-06), Railway-generated domains, no custom domain yet. The frontend proxies `/api/v1`
+to the API over Railway private networking (`API_PROXY_TARGET`, `next.config.ts`): two `*.up.railway.app` hosts are
+cross-site, so the API's `SameSite=Lax` cookies would not reach it directly. Once `app.`/`api.forafter.com.au` exist,
+drop the proxy and point `NEXT_PUBLIC_API_BASE_URL` at the API. Short `DEATH_VERIFICATION_SAFEGUARD_SECONDS=60` is
+demo-only.
+
+- [x] Choose hosting: Railway (demo/staging; production region still open, see §27)
+- [ ] Railpack builds for API and frontend (no Dockerfile needed); separate worker process still open (workers run in the API)
+- [x] Managed PostgreSQL and Redis (Railway; `prisma migrate deploy` as the pre-deploy step)
 - [ ] GitHub Actions: lint → type check → tests → build → deploy staging → E2E
 - [ ] Staging secrets separate from production; Stripe test mode
 - [ ] Client review / QA pass
