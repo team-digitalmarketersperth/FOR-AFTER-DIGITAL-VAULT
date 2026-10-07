@@ -1,7 +1,7 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import type { Message } from '@/lib/api/messages';
+import type { Message, MessageSummary } from '@/lib/api/messages';
 import { json, renderWithClient, routeFetch, router, page } from '@/test/utils';
 import { MessageDetail } from './message-detail';
 import { EditMessage, NewMessage } from './message-form';
@@ -34,6 +34,11 @@ const message = (over: Partial<Message> = {}): Message => ({
   ...over,
 });
 
+const summary = (over: Partial<MessageSummary> = {}): MessageSummary => {
+  const { id, title, contentType, status, updatedAt, recipients, textContent } = message();
+  return { id, title, contentType, status, updatedAt, recipients, textPreview: textContent, ...over };
+};
+
 const schedule = {
   id: 's1',
   triggerType: 'FIXED_DATE',
@@ -46,13 +51,19 @@ const schedule = {
 const noSchedule = json(404, { statusCode: 404, message: 'Schedule not found.' });
 
 describe('Messages', () => {
-  it('groups messages by status with a calm summary', async () => {
-    routeFetch({
-      'GET /messages': json(200, [message(), message({ id: 'm2', title: 'Our song', status: 'SCHEDULED' })]),
+  it('groups every page of summaries by status, showing the preview', async () => {
+    // Two pages: the list reads them all (100 per page) before grouping.
+    const api = routeFetch({
+      'GET /messages': (_body: unknown, url: URL) =>
+        url.searchParams.get('page') === '1'
+          ? json(200, page([summary({ textPreview: 'Dear Sofia, the start…' })], { limit: 100, total: 2, pages: 2 }))
+          : json(200, page([summary({ id: 'm2', title: 'Our song', status: 'SCHEDULED' })], { page: 2, limit: 100, total: 2, pages: 2 })),
     });
     renderWithClient(<MessageList />);
     const drafts = await screen.findByRole('region', { name: 'Drafts' });
     expect(within(drafts).getByRole('link', { name: /For your 18th/ })).toHaveTextContent('For Sofia');
+    expect(within(drafts).getByText('Dear Sofia, the start…')).toBeInTheDocument();
+    expect(api.called('GET', '/messages')).toHaveLength(2);
     expect(within(screen.getByRole('region', { name: 'Scheduled' })).getByText('Our song')).toBeInTheDocument();
     expect(screen.queryByRole('region', { name: 'Released' })).not.toBeInTheDocument();
   });

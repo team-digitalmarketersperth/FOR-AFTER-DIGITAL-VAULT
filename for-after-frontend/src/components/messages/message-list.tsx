@@ -7,7 +7,7 @@ import { PageHeader } from '@/components/shared/page-header';
 import { EmptyState, QueryView } from '@/components/shared/states';
 import { Button } from '@/components/ui/button';
 import { messages } from '@/hooks/use-vault';
-import type { Message, MessageStatus } from '@/lib/api/messages';
+import type { MessageStatus, MessageSummary } from '@/lib/api/messages';
 import { formatDate } from '@/lib/format';
 
 const newButton = (
@@ -79,7 +79,7 @@ export function MessageList() {
   );
 }
 
-function MessageRow({ message: m }: { message: Message }) {
+function MessageRow({ message: m }: { message: MessageSummary }) {
   const type = CONTENT_TYPE_INFO[m.contentType];
   return (
     <Link
@@ -94,8 +94,8 @@ function MessageRow({ message: m }: { message: Message }) {
           <span className="min-w-0 truncate font-heading text-2xl leading-tight">{m.title}</span>
           <StatusBadge status={m.status} />
         </span>
-        {m.textContent && (
-          <span className="line-clamp-2 text-[15px] text-foreground-secondary">{m.textContent}</span>
+        {m.textPreview && (
+          <span className="line-clamp-2 text-[15px] text-foreground-secondary">{m.textPreview}</span>
         )}
         <span className="flex flex-wrap gap-x-3 text-sm text-foreground-muted">
           <span>{recipientSummary(m.recipients)}</span>

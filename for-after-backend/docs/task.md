@@ -5,12 +5,12 @@
 
 |                              |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Last updated**             | 2026-10-05                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| **Last updated**             | 2026-10-07                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | **Latest backend step**      | Step 24: transactional email through Brevo (provider-neutral `EmailProvider`; migrated from Resend 2026-10-05): sign-in codes, "a message is waiting" release emails (durable `ReleaseNotification` + `email-delivery` queue), account-holder safety notice. Step 24.1: per-Recipient release emails verified for all three triggers. Brevo key accepted (dev IP blocking off, 2026-10-05); **first real OTP to an inbox pending confirmation** ([`email-production-setup.md`](email-production-setup.md)) |
 | **Latest frontend step**     | Step 24: admin queues show `email-delivery` jobs; portal E2E reads codes from the console email provider                                                                                                                                                                                                                                                                                                                                                                                                   |
 | **Backend**                  | Steps 1–16 + 22–24.1 + Phases 03, 04, 08 and 09 built and tested                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | **Frontend**                 | **27 of 30 tasks** built and verified (FE-1–19, FE-21–28); 204 unit/component tests; Playwright 36 passing, 0 failing, 0 skipped against the real local API (console email provider), PostgreSQL, Redis and the development bucket (Step 24, 2026-10-03). Frontend tracker: `for-after-frontend/docs/tasks.md`                                                                                                                                                                                             |
-| **Checklist (phases 02–27)** | **163 of 227** items done (recounted from the checkboxes, 2026-10-05)                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| **Checklist (phases 02–27)** | **165 of 227** items done (recounted from the checkboxes, 2026-10-05; +2 Phase 11, 2026-10-07)                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
 ---
 
@@ -57,7 +57,7 @@ Each phase lists **Done** items first, then **To do**. "Backend ready" means the
 |  08   | User profile               | ✅ Name, Account settings UI (Step 22), verified email change (Phase 08)                                                                                                                 |       3 / 3        |
 |  09   | People I Love (Recipients) | ✅ Backend + UI (Step 18), pagination and private Recipient photo (Phase 09)                                                                                                             |       8 / 8        |
 |  10   | Trusted Contacts           | 🟡 Backend, email OTP, Customer UI, max 2, email invitations, permission model done (Phase 10); SMS OTP deferred                                                                         |      12 / 13       |
-|  11   | Messages                   | 🟡 TEXT/PHOTO/AUDIO/MIXED + UI (Step 18) done; video open                                                                                                                                |      11 / 14       |
+|  11   | Messages                   | 🟡 TEXT/PHOTO/AUDIO/MIXED + UI (Step 18), paged summary list + media cleanup on delete done; video waits on Mux vs Cloudflare Stream                                                                                                                                |      13 / 14       |
 |  12   | Media                      | 🟡 Photo/audio on B2 + upload UI/recorder (Step 18) done; bucket CORS, video, quotas open                                                                                                | 8 (+1 partly) / 15 |
 |  13   | Memory Vault               | 🟡 Backend + UI done (Step 18)                                                                                                                                                           |       5 / 7        |
 |  14   | My Story                   | 🟡 Backend + UI done (Step 18)                                                                                                                                                           |       4 / 6        |
@@ -351,7 +351,7 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
       final verifier. Enforced server-side; e2e covers the forbidden routes
 - [x] Frontend: manage Trusted Contacts → **FE-11** (Step 18; their own portal is FE-24 to FE-27, Step 19) (Playwright verified, Step 21)
 
-### 11 · Messages — 🟡 11 of 14
+### 11 · Messages — 🟡 13 of 14
 
 **Done**
 
@@ -370,12 +370,19 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 - [x] Strict `checkComposition` before DRAFT → SCHEDULED (409 with a safe message): no PENDING_UPLOAD/FAILED media;
       per-type required/forbidden text, photo, audio; MIXED needs ≥ 2 modalities
 - [x] Concurrency: conditional DRAFT row updates so edits/uploads and scheduling can't interleave
+- [x] Pagination / summary list (Phase 11, 2026-10-07): `GET /messages?page&limit` reuses `PageQueryDto` + `paginate`
+      (`{items, pagination}`, limit max 100, `createdAt` desc + `id` desc); items are summaries with a 200-character
+      `textPreview`, never full text, media or URLs; `GET /messages/:id` unchanged. FE list reads every page (status groups
+      unchanged). Unit + e2e (pages, empty page, ties, invalid/max limit, isolation, deleted excluded, no full text)
+- [x] Soft-deleting a message cleans up its media (Phase 11, 2026-10-07): the same UPDATE soft-deletes all its live media
+      (any status) under the DRAFT row lock; objects deleted after commit, best effort, only those keys; failures logged by
+      id, never restore access, still 204; repeat delete is 404 with no storage call. Leftover objects stay for the Phase 12
+      orphan-object job. No migration. Unit + e2e (READY/PENDING_UPLOAD/FAILED, PHOTO+AUDIO, failure, cross-user, SCHEDULED)
 
 **To do**
 
-- [ ] VIDEO content type (after the video pipeline, phase 12)
-- [ ] Pagination / summary list (list currently returns full text)
-- [ ] Soft-deleting a message should also clean up its media (currently left for reconciliation)
+- [ ] VIDEO content type (after the video pipeline, phase 12). **Blocked on a product decision: Mux or Cloudflare Stream**
+      (docs lean Mux: `deployment.md`, `api.md` `/webhooks/mux`, planned `MUX_TOKEN_*`; task list and overview still say either)
 - [x] Frontend: create/edit message flow, assign recipients, status views, unschedule-to-edit → **FE-12**, **FE-16** (Step 18) (Playwright verified, Step 21)
 
 ### 12 · Media — 🟡 8 (+1 partly) of 15

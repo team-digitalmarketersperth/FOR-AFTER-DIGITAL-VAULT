@@ -90,8 +90,13 @@ Client -> DELETE ...                            (soft delete first, then DeleteO
   already passed). Short TTLs limit this; scanning or copy-on-complete would close it.
 - **Pending-upload cleanup** (future): old `PENDING_UPLOAD` rows and their objects are cleaned up by a scheduled reconciliation job.
   There is no `setTimeout`.
-- **Orphan-object reconciliation** (future): objects left behind when `DeleteObject` fails after a soft delete, or when a message is
-  soft-deleted (Step 5 does not cascade to media).
+- **Orphan-object reconciliation** (future): objects left behind when `DeleteObject` fails after a soft delete (the row keeps its
+  `storageKey` and `deletedAt`, so a job can retry; deleting a missing object succeeds), or uploaded through a still-valid signed PUT
+  after the soft delete.
+- **Soft-deleting a message** (Phase 11) soft-deletes all its live media (any status) in the same UPDATE that deletes the message,
+  under the message's DRAFT row lock, so no media can be added afterwards. Their objects are then deleted, best effort and only
+  those keys; a failure is logged by media id only, never restores access, and the request still returns `204`. Repeating the
+  delete is a plain `404` and touches no storage. Statuses are kept as they were; `deletedAt` hides the rows.
 - **Browser uploads** (future frontend): the bucket will need a **restricted CORS policy**: only the approved app origins, `PUT`/`GET`,
   and the `Content-Type` header. Never a wildcard in production. Postman needs no CORS.
 - Video (below), thumbnails, waveforms, resizing and quotas are later steps.

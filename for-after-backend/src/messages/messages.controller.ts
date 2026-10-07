@@ -8,16 +8,22 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiCookieAuth, ApiTags } from '@nestjs/swagger';
+import { PageQueryDto } from '../admin/dto/admin.dto.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { CustomerGuard } from '../auth/guards/customer.guard.js';
 import { SessionAuthGuard } from '../auth/guards/session-auth.guard.js';
 import type { SafeUser } from '../users/users.service.js';
 import { CreateMessageDto } from './dto/create-message.dto.js';
 import { UpdateMessageDto } from './dto/update-message.dto.js';
-import { type MessageResponse, MessagesService } from './messages.service.js';
+import {
+  type MessagePage,
+  type MessageResponse,
+  MessagesService,
+} from './messages.service.js';
 import { AUTH } from '../config/swagger.js';
 
 // The owner is always the session user; ownership is enforced in the service.
@@ -36,9 +42,14 @@ export class MessagesController {
     return this.messages.create(user.id, dto);
   }
 
+  // ?page=1&limit=25 (max 100), the Recipients/admin lists' convention.
+  // Summaries only (textPreview, no full text); GET :id has the full message.
   @Get()
-  findAll(@CurrentUser() user: SafeUser): Promise<MessageResponse[]> {
-    return this.messages.findAllForOwner(user.id);
+  findAll(
+    @CurrentUser() user: SafeUser,
+    @Query() query: PageQueryDto,
+  ): Promise<MessagePage> {
+    return this.messages.findPageForOwner(user.id, query.page, query.limit);
   }
 
   @Get(':id')

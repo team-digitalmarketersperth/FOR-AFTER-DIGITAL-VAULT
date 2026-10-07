@@ -168,11 +168,11 @@ serialised by a lock on the Customer row). Every response carries `invitation: {
 ### Messages
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
-| `GET` | `/messages` | List own messages, newest first |
+| `GET` | `/messages` | Phase 11: one page of own message **summaries**, newest first (`createdAt` desc, `id` desc). `?page=1&limit=25` (limit max 100; whole numbers ≥ 1, otherwise `400`) → `{items, pagination: {page, limit, total, pages}}`, the Recipients/admin envelope. Each item: `id, title, contentType, status, updatedAt, recipients, textPreview` (first 200 characters + `…`, or `null`); never the full `textContent`, media or URLs. A page past the end is empty |
 | `POST` | `/messages` | Create a TEXT draft assigned to own recipients (201) |
 | `GET` | `/messages/:id` | Get own message |
 | `PATCH` | `/messages/:id` | Update own DRAFT (`title`, `textContent`, `recipientIds`) |
-| `DELETE`| `/messages/:id` | Soft delete own DRAFT (204) |
+| `DELETE`| `/messages/:id` | Soft delete own DRAFT (204) and its media: rows soft-deleted in the same write, objects removed after commit (best effort) |
 
 Implemented in Step 5. All five routes require a session **and** the `CUSTOMER` role (admins get 403; any future admin access needs separate audited APIs).
 `ownerUserId` always comes from the session. `status` is server-controlled: every message is created `DRAFT`, and neither field is accepted in a body (400).

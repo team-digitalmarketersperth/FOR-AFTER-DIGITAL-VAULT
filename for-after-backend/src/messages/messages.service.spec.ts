@@ -9,7 +9,12 @@ import { Prisma } from '../generated/prisma/client.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
 import { CreateMessageDto } from './dto/create-message.dto.js';
 import { UpdateMessageDto } from './dto/update-message.dto.js';
-import { MessagesService } from './messages.service.js';
+import type { MediaStorage } from '../media/storage/media-storage.service.js';
+import {
+  MessagesService,
+  TEXT_PREVIEW_MAX,
+  textPreview,
+} from './messages.service.js';
 
 const sofia = {
   id: 'r1',
@@ -44,13 +49,21 @@ const setup = (owned = 1) => {
     count: vi.fn().mockResolvedValue(0),
   };
   const recipient = { count: vi.fn().mockResolvedValue(owned) };
+  const storage = { deleteObject: vi.fn().mockResolvedValue(undefined) };
+  const prisma = {
+    message,
+    recipient,
+    // Array form: run the queries as given.
+    $transaction: vi.fn((ops: Promise<unknown>[]) => Promise.all(ops)),
+  };
   return {
     message,
     recipient,
-    service: new MessagesService({
-      message,
-      recipient,
-    } as unknown as PrismaService),
+    storage,
+    service: new MessagesService(
+      prisma as unknown as PrismaService,
+      storage as unknown as MediaStorage,
+    ),
   };
 };
 
@@ -244,16 +257,52 @@ describe('MessagesService', () => {
     expect(message.create).not.toHaveBeenCalled();
   });
 
-  it('lists only the owner’s non-deleted messages, newest first', async () => {
+  it('lists one page of the owner’s live messages, newest first, as summaries', async () => {
     const { message, service } = setup();
-    const [res] = await service.findAllForOwner('owner-a');
-    expect(message.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { ownerUserId: 'owner-a', deletedAt: null },
-        orderBy: { createdAt: 'desc' },
-      }),
-    );
-    expect(res.recipients).toEqual([sofia]);
+    const { createdAt: _, ...summaryRow } = row;
+    message.findMany.mockResolvedValue([summaryRow]);
+    message.count.mockResolvedValue(30);
+    const res = await service.findPageForOwner('owner-a', 2, 10);
+    const where = { ownerUserId: 'owner-a', deletedAt: null };
+    const args = message.findMany.mock.calls[0][0];
+    expect(args).toMatchObject({
+      where,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      skip: 10,
+      take: 10,
+    });
+    expect(message.count).toHaveBeenCalledWith({ where });
+    for (const hidden of [
+      'ownerUserId',
+      'deletedAt',
+      'mediaAssets',
+      'createdAt',
+    ]) {
+      expect(args.select).not.toHaveProperty(hidden);
+    }
+    expect(res.pagination).toEqual({ page: 2, limit: 10, total: 30, pages: 3 });
+    expect(res.items[0]).toEqual({
+      id: 'm1',
+      title: 'For Sofia',
+      contentType: 'TEXT',
+      status: 'DRAFT',
+      updatedAt: expect.any(Date),
+      textPreview: 'Fictional text.',
+      recipients: [sofia],
+    });
+    expect(res.items[0]).not.toHaveProperty('textContent');
+  });
+
+  it('textPreview keeps short text, cuts long text without splitting emoji', () => {
+    expect(textPreview(null)).toBeNull();
+    expect(textPreview('Short.')).toBe('Short.');
+    const exact = 'a'.repeat(TEXT_PREVIEW_MAX);
+    expect(textPreview(exact)).toBe(exact);
+    expect(textPreview('a'.repeat(TEXT_PREVIEW_MAX + 1))).toBe(`${exact}…`);
+    // 200 emoji = 400 code units but 200 characters: not cut.
+    const emoji = '💛'.repeat(TEXT_PREVIEW_MAX);
+    expect(textPreview(emoji)).toBe(emoji);
+    expect(textPreview(`${emoji}x`)).toBe(`${emoji}…`);
   });
 
   it('findOwnedById is owner-scoped and returns a safe shape', async () => {
@@ -361,12 +410,44 @@ describe('MessagesService', () => {
     );
   });
 
-  it('remove soft-deletes an owned, live draft', async () => {
-    const { message, service } = setup();
+  it('remove soft-deletes an owned draft and its live media in one write', async () => {
+    const { message, storage, service } = setup();
+    message.update.mockResolvedValue({ mediaAssets: [] });
     await service.remove('owner-a', 'm1');
-    const { where, data } = message.update.mock.calls[0][0];
+    const { where, data, select } = message.update.mock.calls[0][0];
     expect(where).toEqual(draft('owner-a', 'm1'));
-    expect(data).toEqual({ deletedAt: expect.any(Date) });
+    const deletedAt = data.deletedAt;
+    expect(deletedAt).toBeInstanceOf(Date);
+    expect(data.mediaAssets).toEqual({
+      updateMany: { where: { deletedAt: null }, data: { deletedAt } },
+    });
+    expect(select.mediaAssets.where).toEqual({ deletedAt });
+    expect(storage.deleteObject).not.toHaveBeenCalled();
+  });
+
+  it('remove deletes each hidden object; a storage failure is swallowed', async () => {
+    const { message, storage, service } = setup();
+    message.update.mockResolvedValue({
+      mediaAssets: [
+        { id: 'p1', storageKey: 'users/a/messages/m1/p1.jpg' },
+        { id: 'a1', storageKey: 'users/a/messages/m1/a1.mp3' },
+      ],
+    });
+    storage.deleteObject.mockRejectedValueOnce(new Error('B2 secret detail'));
+    await expect(service.remove('owner-a', 'm1')).resolves.toBeUndefined();
+    expect(storage.deleteObject.mock.calls).toEqual([
+      ['users/a/messages/m1/p1.jpg'],
+      ['users/a/messages/m1/a1.mp3'],
+    ]);
+  });
+
+  it('remove of a missing/foreign/non-draft message touches no storage', async () => {
+    const { message, storage, service } = setup();
+    message.update.mockRejectedValue(noMatch());
+    await expect(service.remove('owner-a', 'm1')).rejects.toThrow(
+      NotFoundException,
+    );
+    expect(storage.deleteObject).not.toHaveBeenCalled();
   });
 
   it('does not turn unexpected database errors into 404s', async () => {

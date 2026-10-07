@@ -308,4 +308,166 @@ describe('Media (e2e, PostgreSQL, mocked storage)', () => {
     const row = await prisma.mediaAsset.findUniqueOrThrow({ where: { id } });
     expect(row.deletedAt).toBeInstanceOf(Date);
   });
+
+  describe('deleting a message cleans up its media', () => {
+    const audio = { ...photo, kind: 'AUDIO', mimeType: 'audio/mpeg' };
+    const newDraft = async (agent: Agent) => {
+      const who = await agent
+        .post('/api/v1/recipients')
+        .send({ firstName: 'Cleanup' })
+        .expect(201);
+      return (
+        await agent
+          .post('/api/v1/messages')
+          .send({ title: 'To delete', recipientIds: [who.body.id] })
+          .expect(201)
+      ).body.id as string;
+    };
+    const upload = async (agent: Agent, msg: string, body = photo) =>
+      (
+        await agent
+          .post(`/api/v1/messages/${msg}/media/upload-url`)
+          .send(body)
+          .expect(201)
+      ).body.mediaAssetId as string;
+    const keysOf = async (ids: string[]) =>
+      (
+        await prisma.mediaAsset.findMany({
+          where: { id: { in: ids } },
+          select: { storageKey: true },
+        })
+      )
+        .map((r) => r.storageKey)
+        .sort();
+
+    it('soft-deletes READY, PENDING_UPLOAD and FAILED media and removes only their objects', async () => {
+      const msg = await newDraft(lisa);
+      const m = `/api/v1/messages/${msg}/media`;
+      const ready = await upload(lisa, msg);
+      await lisa.post(`${m}/${ready}/complete`).expect(200);
+      const readyAudio = await upload(lisa, msg, audio);
+      storage.headObject.mockResolvedValueOnce({
+        sizeBytes: 100_000,
+        contentType: 'audio/mpeg',
+      });
+      await lisa.post(`${m}/${readyAudio}/complete`).expect(200);
+      const pending = await upload(lisa, msg, audio);
+      const failed = await upload(lisa, msg);
+      storage.headObject.mockResolvedValueOnce({
+        sizeBytes: 1,
+        contentType: 'image/jpeg',
+      });
+      await lisa.post(`${m}/${failed}/complete`).expect(400);
+      // Already deleted earlier: its object is not touched again.
+      const earlier = await upload(lisa, msg);
+      await lisa.delete(`${m}/${earlier}`).expect(204);
+      // Another message of Lisa's and John's media stay untouched.
+      const otherMsg = await newDraft(lisa);
+      const other = await upload(lisa, otherMsg);
+      const johnMsg = await newDraft(john);
+      const johns = await upload(john, johnMsg);
+
+      const live = [ready, readyAudio, pending, failed];
+      storage.deleteObject.mockClear();
+      const res = await lisa.delete(`/api/v1/messages/${msg}`).expect(204);
+      expect(res.text).toBe('');
+
+      const rows = await prisma.mediaAsset.findMany({
+        where: { id: { in: live } },
+        select: { status: true, deletedAt: true },
+      });
+      expect(rows).toHaveLength(4);
+      // Statuses are kept as they were (history); deletedAt hides them.
+      expect(rows.map((r) => r.status).sort()).toEqual([
+        'FAILED',
+        'PENDING_UPLOAD',
+        'READY',
+        'READY',
+      ]);
+      for (const r of rows) expect(r.deletedAt).toBeInstanceOf(Date);
+      expect(
+        storage.deleteObject.mock.calls.map(([k]) => k as string).sort(),
+      ).toEqual(await keysOf(live));
+
+      for (const id of [other, johns]) {
+        const row = await prisma.mediaAsset.findUniqueOrThrow({
+          where: { id },
+        });
+        expect(row.deletedAt).toBeNull();
+      }
+
+      // Nothing is reachable through the deleted message any more.
+      await lisa.get(m).expect(404);
+      for (const id of live) {
+        await lisa.get(`${m}/${id}/access-url`).expect(404);
+        await lisa.post(`${m}/${id}/complete`).expect(404);
+        await lisa.delete(`${m}/${id}`).expect(404);
+      }
+      await lisa.post(`${m}/upload-url`).send(photo).expect(404);
+
+      // Deleting again is a plain 404 and touches no storage.
+      storage.deleteObject.mockClear();
+      await lisa.delete(`/api/v1/messages/${msg}`).expect(404);
+      expect(storage.deleteObject).not.toHaveBeenCalled();
+    });
+
+    it('a storage failure still returns 204, leaks nothing and never restores access', async () => {
+      const msg = await newDraft(lisa);
+      const m = `/api/v1/messages/${msg}/media`;
+      const a = await upload(lisa, msg);
+      const b = await upload(lisa, msg, audio);
+      storage.deleteObject.mockClear();
+      storage.deleteObject.mockRejectedValueOnce(
+        new Error('B2 AccessDenied key=secret-key-id'),
+      );
+      const res = await lisa.delete(`/api/v1/messages/${msg}`).expect(204);
+      expect(res.text).toBe('');
+      // The other object is still attempted.
+      expect(storage.deleteObject).toHaveBeenCalledTimes(2);
+      for (const id of [a, b]) {
+        const row = await prisma.mediaAsset.findUniqueOrThrow({
+          where: { id },
+        });
+        expect(row.deletedAt).toBeInstanceOf(Date);
+        await lisa.get(`${m}/${id}/access-url`).expect(404);
+      }
+      const msgRow = await prisma.message.findUniqueOrThrow({
+        where: { id: msg },
+      });
+      expect(msgRow.deletedAt).toBeInstanceOf(Date);
+    });
+
+    it('John cannot delete Lisa’s message or reach its media', async () => {
+      const msg = await newDraft(lisa);
+      const a = await upload(lisa, msg);
+      storage.deleteObject.mockClear();
+      await john.delete(`/api/v1/messages/${msg}`).expect(404);
+      expect(storage.deleteObject).not.toHaveBeenCalled();
+      const row = await prisma.mediaAsset.findUniqueOrThrow({
+        where: { id: a },
+      });
+      expect(row.deletedAt).toBeNull();
+    });
+
+    it('a SCHEDULED message cannot be deleted, so its media stay (409)', async () => {
+      const msg = await newDraft(lisa);
+      const a = await upload(lisa, msg);
+      await prisma.message.update({
+        where: { id: msg },
+        data: { status: 'SCHEDULED' },
+      });
+      storage.deleteObject.mockClear();
+      await lisa.delete(`/api/v1/messages/${msg}`).expect(409);
+      expect(storage.deleteObject).not.toHaveBeenCalled();
+      const row = await prisma.mediaAsset.findUniqueOrThrow({
+        where: { id: a },
+      });
+      expect(row.deletedAt).toBeNull();
+      // Back to DRAFT so the run's cleanup (and any reconciler) ignores it.
+      await prisma.message.update({
+        where: { id: msg },
+        data: { status: 'DRAFT' },
+      });
+    });
+  });
 });

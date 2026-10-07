@@ -49,7 +49,9 @@ describe('Messages (e2e, PostgreSQL)', () => {
   let davidId: string;
   let michaelId: string;
   let messageId: string;
-  const ids = (res: { body: { id: string }[] }) => res.body.map((m) => m.id);
+  // GET /messages is a page of summaries: { items, pagination }.
+  const ids = (res: { body: { items: { id: string }[] } }) =>
+    res.body.items.map((m) => m.id);
   const recipientIds = (res: { body: { recipients: { id: string }[] } }) =>
     res.body.recipients.map((r) => r.id).sort();
   const messageCount = () =>
@@ -155,7 +157,10 @@ describe('Messages (e2e, PostgreSQL)', () => {
 
     const list = await lisa.get(base).expect(200);
     expect(ids(list)).toEqual([both.body.id, messageId]);
-    expect((await john.get(base).expect(200)).body).toEqual([]);
+    expect((await john.get(base).expect(200)).body).toEqual({
+      items: [],
+      pagination: { page: 1, limit: 25, total: 0, pages: 0 },
+    });
   });
 
   it('reads and updates own draft', async () => {
@@ -271,5 +276,114 @@ describe('Messages (e2e, PostgreSQL)', () => {
     });
     expect(row?.deletedAt).toBeInstanceOf(Date);
     expect(row?.recipients).toHaveLength(2);
+  });
+
+  it('lists a stable page of summaries: no full text, no internals', async () => {
+    // John's own messages; Lisa's must never show up or be counted.
+    const longText = `${'Dear Michael, '.repeat(100)}THE-END-${run}`;
+    const created: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const res = await john
+        .post(base)
+        .send({
+          title: `Page test ${i}`,
+          textContent: i === 0 ? longText : `Short ${i}`,
+          recipientIds: [michaelId],
+        })
+        .expect(201);
+      created.push(res.body.id);
+    }
+    const gone = (
+      await john
+        .post(base)
+        .send({ title: 'Deleted', recipientIds: [michaelId] })
+        .expect(201)
+    ).body.id;
+    await john.delete(`${base}/${gone}`).expect(204);
+    // Same createdAt for all: the id tiebreaker alone must keep pages stable.
+    await prisma.message.updateMany({
+      where: { id: { in: created } },
+      data: { createdAt: new Date('2026-01-01T00:00:00Z') },
+    });
+    const expected = [...created].sort().reverse();
+
+    const page1 = await john.get(`${base}?page=1&limit=2`).expect(200);
+    expect(page1.body.pagination).toEqual({
+      page: 1,
+      limit: 2,
+      total: 5,
+      pages: 3,
+    });
+    const page2 = await john.get(`${base}?page=2&limit=2`).expect(200);
+    const page3 = await john.get(`${base}?page=3&limit=2`).expect(200);
+    expect([...ids(page1), ...ids(page2), ...ids(page3)]).toEqual(expected);
+    // Repeating a request gives the same page.
+    expect(ids(await john.get(`${base}?page=2&limit=2`).expect(200))).toEqual(
+      ids(page2),
+    );
+
+    const past = await john.get(`${base}?page=9&limit=2`).expect(200);
+    expect(past.body).toEqual({
+      items: [],
+      pagination: { page: 9, limit: 2, total: 5, pages: 3 },
+    });
+
+    // Defaults and the maximum page size.
+    const all = await john.get(base).expect(200);
+    expect(all.body.pagination).toMatchObject({ page: 1, limit: 25 });
+    expect(ids(all)).toEqual(expected);
+    expect(ids(all)).not.toContain(gone);
+    expect(
+      (await john.get(`${base}?limit=100`).expect(200)).body.pagination.limit,
+    ).toBe(100);
+    for (const query of [
+      'limit=101',
+      'limit=0',
+      'page=0',
+      'page=-1',
+      'page=abc',
+      'limit=1.5',
+      'page=',
+    ]) {
+      await john.get(`${base}?${query}`).expect(400);
+    }
+
+    // Summary shape: only what the list renders.
+    const item = all.body.items.find(
+      (m: { id: string }) => m.id === created[0],
+    );
+    expect(Object.keys(item).sort()).toEqual([
+      'contentType',
+      'id',
+      'recipients',
+      'status',
+      'textPreview',
+      'title',
+      'updatedAt',
+    ]);
+    expect(item.textPreview).toHaveLength(201);
+    expect(item.textPreview.endsWith('…')).toBe(true);
+    expect(Object.keys(item.recipients[0]).sort()).toEqual([
+      'firstName',
+      'id',
+      'lastName',
+      'relationship',
+    ]);
+    const raw = JSON.stringify(all.body);
+    expect(raw).not.toContain(`THE-END-${run}`);
+    expect(raw).not.toMatch(
+      /textContent|ownerUserId|deletedAt|storageKey|url/i,
+    );
+
+    // The detail endpoint still returns the full text.
+    const detail = await john.get(`${base}/${created[0]}`).expect(200);
+    expect(detail.body.textContent).toBe(longText);
+
+    // Lisa's list never includes John's messages, and vice versa.
+    const lisaIds = ids(await lisa.get(`${base}?limit=100`).expect(200));
+    expect(lisaIds.some((id) => created.includes(id))).toBe(false);
+    expect((await lisa.get(base).expect(200)).body.pagination.total).toBe(
+      lisaIds.length,
+    );
   });
 });

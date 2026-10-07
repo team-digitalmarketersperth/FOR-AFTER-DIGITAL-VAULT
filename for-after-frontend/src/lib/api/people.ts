@@ -1,5 +1,5 @@
 import { apiRequest } from './client';
-import { resource } from './resource';
+import { allPages, resource } from './resource';
 
 // Mirrors RecipientResponse / TrustedContactResponse in the backend. Optional
 // fields are null when unset; `birthday` is a calendar date "YYYY-MM-DD".
@@ -44,22 +44,13 @@ export const RECIPIENT_PAGE_SIZE = 25;
 export type RecipientInput = Omit<Recipient, 'id' | 'photoId' | 'createdAt' | 'updatedAt'>;
 export type TrustedContactInput = Omit<TrustedContact, 'id' | 'createdAt' | 'updatedAt' | 'invitation'>;
 
-const recipientsPage = (page: number, limit: number, signal?: AbortSignal) =>
-  apiRequest<Page<Recipient>>(`/recipients?page=${page}&limit=${limit}`, { signal });
-
 export const recipientsApi = {
   ...resource<Recipient, RecipientInput>('/recipients'),
   /** One page of the People I Love list, newest first. */
-  page: (page: number, signal?: AbortSignal) => recipientsPage(page, RECIPIENT_PAGE_SIZE, signal),
-  /** Everyone (the message recipient picker): pages of 100 until the last. */
-  list: async (signal?: AbortSignal) => {
-    const items: Recipient[] = [];
-    for (let page = 1; ; page++) {
-      const res = await recipientsPage(page, 100, signal);
-      items.push(...res.items);
-      if (page >= res.pagination.pages) return items;
-    }
-  },
+  page: (page: number, signal?: AbortSignal) =>
+    apiRequest<Page<Recipient>>(`/recipients?page=${page}&limit=${RECIPIENT_PAGE_SIZE}`, { signal }),
+  /** Everyone (the message recipient picker). */
+  list: (signal?: AbortSignal) => allPages<Recipient>('/recipients', signal),
 };
 export const trustedContactsApi = {
   ...resource<TrustedContact, TrustedContactInput>('/trusted-contacts'),

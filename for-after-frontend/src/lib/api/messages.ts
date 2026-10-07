@@ -1,5 +1,5 @@
 import { apiRequest } from './client';
-import { resource } from './resource';
+import { allPages, resource } from './resource';
 
 // VIDEO exists in the database enum but the API rejects it, so it is not here.
 export const CONTENT_TYPES = ['TEXT', 'PHOTO', 'AUDIO', 'MIXED'] as const;
@@ -18,6 +18,12 @@ export type Message = {
   recipients: { id: string; firstName: string; lastName: string | null; relationship: string | null }[];
 };
 
+// Mirrors MessageSummary: a GET /messages item. No full text, only a short
+// preview; the detail (GET /messages/:id) has everything.
+export type MessageSummary = Pick<Message, 'id' | 'title' | 'contentType' | 'status' | 'updatedAt' | 'recipients'> & {
+  textPreview: string | null;
+};
+
 export type MessageInput = {
   title: string;
   contentType: ContentType;
@@ -27,7 +33,11 @@ export type MessageInput = {
 
 export const TEXT_CONTENT_MAX = 20_000;
 
-export const messagesApi = resource<Message, MessageInput>('/messages');
+export const messagesApi = {
+  ...resource<Message, MessageInput>('/messages'),
+  /** Every summary: the Messages page groups them all by status. */
+  list: (signal?: AbortSignal) => allPages<MessageSummary>('/messages', signal),
+};
 
 // Only the triggers the API executes; BIRTHDAY, NOW etc. are reserved.
 export const TRIGGER_TYPES = ['FIXED_DATE', 'ON_DEATH', 'AFTER_DEATH'] as const;

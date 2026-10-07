@@ -8,6 +8,7 @@ import {
   scheduleApi,
   type Message,
   type MessageInput,
+  type MessageSummary,
   type Schedule,
   type ScheduleInput,
 } from '@/lib/api/messages';
@@ -23,8 +24,9 @@ import {
 import { promptsApi, type Prompt, type PromptArea } from '@/lib/api/prompts';
 import { queryKeys } from '@/lib/query/query-client';
 
-type Api<T, Input> = {
-  list: (signal?: AbortSignal) => Promise<T[]>;
+// L = the list item, when the list returns summaries rather than full items.
+type Api<T, Input, L = T> = {
+  list: (signal?: AbortSignal) => Promise<L[]>;
   get: (id: string, signal?: AbortSignal) => Promise<T>;
   create: (input: Input) => Promise<T>;
   update: (id: string, input: Partial<Input>) => Promise<T>;
@@ -35,9 +37,9 @@ type Api<T, Input> = {
  * List/detail/create/update/remove for one owner-scoped collection. Writes
  * seed the detail cache and invalidate the collection root (list + details).
  */
-function resourceHooks<T extends { id: string }, Input>(
+function resourceHooks<T extends { id: string }, Input, L = T>(
   root: readonly string[],
-  api: Api<T, Input>,
+  api: Api<T, Input, L>,
   // What a write makes stale besides the item itself: by default the list.
   stale: (readonly string[])[] = [root],
 ) {
@@ -48,7 +50,7 @@ function resourceHooks<T extends { id: string }, Input>(
     );
   return {
     useList: () =>
-      useQuery<T[], ApiError>({ queryKey: root, queryFn: ({ signal }) => api.list(signal) }),
+      useQuery<L[], ApiError>({ queryKey: root, queryFn: ({ signal }) => api.list(signal) }),
     useItem: (id: string) =>
       useQuery<T, ApiError>({ queryKey: detailKey(id), queryFn: ({ signal }) => api.get(id, signal) }),
     useCreate: () => {
@@ -119,7 +121,7 @@ export const trustedContacts = {
     });
   },
 };
-export const messages = resourceHooks<Message, MessageInput>(queryKeys.messages, messagesApi);
+export const messages = resourceHooks<Message, MessageInput, MessageSummary>(queryKeys.messages, messagesApi);
 
 // Memory Vault lists are filtered by category, so lists live under their own
 // sub-key and every write invalidates the whole root.

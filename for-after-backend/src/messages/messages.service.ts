@@ -2,19 +2,38 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { paginate } from '../audit/audit-log.service.js';
 import {
   MessageContentType,
   MessageStatus,
   Prisma,
 } from '../generated/prisma/client.js';
+import { deleteObjectQuietly } from '../media/media.service.js';
+import { MediaStorage } from '../media/storage/media-storage.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateMessageDto } from './dto/create-message.dto.js';
 import { UpdateMessageDto } from './dto/update-message.dto.js';
 
-// ownerUserId, deletedAt and join-table ids never leave the API. Recipients
-// deleted after assignment are hidden from the list.
+// Recipients deleted after assignment are hidden.
+const recipientsSelect = {
+  where: { recipient: { deletedAt: null } },
+  orderBy: { createdAt: 'asc' },
+  select: {
+    recipient: {
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        relationship: true,
+      },
+    },
+  },
+} satisfies Prisma.Message$recipientsArgs;
+
+// ownerUserId, deletedAt and join-table ids never leave the API.
 const messageSelect = {
   id: true,
   title: true,
@@ -23,20 +42,19 @@ const messageSelect = {
   status: true,
   createdAt: true,
   updatedAt: true,
-  recipients: {
-    where: { recipient: { deletedAt: null } },
-    orderBy: { createdAt: 'asc' },
-    select: {
-      recipient: {
-        select: {
-          id: true,
-          firstName: true,
-          lastName: true,
-          relationship: true,
-        },
-      },
-    },
-  },
+  recipients: recipientsSelect,
+} satisfies Prisma.MessageSelect;
+
+// The list shows only what the Messages page renders: no full text (a short
+// preview instead), no media and no signed URLs. Details: GET /messages/:id.
+const summarySelect = {
+  id: true,
+  title: true,
+  contentType: true,
+  status: true,
+  updatedAt: true,
+  textContent: true,
+  recipients: recipientsSelect,
 } satisfies Prisma.MessageSelect;
 
 type MessageRow = Prisma.MessageGetPayload<{ select: typeof messageSelect }>;
@@ -50,6 +68,28 @@ const NOT_FOUND = 'Message not found.';
 export const INVALID_RECIPIENTS = 'One or more recipients are invalid.';
 export const NOT_DRAFT = 'Only draft messages can be changed or deleted.';
 
+type SummaryRow = Prisma.MessageGetPayload<{ select: typeof summarySelect }>;
+export type MessageSummary = Omit<SummaryRow, 'textContent' | 'recipients'> & {
+  textPreview: string | null;
+  recipients: MessageResponse['recipients'];
+};
+export type MessagePage = {
+  items: MessageSummary[];
+  pagination: ReturnType<typeof paginate>;
+};
+
+export const TEXT_PREVIEW_MAX = 200;
+
+// First TEXT_PREVIEW_MAX characters (code points, so no emoji is split) + '…'.
+export const textPreview = (text: string | null): string | null => {
+  // Code units >= code points, so short strings need no splitting.
+  if (!text || text.length <= TEXT_PREVIEW_MAX) return text;
+  const chars = Array.from(text);
+  return chars.length <= TEXT_PREVIEW_MAX
+    ? text
+    : `${chars.slice(0, TEXT_PREVIEW_MAX).join('').trimEnd()}…`;
+};
+
 const toResponse = ({ recipients, ...row }: MessageRow): MessageResponse => ({
   ...row,
   recipients: recipients.map((r) => r.recipient),
@@ -60,7 +100,12 @@ const assign = (recipientIds: string[]) =>
 
 @Injectable()
 export class MessagesService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(MessagesService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storage: MediaStorage,
+  ) {}
 
   // Every read and write goes through this filter: ownership is part of the
   // query itself, never checked after fetching by id alone.
@@ -89,14 +134,36 @@ export class MessagesService {
     return toResponse(row);
   }
 
-  // ponytail: unpaginated and returns full text; add take/cursor and a summary select if lists grow.
-  async findAllForOwner(ownerUserId: string): Promise<MessageResponse[]> {
-    const rows = await this.prisma.message.findMany({
-      where: { ownerUserId, deletedAt: null },
-      orderBy: { createdAt: 'desc' },
-      select: messageSelect,
-    });
-    return rows.map(toResponse);
+  /**
+   * One page of the owner's live messages as summaries, newest first (id
+   * breaks ties, so pages never overlap or skip). The count uses the same
+   * owner filter. A page past the end is empty.
+   */
+  // ponytail: full text is still read from PostgreSQL to cut the preview; select a substring if lists get heavy.
+  async findPageForOwner(
+    ownerUserId: string,
+    page: number,
+    limit: number,
+  ): Promise<MessagePage> {
+    const where = { ownerUserId, deletedAt: null };
+    const [total, rows] = await this.prisma.$transaction([
+      this.prisma.message.count({ where }),
+      this.prisma.message.findMany({
+        where,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * limit,
+        take: limit,
+        select: summarySelect,
+      }),
+    ]);
+    return {
+      items: rows.map(({ textContent, recipients, ...row }) => ({
+        ...row,
+        textPreview: textPreview(textContent),
+        recipients: recipients.map((r) => r.recipient),
+      })),
+      pagination: paginate(page, limit, total),
+    };
   }
 
   async findOwnedById(
@@ -134,9 +201,39 @@ export class MessagesService {
     return toResponse(row);
   }
 
-  // Soft delete; assignments stay attached to the deleted row.
+  /**
+   * Soft delete; assignments stay attached to the deleted row. Its live media
+   * (any status) are soft-deleted in the same UPDATE, so the database is
+   * authoritative at once: every media route already refuses a deleted
+   * message. Objects are removed after commit, best effort; a storage failure
+   * never restores access and leaves the object for reconciliation (logged by
+   * id only). Media only change under this same DRAFT row lock, so none can be
+   * added once this commits.
+   */
   async remove(ownerUserId: string, id: string): Promise<void> {
-    await this.updateOwnedDraft(ownerUserId, id, { deletedAt: new Date() });
+    const deletedAt = new Date();
+    const { mediaAssets } = await this.updateOwnedDraft(
+      ownerUserId,
+      id,
+      {
+        deletedAt,
+        mediaAssets: {
+          updateMany: { where: { deletedAt: null }, data: { deletedAt } },
+        },
+      },
+      // Read after the write: exactly the assets this delete just hid.
+      {
+        mediaAssets: {
+          where: { deletedAt },
+          select: { id: true, storageKey: true },
+        },
+      },
+    );
+    await Promise.all(
+      mediaAssets.map((m) =>
+        deleteObjectQuietly(this.storage, this.logger, m.id, m.storageKey),
+      ),
+    );
   }
 
   // Never trust UUID secrecy: every requested id must be a live recipient of
@@ -155,17 +252,20 @@ export class MessagesService {
 
   // A single conditional UPDATE (owned, live, DRAFT). No match (P2025) is
   // 409 if the owned message exists in another status, otherwise 404.
-  private async updateOwnedDraft(
+  private async updateOwnedDraft<
+    S extends Prisma.MessageSelect = typeof messageSelect,
+  >(
     ownerUserId: string,
     id: string,
     data: Prisma.MessageUpdateInput,
-  ): Promise<MessageRow> {
+    select: S = messageSelect as S,
+  ): Promise<Prisma.MessageGetPayload<{ select: S }>> {
     try {
-      return await this.prisma.message.update({
+      return (await this.prisma.message.update({
         where: { ...this.owned(ownerUserId, id), status: MessageStatus.DRAFT },
         data,
-        select: messageSelect,
-      });
+        select,
+      })) as Prisma.MessageGetPayload<{ select: S }>;
     } catch (err) {
       if (
         !(err instanceof Prisma.PrismaClientKnownRequestError) ||
