@@ -7,7 +7,10 @@ import request from 'supertest';
 import { AuthModule } from '../src/auth/auth.module.js';
 import { configureApp, SESSION_COOKIE } from '../src/config/app.setup.js';
 import { MediaModule } from '../src/media/media.module.js';
+import { MalwareScanner } from '../src/media/scanner/malware-scanner.service.js';
 import { MediaStorage } from '../src/media/storage/media-storage.service.js';
+import { FakeMalwareScanner } from './fake-malware-scanner.js';
+import { FakeMediaStorage } from './fake-media-storage.js';
 import { MessageReleaseService } from '../src/message-release/message-release.service.js';
 import { MessageSchedulesModule } from '../src/message-schedules/message-schedules.module.js';
 import { MessagesModule } from '../src/messages/messages.module.js';
@@ -52,13 +55,8 @@ describe('Recipient Portal (e2e, PostgreSQL + Redis)', () => {
       sent.push(input);
     }),
   };
-  let stored = { sizeBytes: 1000, contentType: 'image/jpeg' };
-  const storage = {
-    createUploadUrl: vi.fn(async () => 'https://storage.test/signed-put'),
-    createAccessUrl: vi.fn(async () => 'https://storage.test/signed-get'),
-    headObject: vi.fn(async () => stored),
-    deleteObject: vi.fn(async () => undefined),
-  };
+  const storage = new FakeMediaStorage();
+  const scanner = new FakeMalwareScanner();
 
   type Agent = ReturnType<typeof request.agent>;
   let lisa: Agent;
@@ -108,13 +106,13 @@ describe('Recipient Portal (e2e, PostgreSQL + Redis)', () => {
     await release(id);
     return id;
   };
+  // upload auth → (fake) direct ImageKit upload → verified complete = READY
   const attachMedia = async (
     messageId: string,
-    kind: 'PHOTO' | 'AUDIO',
+    kind: 'PHOTO' | 'AUDIO' | 'VIDEO',
     mimeType: string,
   ) => {
-    stored = { sizeBytes: 1000, contentType: mimeType };
-    const { mediaAssetId } = (
+    const { mediaAssetId, upload } = (
       await lisa
         .post(api(`/messages/${messageId}/media/upload-url`))
         .send({
@@ -124,9 +122,17 @@ describe('Recipient Portal (e2e, PostgreSQL + Redis)', () => {
           sizeBytes: 1000,
         })
         .expect(201)
-    ).body as { mediaAssetId: string };
+    ).body as {
+      mediaAssetId: string;
+      upload: Parameters<FakeMediaStorage['upload']>[0];
+    };
+    const providerFileId = storage.upload(upload, {
+      sizeBytes: 1000,
+      contentType: mimeType,
+    });
     await lisa
       .post(api(`/messages/${messageId}/media/${mediaAssetId}/complete`))
+      .send({ providerFileId })
       .expect(200);
     return mediaAssetId;
   };
@@ -175,6 +181,8 @@ describe('Recipient Portal (e2e, PostgreSQL + Redis)', () => {
     })
       .overrideProvider(MediaStorage)
       .useValue(storage)
+      .overrideProvider(MalwareScanner)
+      .useValue(scanner)
       .overrideProvider(RecipientOtpDelivery)
       .useValue(delivery)
       .compile();
@@ -519,7 +527,7 @@ describe('Recipient Portal (e2e, PostgreSQL + Redis)', () => {
           .get(api(`/recipient/messages/${messageId}/media/${id}/access-url`))
           .expect(200);
         expect(res.body).toEqual({
-          url: 'https://storage.test/signed-get',
+          url: expect.stringMatching(/^https:\/\/media\.test\/signed/),
           expiresAt: expect.any(String),
         });
       }
@@ -546,6 +554,67 @@ describe('Recipient Portal (e2e, PostgreSQL + Redis)', () => {
           api(`/recipient/messages/${messageId}/media/${photoId}/access-url`),
         )
         .expect(404);
+      expect(storage.createAccessUrl).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('VIDEO (Phase 12)', () => {
+    let messageId: string;
+    let videoId: string;
+    const access = (agent: Agent) =>
+      agent.get(
+        api(`/recipient/messages/${messageId}/media/${videoId}/access-url`),
+      );
+
+    beforeAll(async () => {
+      messageId = await addMessage(lisa, [ids.sofia], {
+        contentType: 'VIDEO',
+        textContent: null,
+        title: 'A video for Sofia',
+      });
+      videoId = await attachMedia(messageId, 'VIDEO', 'video/mp4');
+      await schedule(lisa, messageId);
+    });
+
+    it('unreleased (SCHEDULED): the intended recipient gets 404 and nothing is signed', async () => {
+      const sofia = await recipientSignIn(SOFIA);
+      storage.createAccessUrl.mockClear();
+      await sofia.get(api(`/recipient/messages/${messageId}`)).expect(404);
+      await sofia
+        .get(api(`/recipient/messages/${messageId}/media`))
+        .expect(404);
+      await access(sofia).expect(404);
+      expect(storage.createAccessUrl).not.toHaveBeenCalled();
+    });
+
+    it('released: the intended recipient lists the video and gets a short-lived signed URL', async () => {
+      await release(messageId);
+      const sofia = await recipientSignIn(SOFIA);
+      const list = await sofia
+        .get(api(`/recipient/messages/${messageId}/media`))
+        .expect(200);
+      expect(list.body).toEqual([
+        expect.objectContaining({
+          id: videoId,
+          kind: 'VIDEO',
+          mimeType: 'video/mp4',
+        }),
+      ]);
+      noLeaks(list.body);
+      const res = await access(sofia).expect(200);
+      expect(res.body).toEqual({
+        url: expect.stringMatching(/^https:\/\/media\.test\/signed/),
+        expiresAt: expect.any(String),
+      });
+    });
+
+    it('released, but another recipient → 404 and nothing signed', async () => {
+      const jenny = await recipientSignIn(JENNY);
+      storage.createAccessUrl.mockClear();
+      await jenny
+        .get(api(`/recipient/messages/${messageId}/media`))
+        .expect(404);
+      await access(jenny).expect(404);
       expect(storage.createAccessUrl).not.toHaveBeenCalled();
     });
   });

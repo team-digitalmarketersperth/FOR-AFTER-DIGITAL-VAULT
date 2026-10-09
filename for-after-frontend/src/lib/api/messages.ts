@@ -1,8 +1,8 @@
 import { apiRequest } from './client';
 import { allPages, resource } from './resource';
 
-// VIDEO exists in the database enum but the API rejects it, so it is not here.
-export const CONTENT_TYPES = ['TEXT', 'PHOTO', 'AUDIO', 'MIXED'] as const;
+// VIDEO since Phase 12: video alone (VIDEO) or as one part of MIXED.
+export const CONTENT_TYPES = ['TEXT', 'PHOTO', 'AUDIO', 'VIDEO', 'MIXED'] as const;
 export type ContentType = (typeof CONTENT_TYPES)[number];
 export type MessageStatus = 'DRAFT' | 'SCHEDULED' | 'RELEASED' | 'CANCELLED';
 

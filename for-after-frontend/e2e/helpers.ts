@@ -75,3 +75,26 @@ export async function freshTotp(secret: string, usedStep = -1) {
   const step = totpStep();
   return { code: totp(secret, step), step };
 }
+
+// Synthetic media: a 1×1 PNG and a valid 0.1 s silent WAV (8 kHz, 8-bit mono).
+export const PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64',
+);
+export const WAV = (() => {
+  const pcm = Buffer.alloc(800, 0x80);
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + pcm.length, 4);
+  header.write('WAVEfmt ', 8);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20); // PCM
+  header.writeUInt16LE(1, 22); // mono
+  header.writeUInt32LE(8000, 24);
+  header.writeUInt32LE(8000, 28);
+  header.writeUInt16LE(1, 32);
+  header.writeUInt16LE(8, 34);
+  header.write('data', 36);
+  header.writeUInt32LE(pcm.length, 40);
+  return Buffer.concat([header, pcm]);
+})();

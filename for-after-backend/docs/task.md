@@ -10,7 +10,7 @@
 | **Latest frontend step**     | Step 24: admin queues show `email-delivery` jobs; portal E2E reads codes from the console email provider                                                                                                                                                                                                                                                                                                                                                                                                   |
 | **Backend**                  | Steps 1–16 + 22–24.1 + Phases 03, 04, 08 and 09 built and tested                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | **Frontend**                 | **27 of 30 tasks** built and verified (FE-1–19, FE-21–28); 204 unit/component tests; Playwright 36 passing, 0 failing, 0 skipped against the real local API (console email provider), PostgreSQL, Redis and the development bucket (Step 24, 2026-10-03). Frontend tracker: `for-after-frontend/docs/tasks.md`                                                                                                                                                                                             |
-| **Checklist (phases 02–27)** | **165 of 227** items done (recounted from the checkboxes, 2026-10-05; +2 Phase 11, 2026-10-07)                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| **Checklist (phases 02–27)** | **178 of 221** items done (recounted from the checkboxes 2026-10-09 after Phase 15B: 178 `[x]`, 40 `[ ]`, 3 `[~]`; earlier history: 176 of 227 recounted 2026-10-05; +2 Phase 11, +1 Phase 11 VIDEO and +3 Phase 12, 2026-10-07; +1 Phase 12B malware scanning, +1 Phase 13A search/tags/pagination, +1 Phase 13B create a message from a memory, +1 Phase 12C storage quota, +1 Phase 14A My Story catalogue, +1 Phase 14B rich answers + sharing, +1 Phase 15A My Wishes notice, 2026-10-08; +1 Phase 15B My Wishes media + after-death sharing, 2026-10-09)                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
 ---
 
@@ -47,7 +47,7 @@ Each phase lists **Done** items first, then **To do**. "Backend ready" means the
 
 | Phase | Area                       | Status                                                                                                                                                                                   |    Done / items    |
 | :---: | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :----------------: |
-|  01   | Product decisions          | 🟡 Docs written, most decisions still open; Phase 10 decided the Trusted Contact maximum, permissions and reopening                                                                      | 2 (+2 partly) / 34 |
+|  01   | Product decisions          | 🟡 Docs written, most decisions still open; Phase 10 decided the Trusted Contact maximum, permissions and reopening; composition rules approved (2026-10-07); My Story catalogue, answer length, snapshot, answer formats + sharing; My Wishes notice decided, legal review open (2026-10-08); who sees wishes after death, media, AI deferred (2026-10-09) | 8 (+3 partly) / 34 |
 |  02   | PostgreSQL + Prisma        | ✅ Done                                                                                                                                                                                  |       6 / 6        |
 |  03   | NestJS foundation          | ✅ Done (Swagger + global exception filter, 2026-10-05)                                                                                                                                  |      12 / 12       |
 |  04   | Authentication (core)      | ✅ Done: core, admin TOTP, change password, email verification, reset, Redis rate limits                                                                                                 |      13 / 13       |
@@ -57,11 +57,11 @@ Each phase lists **Done** items first, then **To do**. "Backend ready" means the
 |  08   | User profile               | ✅ Name, Account settings UI (Step 22), verified email change (Phase 08)                                                                                                                 |       3 / 3        |
 |  09   | People I Love (Recipients) | ✅ Backend + UI (Step 18), pagination and private Recipient photo (Phase 09)                                                                                                             |       8 / 8        |
 |  10   | Trusted Contacts           | 🟡 Backend, email OTP, Customer UI, max 2, email invitations, permission model done (Phase 10); SMS OTP deferred                                                                         |      12 / 13       |
-|  11   | Messages                   | 🟡 TEXT/PHOTO/AUDIO/MIXED + UI (Step 18), paged summary list + media cleanup on delete done; video waits on Mux vs Cloudflare Stream                                                                                                                                |      13 / 14       |
-|  12   | Media                      | 🟡 Photo/audio on B2 + upload UI/recorder (Step 18) done; bucket CORS, video, quotas open                                                                                                | 8 (+1 partly) / 15 |
-|  13   | Memory Vault               | 🟡 Backend + UI done (Step 18)                                                                                                                                                           |       5 / 7        |
-|  14   | My Story                   | 🟡 Backend + UI done (Step 18)                                                                                                                                                           |       4 / 6        |
-|  15   | My Wishes                  | 🟡 Backend + UI with disclaimer done (Step 18)                                                                                                                                           |       5 / 7        |
+|  11   | Messages                   | ✅ TEXT/PHOTO/AUDIO/VIDEO/MIXED + UI, paged summary list, media cleanup on delete (Phase 11/12); video alone or in MIXED                                                                                                                                |      14 / 14       |
+|  12   | Media                      | 🟡 ImageKit for photo/audio/video, verification + magic bytes + ClamAV (12B), storage quota (12C), cleanup reconciler, upload UI, recorders done; prod keys + B2 retirement open | 14 / 15 |
+|  13   | Memory Vault               | ✅ Backend + UI (Step 18); search, tags, pagination (13A); sharing = create a message from a memory (13B)                                                                                  |       7 / 7        |
+|  14   | My Story                   | ✅ Backend + UI (Step 18); V1 catalogue + snapshot policy (14A); photo/audio/video answers, linked memories, sharing as a Message (14B)                                                  |       6 / 6        |
+|  15   | My Wishes                  | ✅ Backend + UI (Step 18); notice + per-version acknowledgement (15A); media + after-death sharing as a Message snapshot, AI deferred post-MVP (15B) | 7 / 7 |
 |  16   | Scheduling                 | 🟡 FIXED_DATE, ON_DEATH, AFTER_DEATH executed + schedule UI (Step 18); recurring triggers open                                                                                           |      10 / 11       |
 |  17   | Redis + BullMQ             | 🟡 Release, death-verification and `email-delivery` (Step 24) queues, admin failed-job view/retry done; DLQ/alerts open                                                                  | 8 (+1 partly) / 10 |
 |  18   | Recipient portal           | 🟡 Backend (Step 13) + UI (Step 19) + email sign-in codes and release emails (Step 24) done; SMS open                                                                                    |       5 / 7        |
@@ -97,7 +97,7 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 
 > Phase 01. Questions only the product owner can answer. Many backend limits are placeholders until these are decided.
 
-### 01 · Product decisions — 🟡 2 (+2 partly) of 34 done
+### 01 · Product decisions — 🟡 8 (+3 partly) of 34 done
 
 **Done**
 
@@ -129,7 +129,9 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 - [ ] Scheduling: rules for birthdays, anniversaries, after-death and annual releases (BIRTHDAY needs: timezone, time of
       day, 29 Feb, several recipients with different birthdays, recurrence)
 - [ ] Scheduled messages are locked (edit = unschedule → edit → reschedule): is that the UX we want?
-- [ ] Composition rules: PHOTO/AUDIO may not carry text (must be MIXED), MIXED needs ≥ 2 of text/photo/audio: confirm with product
+- [x] **Composition rules (approved 2026-10-07)**: a single modality uses its own type (text → TEXT, photo → PHOTO,
+      audio → AUDIO, video → VIDEO; PHOTO/AUDIO/VIDEO carry no text); MIXED = at least two distinct of TEXT, PHOTO, AUDIO,
+      VIDEO, in any combination. The Customer chooses `contentType`; it is never inferred ([message-composition.md](message-composition.md))
 - [ ] What happens at release time if all assigned recipients were deleted after scheduling?
 - [ ] When is a message `CANCELLED`, and can it ever be restored?
 - [ ] Limits: message text 20,000 chars, 100 recipients per message, after-death offset ≤ 36,500 days (all configurable placeholders)
@@ -153,20 +155,33 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 
 **My Story**
 
-- [ ] Approve the final prompt set and categories (the Step 10 catalogue is a development placeholder; the overview also
-      lists Parents, School, Career, Travel, Advice)
-- [ ] Is 20,000 characters (shared with Messages and Memory Vault) enough per answer?
-- [ ] Should the stored prompt snapshot keep the wording first answered, or the latest (current behaviour)?
-- [ ] Answer formats beyond text (audio, video, photos) and linking Memory Vault items
+- [x] Approve the final prompt set and categories: **approved 2026-10-08** (Phase 14A), 9 categories (Childhood,
+      Family, Relationships, Work, Travel, Milestones, Values, Life lessons, Legacy) and 22 prompts; the 12 original keys
+      kept unchanged (`docs/my-story.md`)
+- [x] Answer length: **50,000 characters** per My Story answer (approved 2026-10-08; My Wishes stays 20,000)
+- [x] Prompt snapshot: **the wording first answered** (approved 2026-10-08): edits keep it, a new answer or a re-answer
+      after delete takes the current wording; any wording change bumps the version, a new meaning needs a new key;
+      retired prompts keep their answers (readable, editable, deletable) but take no new ones
+- [x] Answer formats beyond text (audio, video, photos) and linking Memory Vault items: **approved 2026-10-08** (Phase
+      14B): text optional (an answer may be files or memories only), no file-count limit (size limits + quota only);
+      linked memories are private context, never shared or copied; sharing = an independent Message snapshot through
+      the existing recipients/schedule/release, never direct Story access
 
 **My Wishes**
 
 - [ ] Approve the question set and categories (the Step 11 catalogue is a development placeholder; the overview's
       possible fields include burial/cremation, flowers, clothing, speakers, charity, religious/cultural preferences, which
       it does not cover)
-- [ ] Legal review of the disclaimer wording; is an explicit, versioned acknowledgement needed? Should the API serve the
-      disclaimer text?
-- [ ] Who may see wishes after a verified death, and when (Trusted Contacts? Recipients?)
+- [~] Legal review of the disclaimer wording; is an explicit, versioned acknowledgement needed? Should the API serve the
+      disclaimer text? **Product owner decided 2026-10-08 (Phase 15A):** current wording approved as version 1; explicit
+      acknowledgement once per version before writing (not consent); the API serves the text. **Still open: a formal legal
+      review of the wording** (none has been done; nothing claims one)
+- [x] Who may see wishes after a verified death, and when (Trusted Contacts? Recipients?): **approved 2026-10-09** (Phase
+      15B, `docs/my-wishes.md`): private while alive; after a verified death only people the Customer explicitly picks
+      from People I Love, through a separate Message snapshot ("Create message for loved ones") with `ON_DEATH` or
+      `AFTER_DEATH` timing; never the wish itself; Trusted Contacts never read wishes; admins never read wish content; no
+      "family" model. Also decided: PHOTO/AUDIO/VIDEO in wishes, text optional, no file-count limit; **AI help deferred
+      post-MVP** (MVP excludes AI; any future AI must never present output as legal advice)
 
 ---
 
@@ -351,7 +366,7 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
       final verifier. Enforced server-side; e2e covers the forbidden routes
 - [x] Frontend: manage Trusted Contacts → **FE-11** (Step 18; their own portal is FE-24 to FE-27, Step 19) (Playwright verified, Step 21)
 
-### 11 · Messages — 🟡 13 of 14
+### 11 · Messages — ✅ 14 of 14
 
 **Done**
 
@@ -365,7 +380,7 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 - [x] Soft delete; ownership isolation (404); responses hide `ownerUserId`, `deletedAt`, join-table ids
 - [x] Unit tests + real-PostgreSQL e2e tests incl. cross-user and transaction cases
 - [x] Step 8 composition (`docs/message-composition.md`): API accepts TEXT, PHOTO, AUDIO, MIXED as the customer's
-      explicit `contentType` (never inferred, never changed by the server); VIDEO → 400
+      explicit `contentType` (never inferred, never changed by the server); VIDEO added in Phase 12 (below)
 - [x] Drafts may be incomplete; PATCH `textContent`: missing = unchanged, `null` clears, blank stored as `null`
 - [x] Strict `checkComposition` before DRAFT → SCHEDULED (409 with a safe message): no PENDING_UPLOAD/FAILED media;
       per-type required/forbidden text, photo, audio; MIXED needs ≥ 2 modalities
@@ -376,45 +391,85 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
       unchanged). Unit + e2e (pages, empty page, ties, invalid/max limit, isolation, deleted excluded, no full text)
 - [x] Soft-deleting a message cleans up its media (Phase 11, 2026-10-07): the same UPDATE soft-deletes all its live media
       (any status) under the DRAFT row lock; objects deleted after commit, best effort, only those keys; failures logged by
-      id, never restore access, still 204; repeat delete is 404 with no storage call. Leftover objects stay for the Phase 12
-      orphan-object job. No migration. Unit + e2e (READY/PENDING_UPLOAD/FAILED, PHOTO+AUDIO, failure, cross-user, SCHEDULED)
+      id, never restore access, still 204; repeat delete is 404 with no storage call. Since Phase 12 a failed file delete is
+      retried by the media cleanup reconciler. Unit + e2e (READY/PENDING_UPLOAD/FAILED, PHOTO/AUDIO/VIDEO, failure, retry,
+      cross-user, SCHEDULED)
+- [x] VIDEO content type (Phase 12, 2026-10-07, on the ImageKit video pipeline): explicit `VIDEO` (create/PATCH), drafts may
+      be incomplete; scheduling needs ≥ 1 READY video and no text/photo/audio; PENDING_UPLOAD/FAILED/deleted video blocks.
+      **Product decision (2026-10-07): video alone (VIDEO) or as one part of MIXED** (any two or more of text, photo, audio,
+      video); TEXT/PHOTO/AUDIO with video → 409. Recipients see released video only (signed URL). Unit + e2e (composition, schedule, released/unreleased/
+      unauthorized Recipient), FE Video type + preview, Playwright (upload → preview → schedule; released Recipient playback)
 
 **To do**
 
-- [ ] VIDEO content type (after the video pipeline, phase 12). **Blocked on a product decision: Mux or Cloudflare Stream**
-      (docs lean Mux: `deployment.md`, `api.md` `/webhooks/mux`, planned `MUX_TOKEN_*`; task list and overview still say either)
 - [x] Frontend: create/edit message flow, assign recipients, status views, unschedule-to-edit → **FE-12**, **FE-16** (Step 18) (Playwright verified, Step 21)
 
-### 12 · Media — 🟡 8 (+1 partly) of 15
+### 12 · Media — 🟡 14 of 15
+
+> **Provider decision (2026-10-07):** ImageKit for PHOTO, AUDIO and VIDEO, replacing Backblaze B2 (Steps 7–9) and the planned
+> Mux / Cloudflare Stream. Items first done on B2 are now done on ImageKit; B2 rows stay readable (`docs/media-storage.md` §2c).
 
 **Done**
 
-- [x] Private Backblaze B2 dev bucket via the S3-compatible API (`@aws-sdk/client-s3`, `s3-request-presigner`);
-      provider-neutral `MediaStorage` abstraction
-- [x] `MediaAsset` model + migration `add_media_assets` (`MediaKind`, `MediaAssetStatus`, DB CHECK: PHOTO/AUDIO only, size > 0)
-- [x] Direct upload: `POST /messages/:id/media/upload-url` → presigned PUT (Content-Type signed, 10 min) →
-      `POST …/complete` verifies with HeadObject → READY / FAILED
-- [x] PHOTO (jpeg/png/webp, ≤ 20 MB) and AUDIO (mpeg/mp4/webm/wav, ≤ 100 MB); VIDEO and SVG rejected; server-generated
-      storage keys
-- [x] List, presigned GET access URL (5 min, READY only), soft delete + best-effort object delete; changes only on DRAFT messages
-- [x] Owner-only; storage errors sanitized (503); signed URLs never stored or logged
-- [x] Unit + e2e tests with mocked storage; manual end-to-end check against the real B2 bucket passed
+- [x] Provider-neutral `MediaStorage`; **ImageKit** (`@imagekit/nodejs`) for every new upload (Phase 12), legacy B2
+      adapter read/delete only (Step 7 built this on a private B2 bucket via the S3 API)
+- [x] `MediaAsset` model + migrations `add_media_assets` and `imagekit_media_provider` (additive: `storageProvider`, existing rows
+      `B2`; `providerFileId`; `storageDeletedAt`; DB CHECK now PHOTO/AUDIO/VIDEO, size > 0)
+- [x] Direct upload: `POST /messages/:id/media/upload-url` → ImageKit Upload V2 token (HS256 JWT fixing path, private,
+      no overwrite, max size; 10 min) → browser POST to ImageKit → `POST …/complete {providerFileId}` verified with the
+      ImageKit API → READY / FAILED (was presigned PUT + HeadObject on B2)
+- [x] PHOTO (jpeg/png/webp, ≤ 20 MB), AUDIO (mpeg/mp4/webm/wav, ≤ **25 MB**, ImageKit Free plan limit; was 100 MB), VIDEO
+      (mp4/webm, ≤ 100 MB, messages only); SVG rejected; server-generated id-only paths
+- [x] List, signed access URL (private original, 5 min, READY only), soft delete + file delete; changes only on DRAFT messages
+- [x] Owner-only; provider errors sanitized (503); signed URLs never stored or logged; private key backend-only
+- [x] Unit + e2e tests with a fake provider (no network); Playwright deletes the synthetic ImageKit files each test
+      uploaded, by fileId only (`e2e/imagekit.ts`); real local ImageKit check with synthetic files passed (photo,
+      WAV and recorded audio, WebM video: upload, tamper/oversize/overwrite refused, verification, signed 200 vs unsigned 403,
+      delete)
 - [x] Uploads independent of the message `contentType` (allowed media checked at scheduling, Step 8)
+- [x] Video via ImageKit (Phase 12; replaces "Mux or Cloudflare Stream"): upload, server verification, private signed
+      playback of the original. No processing step or webhook (no transcoding); HLS/thumbnails not built
+- [x] Cleanup of stale `PENDING_UPLOAD` rows and orphaned files: `MediaCleanup` (DB first, then best-effort delete with
+      `storageDeletedAt`; reconciler every `MEDIA_CLEANUP_INTERVAL_SECONDS` retries ImageKit leftovers, retires 24 h-old
+      pending uploads, bounded, idempotent; never deletes on B2 automatically). Memory deletion now cleans up its media too
+- [x] Browser direct uploads work: ImageKit's upload API takes the signed POST from the browser (Playwright verified, real
+      uploads). The B2 bucket CORS rule is no longer needed
+- [x] Malware scanning / quarantine, magic-byte checks (Phase 12 + **12B, 2026-10-08**): every complete (message media,
+      Memory Vault, Recipient photos, B2→ImageKit copies) runs provider check → magic bytes → **ClamAV (clamd INSTREAM)**
+      scan of the streamed file → `READY`. Infected → `FAILED` for good (generic 400, no access, not schedulable, file
+      deleted via `MediaCleanup`); scanner down/timeout/odd reply → 503, stays `PENDING_UPLOAD` (fail closed,
+      retryable). No new status or migration. Unit + e2e (fake scanner) and a real local clamd check (Docker
+      `clamav/clamav`: clean PNG/WAV/MP4 incl. 100 MB → READY; bare EICAR → INFECTED; detections → FAILED; clamd down
+      → 503). **Not yet run on any deployed environment**: needs a clamd service (`docs/media-storage.md` §2e)
 
 **To do**
 
-- [ ] Video via Mux or Cloudflare Stream (upload, processing webhooks, signed playback)
-- [ ] Malware scanning / quarantine, magic-byte checks (MIME header is not content validation)
-- [ ] Cleanup job for stale `PENDING_UPLOAD` rows and orphaned objects
-- [ ] Restricted bucket CORS for browser uploads: **now blocking real browser uploads**. The `for-after-dev` preflight from
-      `http://localhost:3000` returns 403. Rule needed: origin `http://localhost:3000` (later `https://app.forafter.com.au`),
-      method `PUT`, header `content-type` (`docs/media-storage.md`)
-- [ ] Storage usage tracking and quota enforcement (80/90/100% warnings)
-- [ ] Separate production bucket and credentials
-- [~] Frontend: upload with progress + cancel, browser audio recorder, signed previews, delete → **FE-13**, **FE-14**
-  (Step 18) (Playwright verified, Step 21). Video recorder waits for the video pipeline
+- [ ] Separate production ImageKit account/keys (`IMAGEKIT_*`), and retiring the legacy B2 bucket. Local B2 media migrated
+      to ImageKit with `npm run migrate:b2-to-imagekit` (3/3 READY rows; re-verified 2026-10-07: private ImageKit file, size
+      matches, signed 206 / unsigned 403, B2 originals untouched). **Local re-audit 2026-10-08: 0 live B2 rows** (the 4
+      `PENDING_UPLOAD` rows were retired by the stale-upload reconciler; every B2 row left is soft-deleted) and no upload
+      path writes to B2. Real local regression on 2026-10-08 (ImageKit + clamd: PHOTO/AUDIO/VIDEO READY, signed 200 /
+      unsigned refused, quota, cleanup) passed. **Still open:** the Railway demo was deployed from `staging` on
+      2026-10-06, before Phase 12, so it runs the B2 version: it needs this code deployed (commit/push), production
+      `IMAGEKIT_*` keys, a clamd service + `CLAMAV_HOST`, `prisma migrate deploy`, the B2 → ImageKit migration and a
+      row audit (`docs/deployment.md`). **Legacy B2 adapter, AWS SDK (used only by it) and `OBJECT_STORAGE_*` kept**
+      until that environment shows 0 live B2 rows; the B2 bucket stays as a backup until its deletion is approved
+- [x] Storage usage tracking and quota enforcement (80/90/100% warnings) (**Phase 12C, 2026-10-08**,
+      `docs/media-storage.md` §5). Approved policy: one limit per Customer, `STORAGE_LIMIT_BYTES` (default 5 GiB) until
+      plans (Phase 21); counts Message media, Memory Vault media and Recipient photos that are `READY` (used) or
+      `PENDING_UPLOAD` (reserved), from PostgreSQL; `FAILED`/deleted never count. Enforced before any upload is signed,
+      in the row-inserting transaction under a lock on the Customer's `User` row (no parallel oversubscription; also for
+      memory→message copies); 409 when full or when the file would cross the limit; existing files stay available.
+      `GET /users/me/storage`; Account settings meter with 80/90/100 % notices. Unit, PostgreSQL e2e (incl. a 5-request
+      race), component and Playwright tests
+- [x] Frontend: upload with progress + cancel, browser audio recorder, signed previews, delete → **FE-13**, **FE-14**
+  (Step 18) (Playwright verified, Step 21); video select/upload/preview/delete (Phase 12). **Browser video recorder
+  (Phase 12A, 2026-10-07)**: camera + mic only on click, live preview, timer, play back, Record again / Discard, then the
+  same VIDEO upload (WebM, or MP4 where the browser records MP4; ≤ 100 MB checked before upload; no duration limit).
+  Component tests + Playwright (Chromium fake camera, real ImageKit: READY, signed preview, schedule; discard; denied).
+  A manual check with a real camera is still to do
 
-### 13 · Memory Vault — 🟡 5 of 7
+### 13 · Memory Vault — ✅ 7 of 7
 
 **Done**
 
@@ -423,14 +478,31 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 - [x] CRUD `/memory-vault` (+ `?category=`), owner-scoped, soft delete; private: no status, recipients, schedule or release
 - [x] PHOTO/AUDIO media reusing Step 7 storage, allowlist, limits and verification; deleting a memory hides its media
 - [x] Unit + e2e tests (mocked storage) incl. cross-user isolation
+- [x] Search, tags, pagination (**Phase 13A, 2026-10-08**; orphaned-file cleanup after soft delete: done in Phase 12):
+      `GET /memory-vault?page&limit&category&search&tag` (shared `PageQueryDto`/`paginate`, 25 per page, max 100,
+      `createdAt DESC, id DESC`; one WHERE for page and count), case-insensitive search of title + text (LIKE
+      wildcards literal), per-Customer `MemoryVaultTag` + `MemoryVaultItemTag` (migration `memory_vault_tags`, additive),
+      tags by name, normalized, PATCH replaces the set; `GET /memory-vault/tags`. UI: search box, tag select, category
+      chips and Previous/Next all in the URL, tag chips on cards/detail, tag input with suggestions. Unit, e2e (two
+      look-alike Customers), component and Playwright (26 memories) tests
+- [x] Sharing / recipient assignment / scheduling / create a message from a memory (**Phase 13B, 2026-10-08**;
+      `docs/memory-vault.md`): the memory stays private; `POST /memory-vault/:id/messages` makes a new, independent
+      DRAFT Message (explicit `contentType`, chosen text and READY PHOTO/AUDIO, People I Love by the Message rules). A
+      snapshot: own text and own ImageKit copies at message paths (re-upload via `MediaStorage.copyObject`, then the full
+      upload check incl. ClamAV); editing/deleting either side never affects the other; one memory → many messages.
+      Recipients, scheduling (`checkComposition`), release, grants and the Recipient Portal are the existing Message
+      ones; no memory recipients/schedules/release, no migration. Failed copies → `FAILED` + `MediaCleanup`. UI:
+      "Create a message" on the memory page → pick people, type and content → normal message page. Unit, e2e (create →
+      schedule → release → Recipient reads message + copies, never the memory; edit/delete independence; cross-user)
+      and component tests; real ImageKit copy check passed (14/14, files cleaned up). Playwright scenario
+      (`e2e/portals.spec.ts`) **passed 2026-10-08** against a console-email API (real FIXED_DATE release, Recipient
+      sign-in, copied text + photo + audio, memory edited and deleted afterwards)
 
 **To do**
 
-- [ ] Sharing / recipient assignment / scheduling / create a message from a memory (product decision)
-- [ ] Search, tags, pagination; orphaned-object cleanup after soft delete
 - [x] Frontend: Memory Vault pages, category filter, photo/audio → **FE-17** (Step 18) (Playwright verified, Step 21)
 
-### 14 · My Story — 🟡 4 of 6
+### 14 · My Story — ✅ 6 of 6
 
 **Done**
 
@@ -439,14 +511,31 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 - [x] `/my-story/prompts` (+ `?category=`), `PUT/GET/DELETE /my-story/prompts/:promptKey/response`; one answer per
       prompt, soft delete, restore on re-save
 - [x] Unit + e2e tests incl. cross-user isolation
+- [x] Final prompt set and categories approved in discovery (**Phase 14A, 2026-10-08**, `docs/my-story.md`): approved
+      V1 catalogue of 9 categories and 22 prompts in life order; all 12 earlier keys kept with their exact wording and
+      version (no stored answer affected; none retired), 10 added. Rules: stable keys, version bump on any wording
+      change, new key for a new meaning, `retired` prompts keep their answers but take no new ones. Answers up to
+      50,000 characters (server-enforced). Snapshot = wording first answered (edits keep it; returned so the editor
+      shows "You answered an earlier wording"). No migration. Unit (catalogue pinned + integrity, snapshot, retired),
+      PostgreSQL e2e (older-wording scenario, restore, cross-user), component and Playwright (categories, Work/Travel,
+      answer/reload/edit/delete/answer again) tests
+
+- [x] Audio/video/photo answers, linking Memory Vault items, sharing, release, create a message from an answer
+      (**Phase 14B, 2026-10-08**, approved policy, `docs/my-story.md`): `MyStoryMediaAsset` + `MyStoryMemoryLink`
+      (migration `my_story_rich_answers`, additive; `textContent` now optional); PHOTO/AUDIO/VIDEO through the shared
+      ImageKit pipeline (quota, magic bytes, ClamAV, signed URLs, MediaCleanup); private memory links (own live
+      memories, replace semantics); `POST …/response/messages` makes an independent DRAFT Message snapshot through the
+      shared `MessageSnapshotService` (also used by Memory → Message; explicit `contentType`; files re-uploaded and
+      re-checked; linked memories never copied), then the existing recipients, schedule, BullMQ release, grants and
+      Recipient Portal. UI: uploads + audio/video recorders, memory picker, "Create a message". Unit, PostgreSQL e2e
+      (incl. release → Recipient, independence both ways), component and Playwright (real uploads + real release)
+      tests; real ImageKit + clamd check (17/17)
 
 **To do**
 
-- [ ] Final prompt set and categories approved in discovery (V1 catalogue is a development placeholder)
-- [ ] Audio/video/photo answers, linking Memory Vault items, sharing, release, create a message from an answer (product decision)
 - [x] Frontend: My Story prompts + editor → **FE-18** (Step 18) (Playwright verified, Step 21)
 
-### 15 · My Wishes — 🟡 5 of 7
+### 15 · My Wishes — ✅ 7 of 7
 
 **Done**
 
@@ -456,11 +545,29 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
       prompt, soft delete, restore on re-save
 - [x] Private: no recipients, Trusted Contact or admin access, schedule, release, media, Message/memory/story conversion
 - [x] Unit + e2e tests incl. cross-user isolation and "creates nothing else"
+- [x] Disclaimer shown in the UI; acknowledgement/consent record if legal review requires it (**Phase 15A, 2026-10-08**,
+      decided by the product owner; formal legal review still open in Phase 01): version 1 = the existing wording, served
+      only by `GET /my-wishes/disclaimer` (frontend copy removed); explicit acknowledgement once per version
+      (`MyWishesDisclaimerAcknowledgement`, migration `my_wishes_disclaimer_acknowledgements`, additive, no backfill;
+      `POST /my-wishes/disclaimer/acknowledgement`, idempotent; audit `MY_WISHES_DISCLAIMER_ACKNOWLEDGED`, version only);
+      server-side: `PUT` of a wish is 409 until the current version is acknowledged, `GET`/`DELETE` never need it. An
+      acknowledgement, never "consent". Unit, PostgreSQL e2e (incl. concurrency and a simulated version 2), component
+      and Playwright tests
 
 **To do**
 
-- [ ] Disclaimer shown in the UI; acknowledgement/consent record if legal review requires it
-- [ ] Release to family after verified death, media, AI help (product decision; AI must never present output as legal advice)
+- [x] Release to family after verified death, media, AI help (product decision; AI must never present output as legal advice)
+      (**Phase 15B, 2026-10-09**, approved policy, `docs/my-wishes.md`): `MyWishMediaAsset` (migration `my_wishes_media`,
+      additive; `textContent` now optional, no row changed); PHOTO/AUDIO/VIDEO through the shared ImageKit pipeline
+      (quota, magic bytes, ClamAV fail-closed, signed URLs, MediaCleanup incl. stale uploads); adding a file needs the 15A
+      acknowledgement. `POST …/response/messages` makes an independent DRAFT Message through the shared
+      `MessageSnapshotService` (explicit `contentType`, chosen text/files, files copied and re-checked, any number per wish),
+      then the existing recipients, `ON_DEATH`/`AFTER_DEATH` schedule, verified-death workflow, BullMQ release, grants,
+      minimal release email and Recipient Portal. Wish and message independent both ways. Trusted Contacts and admins never
+      read wish content. **AI help: deferred post-MVP** (not built; MVP excludes AI). UI: uploads + audio/video recorders,
+      files-only wishes, "Create message for loved ones" → existing message page. Unit, PostgreSQL e2e (report → safeguard
+      → review → verify → release → Recipient; independence; no Trusted Contact/admin/Recipient wish access), component and
+      Playwright (real uploads + real verified-death release); real ImageKit + clamd check (20/20)
 - [x] Frontend: My Wishes pages with the exact non-legal disclaimer → **FE-19** (Step 18) (Playwright verified, Step 21)
 
 ---
@@ -633,12 +740,12 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 | FE-11 | ✅ Trusted Contacts: list, add, edit, remove, max 2, invitation status + resend (Phase 10)                                                                                    |  10   |    ✅ ready    |
 | FE-12 | ✅ Messages: create/edit draft, choose content type, assign recipients                                                                                                 |  11   |    ✅ ready    |
 | FE-13 | ✅ Message media: photo/audio upload with progress + cancel (presigned PUT → complete), previews, delete. ⚠️ Real browser uploads need the bucket CORS rule (phase 12) |  12   |    ✅ ready    |
-| FE-14 | ✅ Audio recorder in the browser (MediaRecorder, WebM/MP4 by browser; video recorder waits for the video pipeline)                                                     |  12   | ✅ audio ready |
+| FE-14 | ✅ Audio and video recorder in the browser (MediaRecorder, WebM/MP4 by browser; video recorder Phase 12A)                                                              |  12   | ✅ audio ready |
 | FE-15 | ✅ Schedule picker: FIXED_DATE with timezone, ON_DEATH, AFTER_DEATH + days; change timing; unschedule                                                                  |  16   |    ✅ ready    |
 | FE-16 | ✅ Message status views (DRAFT / SCHEDULED / RELEASED) and the explicit "unschedule to edit" flow                                                                      |  16   |    ✅ ready    |
-| FE-17 | ✅ Memory Vault: list/filter by category, create/edit/delete, photo/audio media                                                                                        |  13   |    ✅ ready    |
-| FE-18 | ✅ My Story: prompts by category, answer/edit/delete                                                                                                                   |  14   |    ✅ ready    |
-| FE-19 | ✅ My Wishes: prompts by category, answer/edit/delete, exact non-legal disclaimer                                                                                      |  15   |    ✅ ready    |
+| FE-17 | ✅ Memory Vault: list/filter by category, search, tag, pages; create/edit/delete with tags, photo/audio media; create a message   |  13   |    ✅ ready    |
+| FE-18 | ✅ My Story: prompts by category (approved V1), answer/edit/delete, earlier-wording notice; photo/audio/video, memory links, create a message |  14   |    ✅ ready    |
+| FE-19 | ✅ My Wishes: prompts by category, answer/edit/delete, non-legal notice from the API + per-version acknowledgement (15A)                                             |  15   |    ✅ ready    |
 | FE-20 | ⬜ Plan/billing pages (Stripe checkout and portal)                                                                                                                     |  21   |  ⬜ not built  |
 
 ### D. Recipient portal — ✅ 3 of 3 (Step 19; Playwright verified, Step 21)
@@ -836,6 +943,9 @@ demo-only.
 
 Native iOS/Android apps · AI features · fully automated death verification · hospital/charity integrations ·
 white-label platform · shared family vaults · printed books · multi-language.
+
+AI help in My Wishes (Phase 15 item) is resolved as **deferred to post-MVP** (2026-10-09), consistent with this list; the
+future rule stays: AI output must never be presented as legal advice (`docs/my-wishes.md`).
 
 ---
 

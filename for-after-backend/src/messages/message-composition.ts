@@ -32,6 +32,18 @@ export function checkComposition({
   const hasText = Boolean(textContent?.trim());
   const photos = media.filter((m) => m.kind === MediaKind.PHOTO).length;
   const audios = media.filter((m) => m.kind === MediaKind.AUDIO).length;
+  const videos = media.filter((m) => m.kind === MediaKind.VIDEO).length;
+  // Phase 12 product decision (2026-10-07): video is either a VIDEO message on
+  // its own or one part of a MIXED message, never inside TEXT/PHOTO/AUDIO.
+  const singleModality =
+    contentType === MessageContentType.TEXT ||
+    contentType === MessageContentType.PHOTO ||
+    contentType === MessageContentType.AUDIO;
+  if (videos && singleModality) {
+    throw conflict(
+      `${contentType} messages cannot contain video. Use VIDEO or MIXED.`,
+    );
+  }
 
   switch (contentType) {
     case MessageContentType.TEXT:
@@ -58,8 +70,22 @@ export function checkComposition({
         throw conflict('AUDIO messages require at least one ready audio file.');
       }
       return;
+    case MessageContentType.VIDEO:
+      if (photos || audios) {
+        throw conflict(
+          'VIDEO messages cannot contain photos or audio. Use MIXED.',
+        );
+      }
+      if (hasText) {
+        throw conflict('VIDEO messages cannot contain text. Use MIXED.');
+      }
+      if (!videos) {
+        throw conflict('VIDEO messages require at least one ready video.');
+      }
+      return;
     case MessageContentType.MIXED:
-      if ([hasText, photos > 0, audios > 0].filter(Boolean).length < 2) {
+      const parts = [hasText, photos > 0, audios > 0, videos > 0];
+      if (parts.filter(Boolean).length < 2) {
         throw conflict('MIXED messages require at least two content types.');
       }
       return;

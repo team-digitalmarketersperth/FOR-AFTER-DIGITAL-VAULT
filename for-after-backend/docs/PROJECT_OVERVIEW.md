@@ -21,7 +21,7 @@
 |---|---|---|
 | Customer auth, sessions | §7, §33–§36 | ✅ Built (password login, Redis sessions); 2FA, reset, email verification planned |
 | People I Love, Trusted Contacts (CRUD) | §12, §19 | ✅ Built |
-| Messages, media, composition | §13–§14, §25 | ✅ Built (TEXT/PHOTO/AUDIO/MIXED); video planned |
+| Messages, media, composition | §13–§14, §25 | ✅ Built (TEXT/PHOTO/AUDIO/VIDEO/MIXED; media on ImageKit since Phase 12); video alone or in MIXED |
 | Memory Vault, My Story, My Wishes | §16–§18 | ✅ Built (text + photo/audio where applicable) |
 | Scheduling + release | §15, §29–§32 | 🟡 `FIXED_DATE`, `ON_DEATH`, `AFTER_DEATH` stored; `FIXED_DATE` executed; delivery not built |
 | Recipient Portal | §6B, §22–§23 | ✅ Built (email OTP, released content only); SMS + email provider planned |
@@ -491,7 +491,8 @@ TOTP 2FA where required
 ### Video
 
 ```text
-Mux or Cloudflare Stream
+ImageKit (decided 2026-10-07, Phase 12): photos, audio and video are all private
+ImageKit files. This replaced the earlier "Mux or Cloudflare Stream" plan.
 ```
 
 ### Private Files
@@ -547,7 +548,7 @@ flowchart TB
 
     API --> PG[(PostgreSQL)]
     API --> REDIS[(Redis)]
-    API --> VIDEO[Mux / Cloudflare Stream]
+    API --> VIDEO[ImageKit: photo, audio, video]
     API --> STORAGE[Private Object Storage]
     API --> STRIPE[Stripe]
     API --> EMAIL[Email Provider]
@@ -971,6 +972,11 @@ OTP requirements:
 ---
 
 ## 24. Video Architecture
+
+> **Decision (2026-10-07, Phase 12):** video uses **ImageKit**, like photos and audio, instead of Mux or
+> Cloudflare Stream: direct browser upload with a server-signed token, server verification, the private original
+> served through short-lived signed URLs, no transcoding or webhook. See `docs/media-storage.md` §2b. The flow below
+> is the original plan, kept for history.
 
 Video should not normally pass through the NestJS server.
 

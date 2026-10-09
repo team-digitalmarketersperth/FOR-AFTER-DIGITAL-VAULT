@@ -7,6 +7,7 @@ import { adminSignIn } from './admin-sign-in.js';
 import { AuthModule } from '../src/auth/auth.module.js';
 import { configureApp } from '../src/config/app.setup.js';
 import { TEXT_CONTENT_MAX } from '../src/messages/dto/create-message.dto.js';
+import { MyWishesDisclaimer } from '../src/my-wishes/my-wishes-disclaimer.service.js';
 import { MyWishesModule } from '../src/my-wishes/my-wishes.module.js';
 import { MY_WISHES_PROMPTS } from '../src/my-wishes/my-wishes.prompts.js';
 import { PrismaModule } from '../src/prisma/prisma.module.js';
@@ -39,6 +40,10 @@ describe('My Wishes (e2e, PostgreSQL)', () => {
   const styleAnswer = `${style}/response`;
   const musicAnswer = `${root}/music-and-readings.music/response`;
   const rememberAnswer = `${root}/personal-message.remember/response`;
+  const notice = '/api/v1/my-wishes/disclaimer';
+  const acknowledge = `${notice}/acknowledgement`;
+  const APPROVED_V1 =
+    'My Wishes records personal preferences and guidance only. It is not a will, legal document, medical directive, financial instruction or substitute for professional advice.';
   const noLeaks = (body: unknown) =>
     expect(JSON.stringify(body)).not.toMatch(
       /ownerUserId|deletedAt|promptTextSnapshot/,
@@ -140,11 +145,11 @@ describe('My Wishes (e2e, PostgreSQL)', () => {
   });
 
   it('rejects invalid bodies (400)', async () => {
+    // Phase 15B: {} and { textContent: null } are valid shapes (a wish may be
+    // files only); an empty wish is refused by the service (see below).
     for (const body of [
-      {},
       { textContent: '' },
       { textContent: '   \n ' },
-      { textContent: null },
       { textContent: 'x'.repeat(TEXT_CONTENT_MAX + 1) },
       { textContent: 'x', ownerUserId: crypto.randomUUID() },
       { textContent: 'x', promptVersion: 2 },
@@ -158,7 +163,84 @@ describe('My Wishes (e2e, PostgreSQL)', () => {
     expect(await rowsFor(emails[0], 'ceremony.style')).toEqual([]);
   });
 
+  // Phase 15A (approved 2026-10-08): the API serves the notice; a Customer
+  // acknowledges its current version once before writing wishes.
+  it('the notice comes from the API; saving waits for an acknowledgement of the current version', async () => {
+    const before = await lisa.get(notice).expect(200);
+    expect(before.body).toEqual({
+      version: 1,
+      text: APPROVED_V1,
+      requiresAcknowledgement: true,
+      acknowledged: false,
+      acknowledgedAt: null,
+    });
+    // No backfill: a new (or existing) Customer starts unacknowledged.
+    expect(
+      await prisma.myWishesDisclaimerAcknowledgement.count({
+        where: { user: { email: emails[0] } },
+      }),
+    ).toBe(0);
+    const blocked = await lisa
+      .put(styleAnswer)
+      .send({ textContent: 'A quiet ceremony.' })
+      .expect(409);
+    expect(blocked.body.message).toBe(
+      'Please acknowledge the current My Wishes notice before saving.',
+    );
+    expect(await rowsFor(emails[0], 'ceremony.style')).toEqual([]);
+    // Reading never needs it.
+    await lisa.get(root).expect(200);
+
+    for (const body of [
+      {},
+      { version: '1' },
+      { version: 0 },
+      { version: 1, userId: crypto.randomUUID() },
+      { version: 1, acknowledgedAt: '2020-01-01T00:00:00Z' },
+      { version: 1, text: 'Different words' },
+    ])
+      await lisa.post(acknowledge).send(body).expect(400);
+    const stale = await lisa.post(acknowledge).send({ version: 2 }).expect(409);
+    expect(stale.body.message).toBe(
+      'The My Wishes notice has changed. Please read the current version.',
+    );
+
+    // Three submits at once: one acknowledgement, one audit event.
+    const results = await Promise.all(
+      [1, 2, 3].map(() => lisa.post(acknowledge).send({ version: 1 })),
+    );
+    expect(results.map((r) => r.status)).toEqual([200, 200, 200]);
+    expect(results[0].body).toMatchObject({ version: 1, acknowledged: true });
+    expect(
+      await prisma.myWishesDisclaimerAcknowledgement.count({
+        where: { user: { email: emails[0] } },
+      }),
+    ).toBe(1);
+    const audits = await prisma.auditLog.findMany({
+      where: {
+        eventType: 'MY_WISHES_DISCLAIMER_ACKNOWLEDGED',
+        actorUserId: (
+          await prisma.user.findUniqueOrThrow({ where: { email: emails[0] } })
+        ).id,
+      },
+    });
+    expect(audits).toHaveLength(1);
+    expect(audits[0]).toMatchObject({
+      actorType: 'CUSTOMER',
+      metadata: { disclaimerVersion: 1 },
+      ipPrefix: null,
+      userAgent: null,
+    });
+    const after = await lisa.get(notice).expect(200);
+    expect(after.body.acknowledged).toBe(true);
+    expect(after.body.acknowledgedAt).toEqual(results[0].body.acknowledgedAt);
+  });
+
   it('saves, updates, deletes and restores one logical answer', async () => {
+    // Phase 15B: no text and no file is not a wish; nothing is created.
+    for (const body of [{}, { textContent: null }])
+      await lisa.put(styleAnswer).send(body).expect(400);
+    expect(await rowsFor(emails[0], 'ceremony.style')).toEqual([]);
     const first = await lisa
       .put(styleAnswer)
       .send({
@@ -169,6 +251,7 @@ describe('My Wishes (e2e, PostgreSQL)', () => {
     expect(Object.keys(first.body).sort()).toEqual([
       'createdAt',
       'id',
+      'mediaCount',
       'promptKey',
       'textContent',
       'updatedAt',
@@ -238,6 +321,10 @@ describe('My Wishes (e2e, PostgreSQL)', () => {
     await lisa.post('/api/v1/auth/logout').expect(200);
 
     const john = await signIn(emails[1]);
+    // John's acknowledgement is his own: Lisa's does not count for him.
+    expect((await john.get(notice).expect(200)).body.acknowledged).toBe(false);
+    await john.put(rememberAnswer).send({ textContent: johnText }).expect(409);
+    await john.post(acknowledge).send({ version: 1 }).expect(200);
     await john.get(rememberAnswer).expect(404);
     await john.delete(rememberAnswer).expect(404);
     const johnList = await john.get(root).expect(200);
@@ -258,6 +345,53 @@ describe('My Wishes (e2e, PostgreSQL)', () => {
     expect(await rowsFor(emails[1], 'personal-message.remember')).toHaveLength(
       1,
     );
+  });
+
+  it('a new notice version: reading and deleting still work, writing waits for the new acknowledgement', async () => {
+    // Test-only: swap the current notice (the version lives in code, not the DB).
+    const current = app.get(MyWishesDisclaimer) as {
+      version: number;
+      text: string;
+    };
+    const original = { ...current };
+    try {
+      current.version = 2;
+      current.text = 'A test-only second version of the notice.';
+      const status = await lisa.get(notice).expect(200);
+      expect(status.body).toMatchObject({
+        version: 2,
+        text: 'A test-only second version of the notice.',
+        acknowledged: false,
+      });
+      // Existing wishes stay readable; a v1 acknowledgement does not let writes through.
+      await lisa.get(rememberAnswer).expect(200);
+      await lisa
+        .put(rememberAnswer)
+        .send({ textContent: 'Edited.' })
+        .expect(409);
+      await lisa.post(acknowledge).send({ version: 1 }).expect(409);
+      await lisa.post(acknowledge).send({ version: 2 }).expect(200);
+      await lisa
+        .put(rememberAnswer)
+        .send({ textContent: 'Edited.' })
+        .expect(200);
+      // Both acknowledgements are kept as history.
+      const rows = await prisma.myWishesDisclaimerAcknowledgement.findMany({
+        where: { user: { email: emails[0] } },
+        orderBy: { disclaimerVersion: 'asc' },
+      });
+      expect(rows.map((r) => r.disclaimerVersion)).toEqual([1, 2]);
+      // Version 3, not acknowledged: deleting still works.
+      current.version = 3;
+      await lisa.get(rememberAnswer).expect(200);
+      await lisa.delete(rememberAnswer).expect(204);
+      await lisa
+        .put(rememberAnswer)
+        .send({ textContent: 'Again.' })
+        .expect(409);
+    } finally {
+      Object.assign(current, original);
+    }
   });
 
   it('created no Messages, schedules, memories or story answers', async () => {

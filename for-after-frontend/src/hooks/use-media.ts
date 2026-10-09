@@ -7,13 +7,19 @@ import {
   checkFile,
   mediaApi,
   RECIPIENT_PHOTO_MAX_BYTES,
-  putToStorage,
+  storageApi,
+  uploadToProvider,
   type AccessUrl,
   type MediaAsset,
   type MediaKind,
   type MediaScope,
+  type StorageUsage,
 } from '@/lib/api/media';
 import { queryKeys } from '@/lib/query/query-client';
+
+// A file change can change its owner too (e.g. a My Story answer becomes
+// "answered" once a file is READY), so refresh the owner and everything under it.
+const ownerKey = (scope: MediaScope) => queryKeys.media(scope).slice(0, -1);
 
 export function useMediaList(scope: MediaScope) {
   return useQuery<MediaAsset[], ApiError>({
@@ -38,11 +44,24 @@ export function useAccessUrl(scope: MediaScope, assetId: string, enabled = true)
   });
 }
 
+/** The signed-in Customer's storage (Phase 12C); the server decides, this only shows it. */
+export function useStorageUsage() {
+  return useQuery<StorageUsage, ApiError>({
+    queryKey: queryKeys.storage,
+    queryFn: ({ signal }) => storageApi.usage(signal),
+  });
+}
+
 export function useRemoveMedia(scope: MediaScope) {
   const qc = useQueryClient();
   return useMutation<void, ApiError, string>({
     mutationFn: (assetId) => mediaApi.remove(scope, assetId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.media(scope) }),
+    onSuccess: () =>
+      Promise.all([
+        // The owner (message, memory, story answer…), its files included.
+        qc.invalidateQueries({ queryKey: ownerKey(scope) }),
+        qc.invalidateQueries({ queryKey: queryKeys.storage }),
+      ]),
   });
 }
 
@@ -53,10 +72,10 @@ export type UploadState =
   | { phase: 'failed'; fileName: string; message: string };
 
 /**
- * upload-url → direct PUT to storage (with progress) → complete → READY.
- * Resolves with the READY asset, or null (failed or cancelled). cancel()
- * aborts the PUT and removes the half-created asset; a cancelled upload never
- * reaches "complete".
+ * upload-url → direct upload to the provider (with progress) → complete →
+ * READY. Resolves with the READY asset, or null (failed or cancelled).
+ * cancel() aborts the upload and removes the half-created asset; a cancelled
+ * upload never reaches "complete".
  */
 export function useUpload(scope: MediaScope) {
   const qc = useQueryClient();
@@ -79,12 +98,12 @@ export function useUpload(scope: MediaScope) {
       try {
         const target = await mediaApi.requestUpload(scope, kind, file);
         assetId = target.mediaAssetId;
-        await putToStorage(target, file, {
+        const providerFileId = await uploadToProvider(target.upload, file, {
           signal: controller.signal,
           onProgress: (progress) => setState({ phase: 'uploading', fileName: file.name, progress }),
         });
         setState({ phase: 'confirming', fileName: file.name });
-        const asset = await mediaApi.complete(scope, target.mediaAssetId);
+        const asset = await mediaApi.complete(scope, target.mediaAssetId, providerFileId);
         setState({ phase: 'idle' });
         return asset;
       } catch (error) {
@@ -103,7 +122,8 @@ export function useUpload(scope: MediaScope) {
         }
       } finally {
         abortRef.current = null;
-        void qc.invalidateQueries({ queryKey: queryKeys.media(scope) });
+        void qc.invalidateQueries({ queryKey: ownerKey(scope) });
+        void qc.invalidateQueries({ queryKey: queryKeys.storage });
       }
     },
     [qc, scope],

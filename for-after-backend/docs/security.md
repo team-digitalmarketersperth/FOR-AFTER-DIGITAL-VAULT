@@ -82,7 +82,12 @@ Critical operations (e.g., processing a death report, releasing messages) requir
 ## 10. Media Security
 
 - **Storage Access**: Direct S3/R2 signed URLs are used with strict expiration times. No buckets have public read access.
-- **Video Delivery**: Video playback is secured via signed Mux / Cloudflare tokens.
+- **Media Delivery**: photos, audio and video are private ImageKit files served only through short-lived signed URLs (`ik-t` expiry + `ik-s` signature); unsigned requests are refused. `IMAGEKIT_PRIVATE_KEY` is backend-only.
+- **My Wishes notice (Phase 15A)**: the backend serves the notice and enforces a per-version acknowledgement before any wish is written; reading and deleting never need it. The acknowledgement record holds the user id, version and time only (no IP, device or content), is never described as legal consent, and existing users were not backfilled.
+- **My Wishes (Phase 15B)**: wishes and their files stay private to the Customer while alive and after death; Trusted Contacts and admins never read them (admin death-verification APIs carry no wish data). Files are private ImageKit media with the same checks (magic bytes, ClamAV, quota) and signed URLs. Recipients only ever see a **copied Message snapshot** the Customer made deliberately, released by the normal verified-death path; no AI is used (deferred post-MVP).
+- **My Story (Phase 14B)**: answers, their files and their linked memories are private to the Customer. Files are private ImageKit media with the same checks (magic bytes, ClamAV) and signed URLs as other media. Recipients only ever see a **copied Message snapshot** made deliberately by the Customer; a linked memory grants nobody access and is never copied.
+- **Storage quota (Phase 12C)**: per-Customer limit enforced server-side before any upload is signed, under a row lock on the Customer (no parallel oversubscription); usage is computed from PostgreSQL and only the owner can read it (`GET /users/me/storage`). Quota errors carry no plan, limit or other Customer's data.
+- **Malware scanning (Phase 12B)**: every upload is streamed server-side to ClamAV (`clamd`) after the type and file-signature checks and before `READY`. Infected → `FAILED`, file deleted, generic 400; scanner errors fail closed (503, stays `PENDING_UPLOAD`). The browser never reports a scan result. See `docs/media-storage.md` §2e.
 
 ## 11. Audit Logging
 

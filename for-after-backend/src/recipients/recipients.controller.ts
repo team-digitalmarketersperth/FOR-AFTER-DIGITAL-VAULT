@@ -18,7 +18,10 @@ import { CustomerGuard } from '../auth/guards/customer.guard.js';
 import { SessionAuthGuard } from '../auth/guards/session-auth.guard.js';
 import type { SafeUser } from '../users/users.service.js';
 import { CreateRecipientDto } from './dto/create-recipient.dto.js';
-import { CreateMediaUploadDto } from '../media/dto/create-media-upload.dto.js';
+import {
+  CompleteMediaUploadDto,
+  CreateMediaUploadDto,
+} from '../media/dto/create-media-upload.dto.js';
 import type {
   AccessUrlResponse,
   MediaResponse,
@@ -105,8 +108,9 @@ export class RecipientsController {
     @CurrentUser() user: SafeUser,
     @Param('id', ParseUUIDPipe) id: string,
     @Param('photoId', ParseUUIDPipe) photoId: string,
+    @Body() dto: CompleteMediaUploadDto,
   ): Promise<MediaResponse> {
-    return this.photos.complete(user.id, id, photoId);
+    return this.photos.complete(user.id, id, photoId, dto.providerFileId);
   }
 
   @Get(':id/photo/:photoId/access-url')

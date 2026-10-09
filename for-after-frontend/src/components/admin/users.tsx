@@ -1,8 +1,8 @@
 'use client';
 
-import { Lock, Search, Users } from 'lucide-react';
+import { Lock, Users } from 'lucide-react';
 import Link from 'next/link';
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { toast } from 'sonner';
 import {
   CaseStatusBadge,
@@ -17,12 +17,11 @@ import {
   UserStatusBadge,
 } from '@/components/admin/admin-ui';
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
+import { SearchBox } from '@/components/shared/list-controls';
 import { TextAreaField } from '@/components/shared/form-field';
 import { PageHeader } from '@/components/shared/page-header';
 import { EmptyState, QueryView } from '@/components/shared/states';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { useAdminSession, useAdminUser, useAdminUsers, useReactivateUser, useSuspendUser } from '@/hooks/use-admin';
 import {
   SUSPEND_REASON_MAX,
@@ -36,7 +35,6 @@ import { canManage, personName, ROLE_LABEL, STATUS_LABEL } from '@/lib/admin';
 import { formatDate, formatDateTime } from '@/lib/format';
 
 const BASE = '/admin/users';
-const SEARCH_DELAY_MS = 350;
 
 export function UserList({ filters }: { filters: UserFilters }) {
   const list = useAdminUsers(filters);
@@ -49,7 +47,12 @@ export function UserList({ filters }: { filters: UserFilters }) {
         description="Account metadata only. Customers' messages, memories, stories and wishes are never shown here."
       />
       <div className="mb-6 grid gap-4 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)] sm:items-end">
-        <SearchBox value={filters.search} onSearch={(search) => nav.set({ search })} />
+        <SearchBox
+          value={filters.search}
+          onSearch={(search) => nav.set({ search })}
+          placeholder="Email, first or last name"
+          maxLength={254}
+        />
         <SelectField
           id="status"
           label="Status"
@@ -96,50 +99,6 @@ export function UserList({ filters }: { filters: UserFilters }) {
         }
       </QueryView>
     </>
-  );
-}
-
-/**
- * Searches email, first and last name on the server (what the API supports),
- * after a short pause in typing. Back/forward restore the box from the URL.
- */
-function SearchBox({ value, onSearch }: { value?: string; onSearch: (search?: string) => void }) {
-  const [text, setText] = useState(value ?? '');
-  const pushed = useRef(value);
-  useEffect(() => {
-    if (value === pushed.current) return;
-    pushed.current = value;
-    setText(value ?? '');
-  }, [value]);
-  const latest = useRef(onSearch);
-  useEffect(() => {
-    latest.current = onSearch;
-  });
-  useEffect(() => {
-    const next = text.trim() || undefined;
-    if (next === pushed.current) return;
-    const timer = setTimeout(() => {
-      pushed.current = next;
-      latest.current(next);
-    }, SEARCH_DELAY_MS);
-    return () => clearTimeout(timer);
-  }, [text]);
-  return (
-    <div className="grid gap-2">
-      <Label htmlFor="search">Search</Label>
-      <div className="relative">
-        <Search aria-hidden strokeWidth={1.5} className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-foreground-muted" />
-        <Input
-          id="search"
-          type="search"
-          value={text}
-          maxLength={254}
-          placeholder="Email, first or last name"
-          onChange={(e) => setText(e.target.value)}
-          className="h-11 pl-9"
-        />
-      </div>
-    </div>
   );
 }
 

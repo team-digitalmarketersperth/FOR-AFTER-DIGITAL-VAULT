@@ -1,4 +1,4 @@
-import { AudioLines, Image as ImageIcon, Layers, PenLine, type LucideIcon } from 'lucide-react';
+import { AudioLines, Image as ImageIcon, Layers, PenLine, Video, type LucideIcon } from 'lucide-react';
 import type { ContentType, Message, MessageStatus, Schedule } from '@/lib/api/messages';
 import { formatDateTime, timeZoneName } from '@/lib/format';
 import { cn } from '@/lib/utils';
@@ -7,7 +7,8 @@ export const CONTENT_TYPE_INFO: Record<ContentType, { label: string; description
   TEXT: { label: 'Written', description: 'A letter or note in your own words.', icon: PenLine },
   PHOTO: { label: 'Photos', description: 'One or more photos, without text.', icon: ImageIcon },
   AUDIO: { label: 'Voice', description: 'Your voice: a recording or audio file.', icon: AudioLines },
-  MIXED: { label: 'Mixed', description: 'Any two or more of words, photos and voice.', icon: Layers },
+  VIDEO: { label: 'Video', description: 'One or more videos, without text.', icon: Video },
+  MIXED: { label: 'Mixed', description: 'Any two or more of words, photos, voice and video.', icon: Layers },
 };
 
 const STATUS: Record<MessageStatus, { label: string; className: string }> = {

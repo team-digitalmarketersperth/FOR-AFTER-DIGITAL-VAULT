@@ -1,7 +1,7 @@
 import { MutationCache, QueryCache, QueryClient } from '@tanstack/react-query';
 import type { PromptArea } from '@/lib/api/prompts';
 import type { MediaScope } from '@/lib/api/media';
-import type { MemoryCategory } from '@/lib/api/memory-vault';
+import type { MemoryFilters } from '@/lib/api/memory-vault';
 import type { AuditFilters, CaseFilters, UserFilters } from '@/lib/api/admin';
 import { isApiError } from '@/lib/api/errors';
 
@@ -23,8 +23,11 @@ export const queryKeys = {
   messages: ['messages'] as const,
   message: (id: string) => ['messages', id] as const,
   schedule: (messageId: string) => ['messages', messageId, 'schedule'] as const,
+  storage: ['storage'] as const,
+  wishesNotice: ['my-wishes', 'notice'] as const,
   memories: ['memory-vault'] as const,
-  memoryList: (category?: MemoryCategory) => ['memory-vault', 'list', category ?? 'ALL'] as const,
+  memoryList: (filters: MemoryFilters) => ['memory-vault', 'list', filters] as const,
+  memoryTags: ['memory-vault', 'tags'] as const,
   memory: (id: string) => ['memory-vault', id] as const,
   // Nested under the owner, so owner invalidation covers its media too.
   // 'recipient/messages' → ['recipient', 'messages', …]: portal media stays in the portal namespace.

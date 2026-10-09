@@ -7,7 +7,10 @@ import { adminSignIn } from './admin-sign-in.js';
 import { AuthModule } from '../src/auth/auth.module.js';
 import { configureApp } from '../src/config/app.setup.js';
 import { MediaModule } from '../src/media/media.module.js';
+import { MalwareScanner } from '../src/media/scanner/malware-scanner.service.js';
 import { MediaStorage } from '../src/media/storage/media-storage.service.js';
+import { FAKE_MALWARE, FakeMalwareScanner } from './fake-malware-scanner.js';
+import { FakeMediaStorage, fileStart } from './fake-media-storage.js';
 import { MessageSchedulesModule } from '../src/message-schedules/message-schedules.module.js';
 import { MessagesModule } from '../src/messages/messages.module.js';
 import { PrismaModule } from '../src/prisma/prisma.module.js';
@@ -27,21 +30,14 @@ describe('Message composition + schedule readiness (e2e)', () => {
   const password = 'StrongPassword123!';
   const SIZE = 1000;
 
-  // Signed Content-Type per key, and which asset ids were "PUT" to storage.
-  const types = new Map<string, string>();
-  const uploaded = new Set<string>();
-  const storage = {
-    createUploadUrl: vi.fn(async (key: string, contentType: string) => {
-      types.set(key, contentType);
-      return 'https://storage.test/signed-put';
-    }),
-    createAccessUrl: vi.fn(async () => 'https://storage.test/signed-get'),
-    headObject: vi.fn(async (key: string) =>
-      [...uploaded].some((id) => key.includes(id))
-        ? { sizeBytes: SIZE, contentType: types.get(key) }
-        : null,
-    ),
-    deleteObject: vi.fn(async () => undefined),
+  // In-memory provider: a file exists only after the simulated browser upload.
+  const storage = new FakeMediaStorage();
+  const scanner = new FakeMalwareScanner();
+  type Kind = 'PHOTO' | 'AUDIO' | 'VIDEO';
+  const FILE = {
+    PHOTO: { originalFileName: 'photo.jpg', mimeType: 'image/jpeg' },
+    AUDIO: { originalFileName: 'voice.mp3', mimeType: 'audio/mpeg' },
+    VIDEO: { originalFileName: 'hello.mp4', mimeType: 'video/mp4' },
   };
 
   type Agent = ReturnType<typeof request.agent>;
@@ -67,26 +63,32 @@ describe('Message composition + schedule readiness (e2e)', () => {
   const media = (messageId: string) => `/api/v1/messages/${messageId}/media`;
   const schedule = (messageId: string) =>
     `/api/v1/messages/${messageId}/schedule`;
-  const requestUpload = async (messageId: string, kind: 'PHOTO' | 'AUDIO') =>
-    (
-      await lisa
-        .post(`${media(messageId)}/upload-url`)
-        .send({
-          kind,
-          originalFileName: kind === 'PHOTO' ? 'photo.jpg' : 'voice.mp3',
-          mimeType: kind === 'PHOTO' ? 'image/jpeg' : 'audio/mpeg',
-          sizeBytes: SIZE,
-        })
-        .expect(201)
-    ).body.mediaAssetId as string;
-  // upload-url → (simulated direct PUT) → complete = READY
-  const attachReady = async (messageId: string, kind: 'PHOTO' | 'AUDIO') => {
-    const id = await requestUpload(messageId, kind);
-    uploaded.add(id);
+  // upload-url only: the asset stays PENDING_UPLOAD.
+  const requestUpload = async (messageId: string, kind: Kind) => {
+    const res = await lisa
+      .post(`${media(messageId)}/upload-url`)
+      .send({ kind, ...FILE[kind], sizeBytes: SIZE })
+      .expect(201);
+    return {
+      id: res.body.mediaAssetId as string,
+      upload: res.body.upload as Parameters<FakeMediaStorage['upload']>[0],
+    };
+  };
+  // upload-url → (simulated direct upload) → complete
+  const attach = async (messageId: string, kind: Kind, sizeBytes = SIZE) => {
+    const { id, upload } = await requestUpload(messageId, kind);
+    const fileId = storage.upload(upload, {
+      sizeBytes,
+      contentType: FILE[kind].mimeType,
+    });
     const done = await lisa
       .post(`${media(messageId)}/${id}/complete`)
-      .expect(200);
-    expect(done.body.status).toBe('READY');
+      .send({ providerFileId: fileId });
+    return { id, status: done.status };
+  };
+  const attachReady = async (messageId: string, kind: Kind) => {
+    const { id, status } = await attach(messageId, kind);
+    expect(status).toBe(200);
     return id;
   };
   const statusOf = async (messageId: string) =>
@@ -108,6 +110,8 @@ describe('Message composition + schedule readiness (e2e)', () => {
     })
       .overrideProvider(MediaStorage)
       .useValue(storage)
+      .overrideProvider(MalwareScanner)
+      .useValue(scanner)
       .compile();
     app = moduleRef.createNestApplication<NestExpressApplication>();
     configureApp(app, new session.MemoryStore());
@@ -135,8 +139,8 @@ describe('Message composition + schedule readiness (e2e)', () => {
     await app?.close();
   });
 
-  it('creates drafts of every supported type; VIDEO is 400', async () => {
-    for (const contentType of ['PHOTO', 'AUDIO', 'MIXED']) {
+  it('creates drafts of every supported type (VIDEO since Phase 12)', async () => {
+    for (const contentType of ['PHOTO', 'AUDIO', 'VIDEO', 'MIXED']) {
       const res = await lisa
         .post('/api/v1/messages')
         .send({ title: 'Draft', contentType, recipientIds: [sofiaId] })
@@ -149,7 +153,7 @@ describe('Message composition + schedule readiness (e2e)', () => {
     }
     await lisa
       .post('/api/v1/messages')
-      .send({ title: 'Video', contentType: 'VIDEO', recipientIds: [sofiaId] })
+      .send({ title: 'Video', contentType: 'video', recipientIds: [sofiaId] })
       .expect(400);
   });
 
@@ -204,24 +208,157 @@ describe('Message composition + schedule readiness (e2e)', () => {
   it('E — pending (and failed) media block scheduling; soft-deleted media is ignored', async () => {
     const id = await createMessage({ contentType: 'PHOTO' });
     await attachReady(id, 'PHOTO');
-    const pending = await requestUpload(id, 'PHOTO');
+    const { id: pending } = await requestUpload(id, 'PHOTO');
     const refused = await lisa.post(schedule(id)).send(onDeath).expect(409);
     expect(refused.body.message).toMatch(/not ready/);
     expect(await statusOf(id)).toBe('DRAFT');
     await lisa.get(schedule(id)).expect(404);
+    await lisa.delete(`${media(id)}/${pending}`).expect(204);
 
-    // Complete it with the wrong size → FAILED, still blocks.
-    uploaded.add(pending);
-    storage.headObject.mockResolvedValueOnce({
-      sizeBytes: SIZE + 1,
-      contentType: 'image/jpeg',
-    });
-    await lisa.post(`${media(id)}/${pending}/complete`).expect(400);
+    // An upload of the wrong size → FAILED, still blocks.
+    const failed = await attach(id, 'PHOTO', SIZE + 1);
+    expect(failed.status).toBe(400);
     await lisa.post(schedule(id)).send(onDeath).expect(409);
 
     // Deleting it (soft delete) removes it from validation.
-    await lisa.delete(`${media(id)}/${pending}`).expect(204);
+    await lisa.delete(`${media(id)}/${failed.id}`).expect(204);
     await lisa.post(schedule(id)).send(onDeath).expect(201);
+  });
+
+  // Phase 12B: infected (FAILED) or unscanned (PENDING_UPLOAD after a scanner
+  // outage) media never satisfies PHOTO/AUDIO/VIDEO/MIXED.
+  const attachInfected = async (messageId: string, kind: Kind) => {
+    const { id, upload } = await requestUpload(messageId, kind);
+    const fileId = storage.upload(upload, {
+      sizeBytes: SIZE,
+      contentType: FILE[kind].mimeType,
+      bytes: new Uint8Array([
+        ...fileStart(FILE[kind].mimeType),
+        ...Buffer.from(FAKE_MALWARE),
+      ]),
+    });
+    await lisa
+      .post(`${media(messageId)}/${id}/complete`)
+      .send({ providerFileId: fileId })
+      .expect(400);
+    return id;
+  };
+
+  it.each(['PHOTO', 'AUDIO', 'VIDEO'] as const)(
+    'M — an infected %s never makes its message schedulable',
+    async (kind) => {
+      const id = await createMessage({ contentType: kind });
+      const infected = await attachInfected(id, kind);
+      await lisa.post(schedule(id)).send(onDeath).expect(409);
+      expect(await statusOf(id)).toBe('DRAFT');
+      await lisa.delete(`${media(id)}/${infected}`).expect(204);
+      await lisa.post(schedule(id)).send(onDeath).expect(409); // still none READY
+    },
+  );
+
+  it('M — MIXED: an infected or unscanned file blocks; only READY counts', async () => {
+    const id = await createMessage({
+      contentType: 'MIXED',
+      textContent: 'Fictional text.',
+    });
+    await attachReady(id, 'PHOTO');
+    const infected = await attachInfected(id, 'AUDIO');
+    await lisa.post(schedule(id)).send(onDeath).expect(409);
+    await lisa.delete(`${media(id)}/${infected}`).expect(204);
+
+    scanner.scan.mockRejectedValueOnce(new Error('scanner down'));
+    const unscanned = await attach(id, 'VIDEO');
+    expect(unscanned.status).toBe(503);
+    await lisa.post(schedule(id)).send(onDeath).expect(409);
+    await lisa.delete(`${media(id)}/${unscanned.id}`).expect(204);
+
+    await lisa.post(schedule(id)).send(onDeath).expect(201);
+  });
+
+  it('V — VIDEO: incomplete draft allowed; only a READY video schedules', async () => {
+    const id = await createMessage({ title: 'A video', contentType: 'VIDEO' });
+    const none = await lisa.post(schedule(id)).send(onDeath).expect(409);
+    expect(none.body.message).toBe(
+      'VIDEO messages require at least one ready video.',
+    );
+
+    // Uploading (PENDING_UPLOAD, never completed) blocks.
+    const { id: pending } = await requestUpload(id, 'VIDEO');
+    const notReady = await lisa.post(schedule(id)).send(onDeath).expect(409);
+    expect(notReady.body.message).toMatch(/not ready/);
+    await lisa.delete(`${media(id)}/${pending}`).expect(204);
+
+    // A video that failed verification blocks.
+    const failed = await attach(id, 'VIDEO', SIZE + 1);
+    expect(failed.status).toBe(400);
+    await lisa.post(schedule(id)).send(onDeath).expect(409);
+    await lisa.delete(`${media(id)}/${failed.id}`).expect(204);
+
+    // A deleted READY video no longer counts.
+    const removed = await attachReady(id, 'VIDEO');
+    await lisa.delete(`${media(id)}/${removed}`).expect(204);
+    await lisa.post(schedule(id)).send(onDeath).expect(409);
+
+    // Text on a VIDEO message is refused: text + video is a MIXED message.
+    await lisa
+      .patch(`/api/v1/messages/${id}`)
+      .send({ textContent: 'A caption' })
+      .expect(200);
+    await attachReady(id, 'VIDEO');
+    const text = await lisa.post(schedule(id)).send(onDeath).expect(409);
+    expect(text.body.message).toBe(
+      'VIDEO messages cannot contain text. Use MIXED.',
+    );
+    await lisa
+      .patch(`/api/v1/messages/${id}`)
+      .send({ textContent: null })
+      .expect(200);
+    await lisa.post(schedule(id)).send(onDeath).expect(201);
+    expect(await statusOf(id)).toBe('SCHEDULED');
+    // Scheduled: locked, like every type.
+    await lisa
+      .post(`${media(id)}/upload-url`)
+      .send({ kind: 'VIDEO', ...FILE.VIDEO, sizeBytes: SIZE })
+      .expect(409);
+  });
+
+  it('V — video is refused in TEXT, PHOTO and AUDIO messages', async () => {
+    for (const [contentType, extra, other] of [
+      ['TEXT', 'Hi', null],
+      ['PHOTO', null, 'PHOTO'],
+      ['AUDIO', null, 'AUDIO'],
+    ] as const) {
+      const id = await createMessage({ contentType, textContent: extra });
+      if (other) await attachReady(id, other);
+      await attachReady(id, 'VIDEO');
+      const res = await lisa.post(schedule(id)).send(onDeath).expect(409);
+      expect(res.body.message).toBe(
+        `${contentType} messages cannot contain video. Use VIDEO or MIXED.`,
+      );
+      expect(await statusOf(id)).toBe('DRAFT');
+    }
+  });
+
+  it('V — MIXED + VIDEO: video counts as one MIXED part; video alone is not MIXED', async () => {
+    const id = await createMessage({ contentType: 'MIXED' });
+    await attachReady(id, 'VIDEO');
+    const alone = await lisa.post(schedule(id)).send(onDeath).expect(409);
+    expect(alone.body.message).toBe(
+      'MIXED messages require at least two content types.',
+    );
+    await lisa
+      .patch(`/api/v1/messages/${id}`)
+      .send({ textContent: 'A few words with my video.' })
+      .expect(200);
+    await lisa.post(schedule(id)).send(onDeath).expect(201);
+    expect(await statusOf(id)).toBe('SCHEDULED');
+
+    // Photo + audio + video, no text.
+    const all = await createMessage({ contentType: 'MIXED' });
+    await attachReady(all, 'PHOTO');
+    await attachReady(all, 'AUDIO');
+    await attachReady(all, 'VIDEO');
+    await lisa.post(schedule(all)).send(onDeath).expect(201);
   });
 
   it('content/media mismatches are 409 and change nothing', async () => {

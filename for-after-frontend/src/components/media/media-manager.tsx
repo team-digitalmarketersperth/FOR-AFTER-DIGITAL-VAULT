@@ -1,9 +1,9 @@
 'use client';
 
-import { AlertCircle, AudioLines, Clock, ImagePlus, Play, Trash2, Upload } from 'lucide-react';
+import { AlertCircle, AudioLines, Clock, Film, ImagePlus, Play, Trash2, Upload } from 'lucide-react';
 import { useRef, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
-import { AudioRecorder } from '@/components/media/audio-recorder';
+import { Recorder } from '@/components/media/recorder';
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import { Spinner } from '@/components/shared/states';
 import { Button } from '@/components/ui/button';
@@ -14,10 +14,10 @@ import { MIME_TYPES, type MediaAsset, type MediaKind, type MediaScope } from '@/
 import { formatBytes } from '@/lib/format';
 
 /**
- * Photos and audio for a message or memory. Files go straight from the
- * browser to private storage; previews use short-lived signed URLs that are
- * requested only when shown. `editable` false = view only (e.g. a scheduled
- * message), so no control is offered that the API would refuse.
+ * Photos, audio and video for a message or memory. Files go straight from the
+ * browser to the private media provider; previews use short-lived signed URLs
+ * that are requested only when shown. `editable` false = view only (e.g. a
+ * scheduled message), so no control is offered that the API would refuse.
  */
 export function MediaManager({
   scope,
@@ -32,7 +32,7 @@ export function MediaManager({
 }) {
   const list = useMediaList(scope);
   const { state, upload, cancel, reset } = useUpload(scope);
-  const [recorderKey, setRecorderKey] = useState(0);
+  const [recorderKeys, setRecorderKeys] = useState({ AUDIO: 0, VIDEO: 0 });
   const [lastFile, setLastFile] = useState<{ kind: MediaKind; file: File } | null>(null);
   const busy = state.phase === 'uploading' || state.phase === 'confirming';
 
@@ -40,9 +40,10 @@ export function MediaManager({
     setLastFile({ kind, file });
     const asset = await upload(kind, file);
     if (!asset) return;
-    toast.success(kind === 'PHOTO' ? 'Photo added' : 'Audio added');
-    // A fresh recorder (and freed preview) after a recording is used.
-    if (kind === 'AUDIO') setRecorderKey((k) => k + 1);
+    toast.success(`${KIND_LABEL[kind]} added`);
+    // A fresh recorder (and freed preview) once its recording is READY; a failed
+    // upload keeps the recording for "Try again".
+    if (kind !== 'PHOTO') setRecorderKeys((k) => ({ ...k, [kind]: k[kind] + 1 }));
   };
 
 
@@ -63,7 +64,7 @@ export function MediaManager({
           </button>
         </p>
       ) : items.length === 0 ? (
-        <p className="text-foreground-muted">{editable ? 'Nothing added yet.' : 'No photos or audio.'}</p>
+        <p className="text-foreground-muted">{editable ? 'Nothing added yet.' : 'No photos, audio or video.'}</p>
       ) : (
         <ul className="grid gap-4 sm:grid-cols-2">
           {items.map((asset) => (
@@ -86,6 +87,9 @@ export function MediaManager({
               {kinds.includes('AUDIO') && (
                 <FilePick kind="AUDIO" label="Upload audio" icon={<Upload aria-hidden strokeWidth={1.5} />} onPick={start} />
               )}
+              {kinds.includes('VIDEO') && (
+                <FilePick kind="VIDEO" label="Add a video" icon={<Film aria-hidden strokeWidth={1.5} />} onPick={start} />
+              )}
             </div>
           )}
           {state.phase === 'failed' && (
@@ -104,8 +108,11 @@ export function MediaManager({
               </Button>
             </div>
           )}
-          {kinds.includes('AUDIO') && (
-            <AudioRecorder key={recorderKey} disabled={busy} onUse={(file) => start('AUDIO', file)} />
+          {(['AUDIO', 'VIDEO'] as const).map(
+            (kind) =>
+              kinds.includes(kind) && (
+                <Recorder key={`${kind}-${recorderKeys[kind]}`} kind={kind} disabled={busy} onUse={(file) => start(kind, file)} />
+              ),
           )}
         </div>
       )}
@@ -193,6 +200,8 @@ function MediaTile({ scope, asset, editable }: { scope: MediaScope; asset: Media
       {ready ? (
         asset.kind === 'PHOTO' ? (
           <PhotoPreview scope={scope} asset={asset} />
+        ) : asset.kind === 'VIDEO' ? (
+          <VideoPreview scope={scope} asset={asset} />
         ) : (
           <AudioPreview scope={scope} asset={asset} />
         )
@@ -222,7 +231,7 @@ function MediaTile({ scope, asset, editable }: { scope: MediaScope; asset: Media
                 <Trash2 aria-hidden strokeWidth={1.5} className="size-4" />
               </Button>
             }
-            title={asset.kind === 'PHOTO' ? 'Remove this photo?' : 'Remove this audio?'}
+            title={`Remove this ${KIND_LABEL[asset.kind].toLowerCase()}?`}
             description="It will be removed from here. You can add it again later."
             confirmLabel="Remove"
             pending={remove.isPending}
@@ -234,6 +243,8 @@ function MediaTile({ scope, asset, editable }: { scope: MediaScope; asset: Media
     </div>
   );
 }
+
+const KIND_LABEL: Record<MediaKind, string> = { PHOTO: 'Photo', AUDIO: 'Audio', VIDEO: 'Video' };
 
 /** One item's failure stays local to that item, with a way to try again. */
 function MediaError({ onRetry }: { onRetry: () => void }) {
@@ -315,6 +326,47 @@ function AudioPreview({ scope, asset }: { scope: MediaScope; asset: MediaAsset }
           <Spinner /> Loading…
         </span>
       )}
+    </div>
+  );
+}
+
+/**
+ * The original video as uploaded, from a short-lived signed URL requested only
+ * when the person chooses to watch (no autoload of large files, no download
+ * control). An expired link fails and asks for a fresh one.
+ */
+function VideoPreview({ scope, asset }: { scope: MediaScope; asset: MediaAsset }) {
+  const [wanted, setWanted] = useState(false);
+  const access = useAccessUrl(scope, asset.id, wanted);
+  if (!wanted) {
+    return (
+      <div className="flex min-h-24 items-center gap-3 rounded-md bg-primary-soft p-4">
+        <Film aria-hidden strokeWidth={1.5} className="size-5 text-primary" />
+        <Button type="button" size="sm" variant="secondary" className="bg-surface" onClick={() => setWanted(true)}>
+          <Play aria-hidden strokeWidth={1.5} className="size-4" />
+          Watch
+        </Button>
+      </div>
+    );
+  }
+  return access.data ? (
+    <video
+      controls
+      autoPlay
+      playsInline
+      controlsList="nodownload"
+      src={access.data.url}
+      className="aspect-video w-full rounded-md bg-black"
+      aria-label={`Play ${asset.originalFileName}`}
+      onError={() => void access.refetch()}
+    />
+  ) : access.error ? (
+    <MediaError onRetry={() => void access.refetch()} />
+  ) : (
+    <div className="flex min-h-24 items-center rounded-md bg-primary-soft p-4">
+      <span className="inline-flex items-center gap-2 text-sm text-foreground-secondary">
+        <Spinner /> Loading…
+      </span>
     </div>
   );
 }

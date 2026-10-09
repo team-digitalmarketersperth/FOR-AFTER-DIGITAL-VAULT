@@ -2,7 +2,15 @@
 
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ApiError } from '@/lib/api/errors';
-import { memoryVaultApi, type Memory, type MemoryCategory, type MemoryInput } from '@/lib/api/memory-vault';
+import type { Page as AdminPage } from '@/lib/api/admin';
+import {
+  memoryVaultApi,
+  type Memory,
+  type MemoryFilters,
+  type MemoryInput,
+  type MemoryMessageInput,
+  type MemoryTag,
+} from '@/lib/api/memory-vault';
 import {
   messagesApi,
   scheduleApi,
@@ -21,7 +29,14 @@ import {
   type TrustedContact,
   type TrustedContactInput,
 } from '@/lib/api/people';
-import { promptsApi, type Prompt, type PromptArea } from '@/lib/api/prompts';
+import {
+  promptsApi,
+  wishesNoticeApi,
+  type AnswerInput,
+  type Prompt,
+  type PromptArea,
+  type WishesNotice,
+} from '@/lib/api/prompts';
 import { queryKeys } from '@/lib/query/query-client';
 
 // L = the list item, when the list returns summaries rather than full items.
@@ -123,20 +138,35 @@ export const trustedContacts = {
 };
 export const messages = resourceHooks<Message, MessageInput, MessageSummary>(queryKeys.messages, messagesApi);
 
-// Memory Vault lists are filtered by category, so lists live under their own
-// sub-key and every write invalidates the whole root.
+// Memory Vault lists are pages per filter set, under their own sub-key; every
+// write makes all list pages and the tag list (a new tag may exist) stale.
 const memoryHooks = resourceHooks<Memory, MemoryInput>(
   queryKeys.memories,
-  { ...memoryVaultApi, list: (signal) => memoryVaultApi.list(undefined, signal) },
-  [['memory-vault', 'list']],
+  { ...memoryVaultApi, list: (signal) => memoryVaultApi.list({}, signal).then((p) => p.items) },
+  [['memory-vault', 'list'], queryKeys.memoryTags],
 );
 export const memories = {
   ...memoryHooks,
-  useList: (category?: MemoryCategory) =>
-    useQuery<Memory[], ApiError>({
-      queryKey: queryKeys.memoryList(category),
-      queryFn: ({ signal }) => memoryVaultApi.list(category, signal),
+  useList: (filters: MemoryFilters) =>
+    useQuery<AdminPage<Memory>, ApiError>({
+      queryKey: queryKeys.memoryList(filters),
+      queryFn: ({ signal }) => memoryVaultApi.list(filters, signal),
+      // The current page stays on screen while the next one loads.
+      placeholderData: keepPreviousData,
     }),
+  /** Phase 13B: the new draft joins the Messages lists; the memory is unchanged. */
+  useCreateMessage: (id: string) => {
+    const qc = useQueryClient();
+    return useMutation<Message, ApiError, MemoryMessageInput>({
+      mutationFn: (input) => memoryVaultApi.createMessage(id, input),
+      onSuccess: (m) => {
+        qc.setQueryData(queryKeys.message(m.id), m);
+        return qc.invalidateQueries({ queryKey: queryKeys.messages });
+      },
+    });
+  },
+  useTags: () =>
+    useQuery<MemoryTag[], ApiError>({ queryKey: queryKeys.memoryTags, queryFn: ({ signal }) => memoryVaultApi.tags(signal) }),
 };
 
 /**
@@ -196,9 +226,37 @@ export function usePrompt(area: PromptArea, key: string) {
 /** Save (create/update/restore) or delete one answer. */
 export function useAnswerMutation(area: PromptArea, key: string) {
   const qc = useQueryClient();
-  return useMutation<unknown, ApiError, { textContent: string } | null>({
-    mutationFn: (input) =>
-      input ? promptsApi.save(area, key, input.textContent) : promptsApi.remove(area, key),
+  return useMutation<unknown, ApiError, AnswerInput | null>({
+    mutationFn: (input) => (input ? promptsApi.save(area, key, input) : promptsApi.remove(area, key)),
+    // The area root covers the list, this prompt and its files.
     onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.prompts(area) }),
+  });
+}
+
+/** Phase 15A: the My Wishes notice and this Customer's acknowledgement of its current version. */
+export function useWishesNotice() {
+  return useQuery<WishesNotice, ApiError>({
+    queryKey: queryKeys.wishesNotice,
+    queryFn: ({ signal }) => wishesNoticeApi.get(signal),
+  });
+}
+
+export function useAcknowledgeNotice() {
+  const qc = useQueryClient();
+  return useMutation<WishesNotice, ApiError, number>({
+    mutationFn: (version) => wishesNoticeApi.acknowledge(version),
+    onSuccess: (notice) => qc.setQueryData(queryKeys.wishesNotice, notice),
+  });
+}
+
+/** Phase 14B / 15B: a new draft from a My Story answer or a wish; it joins the Messages lists. */
+export function useAnswerMessage(area: PromptArea, key: string) {
+  const qc = useQueryClient();
+  return useMutation<Message, ApiError, MemoryMessageInput>({
+    mutationFn: (input) => promptsApi.createMessage(area, key, input),
+    onSuccess: (m) => {
+      qc.setQueryData(queryKeys.message(m.id), m);
+      return qc.invalidateQueries({ queryKey: queryKeys.messages });
+    },
   });
 }

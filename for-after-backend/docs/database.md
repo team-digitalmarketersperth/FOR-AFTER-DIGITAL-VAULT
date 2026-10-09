@@ -131,7 +131,7 @@ model Message {
   id          String             @id @default(uuid()) @db.Uuid
   ownerUserId String             @db.Uuid   // from the session only, never the request body
   title       String             // 1-200 chars
-  contentType MessageContentType @default(TEXT)  // user's explicit intent: TEXT | PHOTO | AUDIO | MIXED (VIDEO reserved); never inferred
+  contentType MessageContentType @default(TEXT)  // user's explicit intent: TEXT | PHOTO | AUDIO | VIDEO | MIXED; never inferred
   textContent String?            // plain user text, max 20,000 (product-configurable), blank stored as null, never logged
   status      MessageStatus      @default(DRAFT)
   createdAt   DateTime           @default(now())
@@ -272,9 +272,12 @@ model MemoryVaultMediaAsset {
   id                String           @id @default(uuid()) @db.Uuid
   ownerUserId       String           @db.Uuid
   memoryVaultItemId String           @db.Uuid
-  kind              MediaKind        // PHOTO | AUDIO (VIDEO reserved)
+  kind              MediaKind        // PHOTO | AUDIO (VIDEO is message media only)
   status            MediaAssetStatus @default(PENDING_UPLOAD)
-  storageKey        String           @unique   // users/{owner}/memory-vault/{item}/{id}.{ext}; never returned
+  storageKey        String           @unique   // /for-after/users/{owner}/memory-vault/{item}/{kind}/{id}.{ext}; never returned
+  storageProvider   MediaStorageProvider @default(IMAGEKIT) // Phase 12; rows from before are B2
+  providerFileId    String?          // ImageKit fileId once verified; never returned
+  storageDeletedAt  DateTime?        // provider file deleted; unset + deletedAt/FAILED = retried by MediaCleanup
   originalFileName  String
   mimeType          String
   sizeBytes         Int
@@ -291,30 +294,34 @@ model MemoryVaultMediaAsset {
 }
 
 model MediaAsset {
-  // Implemented in Step 7. A PHOTO or AUDIO file attached to a customer's own
-  // message. Bytes live in a PRIVATE S3-compatible bucket (Backblaze B2 in
-  // development) and never pass through the API; see docs/media-storage.md.
+  // Implemented in Step 7. A PHOTO, AUDIO or (Phase 12) VIDEO file attached to
+  // a customer's own message. Bytes live with a private media provider
+  // (ImageKit; legacy rows on B2) and never pass through the API; see
+  // docs/media-storage.md.
   id               String           @id @default(uuid()) @db.Uuid
   ownerUserId      String           @db.Uuid  // from the session only
   messageId        String           @db.Uuid  // route param, after the ownership check
-  kind             MediaKind        // PHOTO | AUDIO (VIDEO reserved)
+  kind             MediaKind        // PHOTO | AUDIO | VIDEO
   status           MediaAssetStatus @default(PENDING_UPLOAD) // -> READY | FAILED, server-controlled
-  storageKey       String           @unique   // users/{owner}/messages/{message}/{id}.{ext}; server-generated, never returned
+  storageKey       String           @unique   // /for-after/users/{owner}/messages/{message}/{kind}/{id}.{ext}; server-generated, never returned
+  storageProvider   MediaStorageProvider @default(IMAGEKIT) // Phase 12; rows from before are B2
+  providerFileId    String?          // ImageKit fileId once verified; never returned
+  storageDeletedAt  DateTime?        // provider file deleted; unset + deletedAt/FAILED = retried by MediaCleanup
   originalFileName String           // metadata only (max 255), never used as a path
   mimeType         String           // allowlisted per kind
-  sizeBytes        Int              // expected size, checked with HEAD before READY
+  sizeBytes        Int              // expected size, checked exactly with the provider before READY
   uploadedAt       DateTime?        // set when verified READY
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
-  deletedAt        DateTime?        // soft delete; object removal is best-effort afterwards
+  deletedAt        DateTime?        // soft delete; file removal is best-effort afterwards, retried
 
   owner            User             @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
   message          Message          @relation(fields: [messageId], references: [id], onDelete: Cascade)
   @@index([ownerUserId])
   @@index([messageId, status])     // also serves messageId lookups
-  // DB CHECK "MediaAsset_kind_size_check": kind IN (PHOTO, AUDIO) AND sizeBytes > 0.
-  // Signed URLs are never stored. Planned: VIDEO via a streaming provider,
-  // duration/checksum/scan status, StorageUsage quotas.
+  // DB CHECK "MediaAsset_kind_size_check": kind IN (PHOTO, AUDIO, VIDEO) AND sizeBytes > 0
+  // (VIDEO added by migration imagekit_media_provider). Signed URLs are never
+  // stored. Planned: duration/checksum/scan status, StorageUsage quotas.
 }
 
 model DeathVerificationCase {
@@ -452,19 +459,47 @@ model MyWishResponse {
   // JSON draft. Personal preferences and guidance only: NOT a will or any legal,
   // medical or financial instruction. Same shape and rules as MyStoryResponse;
   // prompts are application content in src/my-wishes/my-wishes.prompts.ts.
-  // Private: no recipients, Trusted Contact access, schedule, release or media.
+  // Private: no recipients, Trusted Contact access, schedule or release. Phase
+  // 15B: photos/recordings/videos (MyWishMediaAsset); sharing only as a
+  // separate Message snapshot (docs/my-wishes.md).
   id                 String    @id @default(uuid()) @db.Uuid
   ownerUserId        String    @db.Uuid  // from the session only
   promptKey          String    // stable catalogue key, e.g. "ceremony.style"
   promptTextSnapshot String    // copied from the catalogue on save, never returned
   promptVersion      Int       // copied from the catalogue on save
-  textContent        String    // required, not blank, max 20,000; stored as written
+  textContent        String?   // Phase 15B: optional (files-only wish); never empty overall; max 20,000
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
   deletedAt          DateTime? // soft delete; the next PUT restores the same row
 
-  owner User @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  owner       User               @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  mediaAssets MyWishMediaAsset[] // Phase 15B
   @@unique([ownerUserId, promptKey]) // one answer per prompt; also serves owner lookups
+}
+
+model MyWishMediaAsset {
+  // Phase 15B (migration my_wishes_media, additive): PHOTO/AUDIO/VIDEO on a wish.
+  // Same columns, lifecycle and checks as MyStoryMediaAsset (ImageKit, magic
+  // bytes, ClamAV, quota, MediaCleanup); CHECK kind IN (PHOTO, AUDIO, VIDEO)
+  // AND sizeBytes > 0. Owner-only; copied (never shared) into Messages.
+  id               String           @id @default(uuid()) @db.Uuid
+  ownerUserId      String           @db.Uuid
+  myWishResponseId String           @db.Uuid
+  kind             MediaKind
+  status           MediaAssetStatus @default(PENDING_UPLOAD)
+  storageKey       String           @unique
+  storageProvider  MediaStorageProvider @default(IMAGEKIT)
+  providerFileId   String?
+  storageDeletedAt DateTime?
+  originalFileName String
+  mimeType         String
+  sizeBytes        Int
+  uploadedAt       DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  deletedAt        DateTime?
+  @@index([ownerUserId])
+  @@index([myWishResponseId, status])
 }
 
 model Subscription {
@@ -607,7 +642,7 @@ enum UserStatus {
 }
 
 enum MessageContentType {
-  TEXT   // the only value the API accepts in Step 5
+  TEXT
   VIDEO
   AUDIO
   PHOTO
@@ -617,7 +652,12 @@ enum MessageContentType {
 enum MediaKind {
   PHOTO
   AUDIO
-  VIDEO   // reserved: the Step 7 API rejects it
+  VIDEO   // Phase 12: message media only
+}
+
+enum MediaStorageProvider {
+  B2        // uploaded before Phase 12; read/delete only (legacy adapter)
+  IMAGEKIT  // every new upload
 }
 
 enum MediaAssetStatus {

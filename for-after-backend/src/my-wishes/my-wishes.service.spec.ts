@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   type ExecutionContext,
   Logger,
   NotFoundException,
@@ -26,17 +27,29 @@ import {
   MY_WISHES_CATEGORIES,
   MY_WISHES_PROMPTS,
 } from './my-wishes.prompts.js';
-import { MyWishesService, WISH_NOT_FOUND } from './my-wishes.service.js';
+import {
+  DISCLAIMER_NOT_ACKNOWLEDGED,
+  type MyWishesDisclaimerService,
+} from './my-wishes-disclaimer.service.js';
+import type { MediaCleanup } from '../media/media-cleanup.service.js';
+import {
+  EMPTY_WISH,
+  MyWishesService,
+  WISH_NOT_FOUND,
+} from './my-wishes.service.js';
 
 const prompt = getWishPromptByKey('ceremony.style')!;
 const text = 'A fictional wish.';
-const row = {
+const wish = {
   id: 'w1',
   promptKey: 'ceremony.style',
-  textContent: text,
+  textContent: text as string | null,
   createdAt: new Date(),
   updatedAt: new Date(),
 };
+// As selected: READY file count in _count, returned as mediaCount.
+const row = { ...wish, _count: { mediaAssets: 0 } };
+const answer = { ...wish, mediaCount: 0 };
 const unique = { ownerUserId: 'lisa', promptKey: 'ceremony.style' };
 
 const noMatch = () =>
@@ -47,25 +60,39 @@ const noMatch = () =>
 
 // Any Prisma delegate other than myWishResponse (message, messageSchedule,
 // memoryVaultItem, myStoryResponse, ...) throws, so a hidden side effect fails.
+// $transaction runs its callback with the same guarded client.
 const setup = () => {
   const myWishResponse = {
     findMany: vi.fn().mockResolvedValue([]),
     findFirst: vi.fn().mockResolvedValue(row),
     upsert: vi.fn().mockResolvedValue(row),
-    update: vi.fn().mockResolvedValue({ id: 'w1' }),
+    update: vi.fn().mockResolvedValue({ mediaAssets: [] }),
   };
-  const prisma = new Proxy(
+  const prisma: object = new Proxy(
     { myWishResponse },
     {
       get(target, prop) {
         if (prop === 'myWishResponse') return target.myWishResponse;
+        if (prop === '$transaction')
+          return (fn: (tx: object) => unknown) => fn(prisma);
         throw new Error(`My Wishes must not use prisma.${String(prop)}`);
       },
     },
   );
+  const cleanup = { purge: vi.fn().mockResolvedValue({}) };
+  // Phase 15A: acknowledged unless a test says otherwise.
+  const disclaimer = {
+    assertAcknowledged: vi.fn().mockResolvedValue(undefined),
+  };
   return {
     myWishResponse,
-    service: new MyWishesService(prisma as unknown as PrismaService),
+    disclaimer,
+    cleanup,
+    service: new MyWishesService(
+      prisma as unknown as PrismaService,
+      disclaimer as unknown as MyWishesDisclaimerService,
+      cleanup as unknown as MediaCleanup,
+    ),
   };
 };
 
@@ -151,15 +178,16 @@ describe('SaveMyWishResponseDto', () => {
     { textContent: '  Simple and warm.  ' },
     { textContent: 'x'.repeat(TEXT_CONTENT_MAX) },
     { textContent: '<i>not html</i>' },
+    // Phase 15B: omitted = unchanged, null = cleared (media-only wish).
+    {},
+    { textContent: null },
   ])('accepts %#', async (body) => {
     expect(await errorsFor(SaveMyWishResponseDto, body)).toEqual([]);
   });
 
   it.each([
-    ['textContent', {}],
     ['textContent', { textContent: '' }],
     ['textContent', { textContent: ' \n\t ' }],
-    ['textContent', { textContent: null }],
     ['textContent', { textContent: 'x'.repeat(TEXT_CONTENT_MAX + 1) }],
     ['ownerUserId', { textContent: 'x', ownerUserId: 'john' }],
     ['promptVersion', { textContent: 'x', promptVersion: 9 }],
@@ -197,6 +225,35 @@ describe('MyWishesPromptsQueryDto', () => {
   });
 });
 
+describe('MyWishesService: disclaimer gate (Phase 15A)', () => {
+  it('a save checks the current acknowledgement first; without it nothing is written', async () => {
+    const { myWishResponse, disclaimer, service } = setup();
+    await service.save('lisa', prompt, 'A wish.');
+    expect(disclaimer.assertAcknowledged).toHaveBeenCalledWith('lisa');
+    expect(
+      disclaimer.assertAcknowledged.mock.invocationCallOrder[0],
+    ).toBeLessThan(myWishResponse.upsert.mock.invocationCallOrder[0]);
+    disclaimer.assertAcknowledged.mockRejectedValue(
+      new ConflictException(DISCLAIMER_NOT_ACKNOWLEDGED),
+    );
+    await expect(service.save('lisa', prompt, 'A wish.')).rejects.toThrow(
+      DISCLAIMER_NOT_ACKNOWLEDGED,
+    );
+    expect(myWishResponse.upsert).toHaveBeenCalledTimes(1);
+  });
+
+  it('reading and deleting never need an acknowledgement', async () => {
+    const { disclaimer, service } = setup();
+    disclaimer.assertAcknowledged.mockRejectedValue(
+      new Error('not acknowledged'),
+    );
+    await service.listPrompts('lisa');
+    await service.getResponse('lisa', prompt).catch(() => undefined);
+    await service.remove('lisa', prompt);
+    expect(disclaimer.assertAcknowledged).not.toHaveBeenCalled();
+  });
+});
+
 describe('MyWishesService', () => {
   it('lists every prompt with the owner’s live answers only', async () => {
     const { myWishResponse, service } = setup();
@@ -210,7 +267,7 @@ describe('MyWishesService', () => {
     expect(select).not.toHaveProperty('promptTextSnapshot');
     expect(list.find((p) => p.key === 'ceremony.style')).toMatchObject({
       answered: true,
-      response: row,
+      response: answer,
     });
     expect(list.find((p) => p.key === 'ceremony.setting')).toMatchObject({
       answered: false,
@@ -232,7 +289,7 @@ describe('MyWishesService', () => {
 
   it('GET prompt / response: owner + key + live; unanswered → 404', async () => {
     const { myWishResponse, service } = setup();
-    expect(await service.getResponse('lisa', prompt)).toBe(row);
+    expect(await service.getResponse('lisa', prompt)).toEqual(answer);
     expect(myWishResponse.findFirst.mock.calls[0][0].where).toEqual({
       ...unique,
       deletedAt: null,
@@ -253,17 +310,17 @@ describe('MyWishesService', () => {
 
   it('PUT: one owner-scoped upsert with the trusted snapshot; restores deleted', async () => {
     const { myWishResponse, service } = setup();
-    expect(await service.save('lisa', prompt, text)).toBe(row);
+    expect(await service.save('lisa', prompt, text)).toEqual(answer);
     const args = myWishResponse.upsert.mock.calls[0][0];
     expect(args.where).toEqual({ ownerUserId_promptKey: unique });
-    const answer = {
+    const saved = {
       promptTextSnapshot:
         'How would you like your farewell or celebration of life to feel?',
       promptVersion: 1,
       textContent: text,
     };
-    expect(args.create).toEqual({ ...unique, ...answer });
-    expect(args.update).toEqual({ ...answer, deletedAt: null });
+    expect(args.create).toEqual({ ...unique, ...saved });
+    expect(args.update).toEqual({ ...saved, deletedAt: null });
     expect(args.select).not.toHaveProperty('ownerUserId');
   });
 
@@ -278,15 +335,69 @@ describe('MyWishesService', () => {
     expect(john.create.ownerUserId).toBe('john');
   });
 
-  it('DELETE soft-deletes the live answer; none → 404', async () => {
-    const { myWishResponse, service } = setup();
+  it('DELETE soft-deletes the live answer and its files, then purges them; none → 404', async () => {
+    const { myWishResponse, cleanup, service } = setup();
+    const file = { id: 'f1', storageKey: 'k' };
+    myWishResponse.update.mockResolvedValue({ mediaAssets: [file] });
     await service.remove('lisa', prompt);
     const { where, data } = myWishResponse.update.mock.calls[0][0];
     expect(where).toEqual({ ownerUserId_promptKey: unique, deletedAt: null });
-    expect(data).toEqual({ deletedAt: expect.any(Date) });
+    expect(data).toEqual({
+      deletedAt: expect.any(Date),
+      mediaAssets: {
+        updateMany: {
+          where: { deletedAt: null },
+          data: { deletedAt: data.deletedAt },
+        },
+      },
+    });
+    expect(cleanup.purge).toHaveBeenCalledWith('myWishMediaAsset', [file]);
+    cleanup.purge.mockClear();
     myWishResponse.update.mockRejectedValue(noMatch());
     await expect(service.remove('john', prompt)).rejects.toThrow(
       NotFoundException,
+    );
+    expect(cleanup.purge).not.toHaveBeenCalled();
+  });
+
+  it('Phase 15B: a wish with files only is an answer; with nothing it is refused', async () => {
+    const { myWishResponse, service } = setup();
+    const mediaOnly = {
+      ...row,
+      textContent: null,
+      _count: { mediaAssets: 2 },
+    };
+    myWishResponse.upsert.mockResolvedValue(mediaOnly);
+    expect(await service.save('lisa', prompt, null)).toMatchObject({
+      textContent: null,
+      mediaCount: 2,
+    });
+    // Omitted text = unchanged on update.
+    await service.save('lisa', prompt, undefined);
+    expect(myWishResponse.upsert.mock.calls[1][0].update.textContent).toBe(
+      undefined,
+    );
+    myWishResponse.upsert.mockResolvedValue({
+      ...mediaOnly,
+      _count: { mediaAssets: 0 },
+    });
+    await expect(service.save('lisa', prompt, null)).rejects.toThrow(
+      new BadRequestException(EMPTY_WISH),
+    );
+  });
+
+  it('Phase 15B: an upload shell (no text, no READY file) is never shown as an answer', async () => {
+    const { myWishResponse, service } = setup();
+    const shell = { ...row, textContent: null };
+    myWishResponse.findMany.mockResolvedValue([shell]);
+    myWishResponse.findFirst.mockResolvedValue(shell);
+    const list = await service.listPrompts('lisa');
+    expect(list.find((p) => p.key === prompt.key)).toMatchObject({
+      answered: false,
+      response: null,
+    });
+    await expect(service.getResponse('lisa', prompt)).rejects.toThrow(
+      WISH_NOT_FOUND,
     );
   });
 

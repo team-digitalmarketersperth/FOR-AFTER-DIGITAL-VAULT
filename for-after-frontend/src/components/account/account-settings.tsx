@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 import { FormError, PasswordField, TextField } from '@/components/shared/form-field';
+import { StorageUsageSection } from '@/components/account/storage-usage';
 import { PageHeader } from '@/components/shared/page-header';
 import { Spinner } from '@/components/shared/states';
 import { Button } from '@/components/ui/button';
@@ -63,6 +64,8 @@ export function AccountSettings() {
         <ProfileForm user={user} />
         <ProfileSummary user={user} />
       </div>
+
+      <StorageUsageSection />
 
       <section aria-labelledby="security-heading" className="mt-16 border-t border-border pt-12 lg:mt-20 lg:pt-14">
         <div className="mb-8 grid gap-2">

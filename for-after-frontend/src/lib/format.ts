@@ -94,7 +94,12 @@ export function isoToLocalInputs(iso: string) {
   };
 }
 
+const GIB = 1024 ** 3;
 export const formatBytes = (bytes: number) =>
-  bytes < 1024 * 1024
-    ? `${Math.max(1, Math.round(bytes / 1024))} KB`
-    : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  bytes === 0
+    ? '0 KB'
+    : bytes < 1024 * 1024
+      ? `${Math.max(1, Math.round(bytes / 1024))} KB`
+      : bytes < GIB
+        ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
+        : `${(bytes / GIB).toFixed(1)} GB`;

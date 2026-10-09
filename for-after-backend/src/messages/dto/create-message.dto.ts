@@ -40,11 +40,12 @@ export const TextContent = () =>
     MaxLength(TEXT_CONTENT_MAX),
   );
 
-// VIDEO is reserved until a streaming pipeline exists.
+// VIDEO since Phase 12 (ImageKit video pipeline); see message-composition.ts.
 export const SUPPORTED_CONTENT_TYPES = [
   MessageContentType.TEXT,
   MessageContentType.PHOTO,
   MessageContentType.AUDIO,
+  MessageContentType.VIDEO,
   MessageContentType.MIXED,
 ] as const;
 export type SupportedContentType = (typeof SUPPORTED_CONTENT_TYPES)[number];
@@ -52,8 +53,7 @@ export const ContentType = () =>
   applyDecorators(
     IfDefined(),
     IsIn(SUPPORTED_CONTENT_TYPES, {
-      message:
-        'contentType must be TEXT, PHOTO, AUDIO or MIXED (VIDEO is not available yet)',
+      message: 'contentType must be TEXT, PHOTO, AUDIO, VIDEO or MIXED',
     }),
   );
 

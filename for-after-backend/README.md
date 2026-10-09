@@ -35,7 +35,7 @@
 | 4 | Trusted Contacts CRUD | ✅ Done |
 | 5 | Messages (drafts) assigned to Recipients | ✅ Done |
 | 6 | Message scheduling: `FIXED_DATE`, `ON_DEATH`, `AFTER_DEATH` (stored in PostgreSQL) | ✅ Done |
-| 7 | Private PHOTO/AUDIO message media, direct upload to Backblaze B2 | ✅ Done |
+| 7 | Private PHOTO/AUDIO message media, direct upload (Backblaze B2; ImageKit since Phase 12) | ✅ Done |
 | 8 | Message composition: TEXT, PHOTO, AUDIO, MIXED, checked before scheduling | ✅ Done |
 | 9 | Memory Vault: private memories with PHOTO/AUDIO | ✅ Done |
 | 10 | My Story: private text answers to guided life-story prompts | ✅ Done |
@@ -63,7 +63,7 @@
 | Database | PostgreSQL 16 with Prisma 7 (`@prisma/adapter-pg`) |
 | Redis 7 | Customer sessions (`express-session` + `connect-redis`, no JWT), BullMQ release queue (`bullmq` + `ioredis`), Recipient and Trusted Contact OTP challenges, rate limits and sessions |
 | Security | Argon2id password hashing, Helmet, `@nestjs/throttler`, class-validator, HMAC-SHA256 OTPs |
-| Media | Backblaze B2 through the S3-compatible API (presigned URLs) |
+| Media | ImageKit (private files, signed upload tokens and URLs); legacy B2 rows read-only |
 | Quality | Vitest (unit + e2e), oxlint, Prettier |
 | Telemetry | NestJS Observe (optional) |
 

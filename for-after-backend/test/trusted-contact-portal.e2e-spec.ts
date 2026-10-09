@@ -13,6 +13,7 @@ import {
 } from '../src/death-verification/death-verification.service.js';
 import { MediaModule } from '../src/media/media.module.js';
 import { MediaStorage } from '../src/media/storage/media-storage.service.js';
+import { FakeMediaStorage } from './fake-media-storage.js';
 import { MessageSchedulesModule } from '../src/message-schedules/message-schedules.module.js';
 import { MessagesModule } from '../src/messages/messages.module.js';
 import { MemoryVaultModule } from '../src/memory-vault/memory-vault.module.js';
@@ -67,12 +68,7 @@ describe('Trusted Contact auth + death report intake (e2e)', () => {
       sent.push(input);
     }),
   };
-  const storage = {
-    createUploadUrl: vi.fn(async () => 'https://storage.test/put'),
-    createAccessUrl: vi.fn(async () => 'https://storage.test/get'),
-    headObject: vi.fn(async () => ({ sizeBytes: 1, contentType: 'x' })),
-    deleteObject: vi.fn(async () => undefined),
-  };
+  const storage = new FakeMediaStorage();
 
   type Agent = ReturnType<typeof request.agent>;
   let lisa: Agent;

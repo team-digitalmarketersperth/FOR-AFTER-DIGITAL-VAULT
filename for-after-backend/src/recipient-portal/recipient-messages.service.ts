@@ -20,7 +20,7 @@ import { eligibleGrant } from '../recipient-auth/recipient-auth.service.js';
 const visibleMedia = {
   status: MediaAssetStatus.READY,
   deletedAt: null,
-  kind: { in: [MediaKind.PHOTO, MediaKind.AUDIO] },
+  kind: { in: [MediaKind.PHOTO, MediaKind.AUDIO, MediaKind.VIDEO] },
 } satisfies Prisma.MediaAssetWhereInput;
 
 // Released content only. Never ownerUserId, schedule, status, deletedAt,
@@ -133,13 +133,10 @@ export class RecipientMessagesService {
     await this.authorize(email, messageId);
     const asset = await this.prisma.mediaAsset.findFirst({
       where: { id, messageId, ...visibleMedia },
-      select: { storageKey: true },
+      select: { storageKey: true, storageProvider: true, providerFileId: true },
     });
     if (!asset) throw new NotFoundException(MEDIA_NOT_FOUND);
-    const url = await this.storage.createAccessUrl(
-      asset.storageKey,
-      this.accessTtl,
-    );
+    const url = await this.storage.createAccessUrl(asset, this.accessTtl);
     this.logger.log(
       `recipient_media_access_granted message ${messageId} media ${id}`,
     );

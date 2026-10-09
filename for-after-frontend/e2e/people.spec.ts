@@ -1,9 +1,10 @@
-import { expect, test, type Page } from '@playwright/test';
+import type { Page } from '@playwright/test';
+import { expect, test } from './imagekit';
 import { API, newAccount, signIn } from './helpers';
 
 // Phase 09: People I Love pages and a Recipient's private photo, through the
-// real UI, API, PostgreSQL and the private development bucket (browser PUT,
-// HEAD-verified, signed GET). Every API call goes to E2E_EMAIL_API, an API
+// real UI, API, PostgreSQL and the development ImageKit account (browser
+// upload, server-verified, signed GET). Every API call goes to E2E_EMAIL_API, an API
 // with EMAIL_PROVIDER=console, so registering never sends a real email.
 const EMAIL_API = process.env.E2E_EMAIL_API;
 
@@ -62,7 +63,7 @@ test('photo: upload to private storage, shown from a signed URL, replaced, remov
   const choose = (name: string, mimeType: string, buffer: Buffer) =>
     page.locator('input[type=file]').setInputFiles({ name, mimeType, buffer });
   await choose('mum.png', 'image/png', PNG);
-  const photo = page.locator('img[src*="X-Amz-Signature"]').first();
+  const photo = page.locator('img[src*="ik-s="]').first();
   await expect(photo).toBeVisible();
   await expect.poll(() => photo.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(1);
   const first = await photo.getAttribute('src');
@@ -74,12 +75,12 @@ test('photo: upload to private storage, shown from a signed URL, replaced, remov
 
   // The list shows the same private photo.
   await page.goto('/people');
-  await expect(page.locator('img[src*="X-Amz-Signature"]').first()).toBeVisible();
+  await expect(page.locator('img[src*="ik-s="]').first()).toBeVisible();
 
   await page.getByText('Mum Tester').click();
   await page.getByRole('button', { name: 'Remove photo' }).click();
   await expect(page.getByRole('button', { name: 'Add a photo' })).toBeVisible();
-  await expect(page.locator('img[src*="X-Amz-Signature"]')).toHaveCount(0);
+  await expect(page.locator('img[src*="ik-s="]')).toHaveCount(0);
   await expect(page.getByText('MT', { exact: true })).toBeVisible();
 });
 

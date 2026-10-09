@@ -144,7 +144,6 @@ function MessageForm({
 }) {
   // Set by whichever button was activated (Enter in a field activates the first: Save).
   const intent = useRef<Intent>('save');
-  const people = recipients.useList();
   const form = useForm<MessageValues>({
     resolver: zodResolver(messageSchema),
     defaultValues: {
@@ -196,47 +195,7 @@ function MessageForm({
       <FormError error={error} />
       <fieldset disabled={pending} className="grid gap-10">
         <Section title="Who is it for?">
-          {people.isPending ? (
-            <ListSkeleton rows={2} label="Loading the people you love" />
-          ) : people.data?.length ? (
-            <div role="group" aria-label="Recipients" aria-describedby={errors.recipientIds ? 'recipients-error' : undefined} className="grid gap-3 sm:grid-cols-2">
-              {people.data.map((p) => (
-                <label
-                  key={p.id}
-                  className="flex cursor-pointer items-center gap-3 rounded-lg border border-border bg-surface p-4 transition-colors hover:border-border-strong has-[:checked]:border-primary has-[:checked]:bg-primary-soft has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-ring"
-                >
-                  <input
-                    type="checkbox"
-                    className="size-4 accent-primary"
-                    checked={selected.includes(p.id)}
-                    onChange={() => toggle(p.id)}
-                  />
-                  <PersonAvatar person={p} />
-                  <span className="grid">
-                    <span className="font-medium">{fullName(p)}</span>
-                    {p.relationship && <span className="text-sm text-foreground-muted">{p.relationship}</span>}
-                  </span>
-                </label>
-              ))}
-            </div>
-          ) : (
-            <div className="flex flex-col items-start gap-3 rounded-lg border border-dashed border-border-strong bg-surface p-6">
-              <p className="text-foreground-secondary">
-                Messages are written for someone. Add a person to People I Love first.
-              </p>
-              <Button asChild variant="outline" size="sm">
-                <Link href="/people/new">
-                  <UserPlus aria-hidden strokeWidth={1.5} />
-                  Add someone you love
-                </Link>
-              </Button>
-            </div>
-          )}
-          {errors.recipientIds && (
-            <p id="recipients-error" className="text-sm text-danger">
-              {errors.recipientIds.message}
-            </p>
-          )}
+          <RecipientChecklist selected={selected} onToggle={toggle} error={errors.recipientIds?.message} />
         </Section>
 
         <Section title="What kind of message?">
@@ -275,7 +234,8 @@ function MessageForm({
             />
           ) : (
             <p className="text-sm text-foreground-muted">
-              You&apos;ll add {contentType === 'PHOTO' ? 'photos' : 'your recording'} after saving the draft.
+              You&apos;ll add {contentType === 'PHOTO' ? 'photos' : contentType === 'VIDEO' ? 'your video' : 'your recording'}{' '}
+              after saving the draft.
             </p>
           )}
         </Section>
@@ -318,11 +278,72 @@ function MessageForm({
   );
 }
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
+export function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="grid gap-5 rounded-xl border border-border bg-surface p-6 sm:p-8">
       <h2 className="text-2xl">{title}</h2>
       {children}
     </section>
+  );
+}
+
+/**
+ * The People I Love checklist used wherever a Message is written (new/edit
+ * message, a message from a memory). Messages always have at least one person.
+ */
+export function RecipientChecklist({
+  selected,
+  onToggle,
+  error,
+}: {
+  selected: string[];
+  onToggle: (id: string) => void;
+  error?: string;
+}) {
+  const people = recipients.useList();
+  return (
+    <>
+    {people.isPending ? (
+      <ListSkeleton rows={2} label="Loading the people you love" />
+    ) : people.data?.length ? (
+      <div role="group" aria-label="Recipients" aria-describedby={error ? 'recipients-error' : undefined} className="grid gap-3 sm:grid-cols-2">
+        {people.data.map((p) => (
+          <label
+            key={p.id}
+            className="flex cursor-pointer items-center gap-3 rounded-lg border border-border bg-surface p-4 transition-colors hover:border-border-strong has-[:checked]:border-primary has-[:checked]:bg-primary-soft has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-ring"
+          >
+            <input
+              type="checkbox"
+              className="size-4 accent-primary"
+              checked={selected.includes(p.id)}
+              onChange={() => onToggle(p.id)}
+            />
+            <PersonAvatar person={p} />
+            <span className="grid">
+              <span className="font-medium">{fullName(p)}</span>
+              {p.relationship && <span className="text-sm text-foreground-muted">{p.relationship}</span>}
+            </span>
+          </label>
+        ))}
+      </div>
+    ) : (
+      <div className="flex flex-col items-start gap-3 rounded-lg border border-dashed border-border-strong bg-surface p-6">
+        <p className="text-foreground-secondary">
+          Messages are written for someone. Add a person to People I Love first.
+        </p>
+        <Button asChild variant="outline" size="sm">
+          <Link href="/people/new">
+            <UserPlus aria-hidden strokeWidth={1.5} />
+            Add someone you love
+          </Link>
+        </Button>
+      </div>
+    )}
+    {error && (
+      <p id="recipients-error" className="text-sm text-danger">
+        {error}
+      </p>
+    )}
+    </>
   );
 }

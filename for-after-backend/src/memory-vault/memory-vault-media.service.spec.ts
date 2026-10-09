@@ -1,3 +1,4 @@
+import type { StorageQuota } from '../media/storage-quota.service.js';
 import {
   BadRequestException,
   ConflictException,
@@ -8,10 +9,19 @@ import { Prisma } from '../generated/prisma/client.js';
 import {
   NOT_READY,
   NOT_UPLOADED,
+  SCAN_UNAVAILABLE,
   UPLOAD_FAILED,
   UPLOAD_MISMATCH,
+  UPLOAD_REJECTED,
 } from '../media/media.service.js';
+import {
+  FAKE_MALWARE,
+  FakeMalwareScanner,
+} from '../../test/fake-malware-scanner.js';
+import type { MalwareScanner } from '../media/scanner/malware-scanner.service.js';
 import type { MediaStorage } from '../media/storage/media-storage.service.js';
+import { fileStart } from '../../test/fake-media-storage.js';
+import type { MediaCleanup } from '../media/media-cleanup.service.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
 import { MemoryVaultMediaService } from './memory-vault-media.service.js';
 import { MEMORY_NOT_FOUND } from './memory-vault.service.js';
@@ -32,7 +42,14 @@ const safe = {
   createdAt: new Date(),
   updatedAt: new Date(),
 };
-const storageKey = 'users/owner-a/memory-vault/v1/a1.jpg';
+const storageKey = '/for-after/users/owner-a/memory-vault/v1/photo/a1.jpg';
+const ref = {
+  id: 'a1',
+  storageKey,
+  storageProvider: 'IMAGEKIT',
+  providerFileId: 'file1',
+  createdAt: new Date(),
+};
 const pendingRow = { ...safe, storageKey };
 
 const ownedItem = { id: 'v1', ownerUserId: 'owner-a', deletedAt: null };
@@ -53,8 +70,6 @@ const noMatch = () =>
 const env: Record<string, string> = {
   MEDIA_UPLOAD_URL_TTL_SECONDS: '600',
   MEDIA_ACCESS_URL_TTL_SECONDS: '300',
-  MEDIA_PHOTO_MAX_BYTES: String(20 * MB),
-  MEDIA_AUDIO_MAX_BYTES: String(100 * MB),
 };
 
 const setup = () => {
@@ -65,23 +80,51 @@ const setup = () => {
     findMany: vi.fn().mockResolvedValue([safe]),
     update: vi.fn().mockResolvedValue({ ...safe, status: 'READY' }),
   };
+  const upload = { url: 'https://upload.test/files', fields: { token: 't' } };
   const storage = {
-    createUploadUrl: vi.fn().mockResolvedValue('https://signed.example/put'),
-    createAccessUrl: vi.fn().mockResolvedValue('https://signed.example/get'),
-    headObject: vi
-      .fn()
-      .mockResolvedValue({ sizeBytes: 100_000, contentType: 'image/jpeg' }),
+    createUpload: vi.fn().mockResolvedValue(upload),
+    verifyUpload: vi.fn().mockResolvedValue({
+      sizeBytes: 100_000,
+      contentType: 'image/jpeg',
+      isPrivate: true,
+      providerFileId: 'file1',
+    }),
+    readStart: vi.fn().mockResolvedValue(fileStart('image/jpeg')),
+    // The whole file, streamed to the scanner.
+    openRead: vi.fn(
+      async (
+        _ref: unknown,
+        _signal: AbortSignal,
+      ): Promise<AsyncIterable<Uint8Array>> =>
+        (async function* () {
+          yield fileStart('image/jpeg');
+        })(),
+    ),
+    createAccessUrl: vi.fn().mockResolvedValue('https://media.test/signed'),
     deleteObject: vi.fn().mockResolvedValue(undefined),
   };
+  // Phase 12C: within quota unless a test says otherwise.
+  const quota = { reserve: vi.fn().mockResolvedValue(undefined) };
+  const cleanup = {
+    purge: vi.fn().mockResolvedValue({ purged: 1, failed: 0 }),
+  };
+  const scanner = new FakeMalwareScanner();
   const tx = { memoryVaultItem, memoryVaultMediaAsset };
   const $transaction = vi.fn((fn: (t: typeof tx) => unknown) => fn(tx));
   return {
     memoryVaultItem,
     asset: memoryVaultMediaAsset,
     storage,
+    scanner,
+    cleanup,
+    quota,
+    upload,
     service: new MemoryVaultMediaService(
       { ...tx, $transaction } as unknown as PrismaService,
       storage as unknown as MediaStorage,
+      scanner as unknown as MalwareScanner,
+      cleanup as unknown as MediaCleanup,
+      quota as unknown as StorageQuota,
       { get: (key: string) => env[key] } as ConfigService,
     ),
   };
@@ -102,12 +145,12 @@ const audio = {
 
 describe('MemoryVaultMediaService.createUploadUrl', () => {
   it.each([
-    [photo, 'jpg'],
-    [audio, 'mp3'],
+    [photo, 'photo', 'jpg'],
+    [audio, 'audio', 'mp3'],
   ])(
-    '%o: server-generated key, PENDING row, safe response',
-    async (dto, ext) => {
-      const { memoryVaultItem, asset, storage, service } = setup();
+    '%o: server-generated ImageKit path, PENDING row, safe response',
+    async (dto, folder, ext) => {
+      const { memoryVaultItem, asset, storage, upload, service } = setup();
       const res = await service.createUploadUrl('owner-a', 'v1', {
         ...dto,
         originalFileName: '../../evil.exe',
@@ -118,21 +161,20 @@ describe('MemoryVaultMediaService.createUploadUrl', () => {
       expect(data.ownerUserId).toBe('owner-a');
       expect(data.memoryVaultItemId).toBe('v1');
       expect(data.storageKey).toBe(
-        `users/owner-a/memory-vault/v1/${data.id}.${ext}`,
+        `/for-after/users/owner-a/memory-vault/v1/${folder}/${data.id}.${ext}`,
       );
       expect(data).not.toHaveProperty('status');
-      expect(storage.createUploadUrl).toHaveBeenCalledWith(
+      expect(storage.createUpload).toHaveBeenCalledWith(
         data.storageKey,
         dto.mimeType,
+        dto.sizeBytes,
         600,
       );
       expect(res).toEqual({
         mediaAssetId: data.id,
-        uploadUrl: 'https://signed.example/put',
+        upload,
         expiresAt: expect.any(Date),
-        requiredHeaders: { 'Content-Type': dto.mimeType },
       });
-      expect(JSON.stringify(res)).not.toMatch(/storageKey|owner|users\//);
     },
   );
 
@@ -140,14 +182,24 @@ describe('MemoryVaultMediaService.createUploadUrl', () => {
     ['PHOTO + audio MIME', { ...photo, mimeType: 'audio/mpeg' }],
     ['AUDIO + image MIME', { ...audio, mimeType: 'image/jpeg' }],
     ['PHOTO over the limit', { ...photo, sizeBytes: 20 * MB + 1 }],
-    ['AUDIO over the limit', { ...audio, sizeBytes: 100 * MB + 1 }],
+    ['AUDIO over the limit', { ...audio, sizeBytes: 25 * MB + 1 }],
+    // Video is for messages only.
+    [
+      'VIDEO',
+      {
+        kind: 'VIDEO' as const,
+        originalFileName: 'v.mp4',
+        mimeType: 'video/mp4',
+        sizeBytes: MB,
+      },
+    ],
   ])('%s → 400 before any database or storage call', async (_, dto) => {
     const { memoryVaultItem, storage, service } = setup();
     await expect(service.createUploadUrl('owner-a', 'v1', dto)).rejects.toThrow(
       BadRequestException,
     );
     expect(memoryVaultItem.count).not.toHaveBeenCalled();
-    expect(storage.createUploadUrl).not.toHaveBeenCalled();
+    expect(storage.createUpload).not.toHaveBeenCalled();
   });
 
   it('cross-user or deleted memory → 404, nothing created or signed', async () => {
@@ -160,28 +212,33 @@ describe('MemoryVaultMediaService.createUploadUrl', () => {
       'owner-b',
     );
     expect(asset.create).not.toHaveBeenCalled();
-    expect(storage.createUploadUrl).not.toHaveBeenCalled();
+    expect(storage.createUpload).not.toHaveBeenCalled();
   });
 });
 
 describe('MemoryVaultMediaService.complete', () => {
-  it('HEADs storage, then marks READY with uploadedAt (owner-scoped, live parent)', async () => {
+  it('verifies with the provider, then marks READY with uploadedAt (owner-scoped, live parent)', async () => {
     const { asset, storage, service } = setup();
-    const res = await service.complete('owner-a', 'v1', 'a1');
+    const res = await service.complete('owner-a', 'v1', 'a1', 'file1');
     expect(asset.findFirst.mock.calls[0][0].where).toEqual(ownedAsset);
-    expect(storage.headObject).toHaveBeenCalledWith(storageKey);
+    expect(storage.verifyUpload).toHaveBeenCalledWith(storageKey, 'file1');
+    expect(storage.readStart).toHaveBeenCalledTimes(1);
     const { where, data } = asset.update.mock.calls[0][0];
     expect(where).toEqual({ ...ownedAsset, status: 'PENDING_UPLOAD' });
-    expect(data).toEqual({ status: 'READY', uploadedAt: expect.any(Date) });
+    expect(data).toEqual({
+      status: 'READY',
+      uploadedAt: expect.any(Date),
+      providerFileId: 'file1',
+    });
     expect(res.status).toBe('READY');
   });
 
-  it('missing object → 409, stays PENDING_UPLOAD', async () => {
+  it('no file at this path → 409, stays PENDING_UPLOAD', async () => {
     const { asset, storage, service } = setup();
-    storage.headObject.mockResolvedValue(null);
-    await expect(service.complete('owner-a', 'v1', 'a1')).rejects.toThrow(
-      NOT_UPLOADED,
-    );
+    storage.verifyUpload.mockResolvedValue(null);
+    await expect(
+      service.complete('owner-a', 'v1', 'a1', 'file1'),
+    ).rejects.toThrow(NOT_UPLOADED);
     expect(asset.update).not.toHaveBeenCalled();
   });
 
@@ -189,55 +246,113 @@ describe('MemoryVaultMediaService.complete', () => {
     ['size', { sizeBytes: 99_999, contentType: 'image/jpeg' }],
     ['MIME', { sizeBytes: 100_000, contentType: 'image/png' }],
   ])(
-    '%s mismatch → 400, FAILED (never READY), object removed',
+    '%s mismatch → 400, FAILED (never READY), file purged',
     async (_, head) => {
-      const { asset, storage, service } = setup();
-      storage.headObject.mockResolvedValue(head);
-      await expect(service.complete('owner-a', 'v1', 'a1')).rejects.toThrow(
-        UPLOAD_MISMATCH,
-      );
+      const { asset, storage, cleanup, service } = setup();
+      storage.verifyUpload.mockResolvedValue({
+        ...head,
+        providerFileId: 'file1',
+      });
+      asset.update.mockResolvedValue(ref);
+      await expect(
+        service.complete('owner-a', 'v1', 'a1', 'file1'),
+      ).rejects.toThrow(UPLOAD_MISMATCH);
       expect(asset.update).toHaveBeenCalledTimes(1);
-      expect(asset.update.mock.calls[0][0].data).toEqual({ status: 'FAILED' });
-      expect(storage.deleteObject).toHaveBeenCalledWith(storageKey);
+      expect(asset.update.mock.calls[0][0].data).toEqual({
+        status: 'FAILED',
+        providerFileId: 'file1',
+      });
+      expect(cleanup.purge).toHaveBeenCalledWith('memoryVaultMediaAsset', [
+        ref,
+      ]);
     },
   );
 
-  it('READY again is idempotent: no HEAD, no write, no storageKey', async () => {
+  // Phase 12B: Memory Vault media is malware-scanned like message media.
+  it.each([
+    ['PHOTO', 'image/jpeg'],
+    ['AUDIO', 'audio/mpeg'],
+  ])('clean %s is scanned, then READY', async (kind, mimeType) => {
+    const { asset, storage, scanner, service } = setup();
+    asset.findFirst.mockResolvedValue({ ...pendingRow, kind, mimeType });
+    storage.verifyUpload.mockResolvedValue({
+      sizeBytes: 100_000,
+      contentType: mimeType,
+      isPrivate: true,
+      providerFileId: 'file1',
+    });
+    storage.readStart.mockResolvedValue(fileStart(mimeType));
+    await service.complete('owner-a', 'v1', 'a1', 'file1');
+    expect(scanner.scan).toHaveBeenCalledTimes(1);
+    expect(asset.update.mock.calls[0][0].data.status).toBe('READY');
+  });
+
+  it('infected → 400 generic, FAILED (never READY), file purged', async () => {
+    const { asset, storage, cleanup, service } = setup();
+    storage.openRead.mockImplementation(async () =>
+      (async function* () {
+        yield new Uint8Array([
+          ...fileStart('image/jpeg'),
+          ...Buffer.from(FAKE_MALWARE),
+        ]);
+      })(),
+    );
+    asset.update.mockResolvedValue(ref);
+    await expect(
+      service.complete('owner-a', 'v1', 'a1', 'file1'),
+    ).rejects.toThrow(UPLOAD_REJECTED);
+    expect(asset.update).toHaveBeenCalledTimes(1);
+    expect(asset.update.mock.calls[0][0].data.status).toBe('FAILED');
+    expect(cleanup.purge).toHaveBeenCalledWith('memoryVaultMediaAsset', [ref]);
+  });
+
+  it('scanner outage → 503, stays PENDING_UPLOAD (fail closed)', async () => {
+    const { asset, scanner, service } = setup();
+    scanner.scan.mockRejectedValue(new Error('ECONNREFUSED'));
+    await expect(
+      service.complete('owner-a', 'v1', 'a1', 'file1'),
+    ).rejects.toThrow(SCAN_UNAVAILABLE);
+    expect(asset.update).not.toHaveBeenCalled();
+  });
+
+  it('READY again is idempotent: no provider call, no write, no storageKey', async () => {
     const { asset, storage, service } = setup();
     asset.findFirst.mockResolvedValue({ ...pendingRow, status: 'READY' });
-    const res = await service.complete('owner-a', 'v1', 'a1');
+    const res = await service.complete('owner-a', 'v1', 'a1', 'file1');
     expect(res).not.toHaveProperty('storageKey');
     expect(res.status).toBe('READY');
-    expect(storage.headObject).not.toHaveBeenCalled();
+    expect(storage.verifyUpload).not.toHaveBeenCalled();
     expect(asset.update).not.toHaveBeenCalled();
   });
 
   it('FAILED → 409 (request a new upload URL)', async () => {
     const { asset, service } = setup();
     asset.findFirst.mockResolvedValue({ ...pendingRow, status: 'FAILED' });
-    await expect(service.complete('owner-a', 'v1', 'a1')).rejects.toThrow(
-      UPLOAD_FAILED,
-    );
+    await expect(
+      service.complete('owner-a', 'v1', 'a1', 'file1'),
+    ).rejects.toThrow(UPLOAD_FAILED);
   });
 
   it('cross-user, deleted media or deleted parent memory → 404', async () => {
     const { asset, storage, service } = setup();
     asset.findFirst.mockResolvedValue(null);
-    await expect(service.complete('owner-b', 'v1', 'a1')).rejects.toThrow(
-      NotFoundException,
-    );
-    expect(storage.headObject).not.toHaveBeenCalled();
+    await expect(
+      service.complete('owner-b', 'v1', 'a1', 'file1'),
+    ).rejects.toThrow(NotFoundException);
+    expect(storage.verifyUpload).not.toHaveBeenCalled();
   });
 
-  it('deleted or completed between HEAD and update → 409, database errors pass through', async () => {
+  it('deleted or completed between verification and update → 409, database errors pass through', async () => {
     const { asset, service } = setup();
     asset.update.mockRejectedValueOnce(noMatch());
-    await expect(service.complete('owner-a', 'v1', 'a1')).rejects.toThrow(
-      NOT_READY,
-    );
+    await expect(
+      service.complete('owner-a', 'v1', 'a1', 'file1'),
+    ).rejects.toThrow(NOT_READY);
     const boom = new Error('connection lost');
     asset.update.mockRejectedValueOnce(boom);
-    await expect(service.complete('owner-a', 'v1', 'a1')).rejects.toBe(boom);
+    await expect(service.complete('owner-a', 'v1', 'a1', 'file1')).rejects.toBe(
+      boom,
+    );
   });
 });
 
@@ -263,12 +378,15 @@ describe('MemoryVaultMediaService.findAllForItem', () => {
 describe('MemoryVaultMediaService.createAccessUrl', () => {
   it('READY → short-lived signed GET', async () => {
     const { asset, storage, service } = setup();
-    asset.findFirst.mockResolvedValue({ status: 'READY', storageKey });
+    asset.findFirst.mockResolvedValue({ status: 'READY', ...ref });
     const res = await service.createAccessUrl('owner-a', 'v1', 'a1');
     expect(asset.findFirst.mock.calls[0][0].where).toEqual(ownedAsset);
-    expect(storage.createAccessUrl).toHaveBeenCalledWith(storageKey, 300);
+    expect(storage.createAccessUrl).toHaveBeenCalledWith(
+      { status: 'READY', ...ref },
+      300,
+    );
     expect(res).toEqual({
-      url: 'https://signed.example/get',
+      url: 'https://media.test/signed',
       expiresAt: expect.any(Date),
     });
   });
@@ -277,7 +395,7 @@ describe('MemoryVaultMediaService.createAccessUrl', () => {
     '%s → 409, nothing signed',
     async (status) => {
       const { asset, storage, service } = setup();
-      asset.findFirst.mockResolvedValue({ status, storageKey });
+      asset.findFirst.mockResolvedValue({ status, ...ref });
       await expect(
         service.createAccessUrl('owner-a', 'v1', 'a1'),
       ).rejects.toThrow(ConflictException);
@@ -296,32 +414,22 @@ describe('MemoryVaultMediaService.createAccessUrl', () => {
 });
 
 describe('MemoryVaultMediaService.remove', () => {
-  it('soft-deletes (owner-scoped), then deletes the object', async () => {
-    const { asset, storage, service } = setup();
-    asset.update.mockResolvedValue({ storageKey });
+  it('soft-deletes (owner-scoped), then purges the file', async () => {
+    const { asset, cleanup, service } = setup();
+    asset.update.mockResolvedValue(ref);
     await service.remove('owner-a', 'v1', 'a1');
     const { where, data } = asset.update.mock.calls[0][0];
     expect(where).toEqual(ownedAsset);
     expect(data).toEqual({ deletedAt: expect.any(Date) });
-    expect(storage.deleteObject).toHaveBeenCalledWith(storageKey);
+    expect(cleanup.purge).toHaveBeenCalledWith('memoryVaultMediaAsset', [ref]);
   });
 
-  it('storage failure still succeeds and never restores access', async () => {
-    const { asset, storage, service } = setup();
-    asset.update.mockResolvedValue({ storageKey });
-    storage.deleteObject.mockRejectedValue(new Error('storage down'));
-    await expect(
-      service.remove('owner-a', 'v1', 'a1'),
-    ).resolves.toBeUndefined();
-    expect(asset.update).toHaveBeenCalledTimes(1);
-  });
-
-  it('cross-user → 404, nothing deleted from storage', async () => {
-    const { asset, storage, service } = setup();
+  it('cross-user → 404, nothing purged', async () => {
+    const { asset, cleanup, service } = setup();
     asset.update.mockRejectedValue(noMatch());
     await expect(service.remove('owner-b', 'v1', 'a1')).rejects.toThrow(
       NotFoundException,
     );
-    expect(storage.deleteObject).not.toHaveBeenCalled();
+    expect(cleanup.purge).not.toHaveBeenCalled();
   });
 });

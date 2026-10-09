@@ -14,7 +14,10 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { CustomerGuard } from '../auth/guards/customer.guard.js';
 import { SessionAuthGuard } from '../auth/guards/session-auth.guard.js';
 import type { SafeUser } from '../users/users.service.js';
-import { CreateMediaUploadDto } from './dto/create-media-upload.dto.js';
+import {
+  CompleteMediaUploadDto,
+  CreateMediaUploadDto,
+} from './dto/create-media-upload.dto.js';
 import {
   type AccessUrlResponse,
   type MediaResponse,
@@ -23,8 +26,9 @@ import {
 } from './media.service.js';
 import { AUTH } from '../config/swagger.js';
 
-// Owner-only. File bytes never pass through here: clients PUT/GET the bucket
-// directly with the short-lived signed URLs returned below.
+// Owner-only. File bytes never pass through here: browsers upload straight to
+// the provider with the signed upload returned below and view files through
+// short-lived signed URLs.
 @ApiTags('Media')
 @ApiCookieAuth(AUTH.customer)
 @Controller('messages/:messageId/media')
@@ -47,8 +51,9 @@ export class MediaController {
     @CurrentUser() user: SafeUser,
     @Param('messageId', ParseUUIDPipe) messageId: string,
     @Param('mediaAssetId', ParseUUIDPipe) id: string,
+    @Body() dto: CompleteMediaUploadDto,
   ): Promise<MediaResponse> {
-    return this.media.complete(user.id, messageId, id);
+    return this.media.complete(user.id, messageId, id, dto.providerFileId);
   }
 
   @Get()

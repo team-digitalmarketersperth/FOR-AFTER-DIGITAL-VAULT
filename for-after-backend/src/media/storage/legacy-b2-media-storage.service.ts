@@ -1,19 +1,12 @@
 import {
   DeleteObjectCommand,
   GetObjectCommand,
-  HeadObjectCommand,
-  PutObjectCommand,
   S3Client,
   S3ServiceException,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import {
-  Injectable,
-  Logger,
-  ServiceUnavailableException,
-} from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { MediaStorage, type StoredObject } from './media-storage.service.js';
+import { Logger, ServiceUnavailableException } from '@nestjs/common';
+import type { ConfigService } from '@nestjs/config';
 
 const REQUIRED = [
   'OBJECT_STORAGE_REGION',
@@ -31,19 +24,23 @@ const errorInfo = (err: unknown) =>
       ? err.name
       : 'UNKNOWN';
 
+/** Whether the old bucket's settings are present (legacy reads are possible). */
+export const legacyB2Configured = (config: ConfigService) =>
+  REQUIRED.every((key) => config.get<string>(key)?.trim());
+
 /**
- * Any S3-compatible bucket (Backblaze B2 in development; AWS S3, R2 or MinIO
- * by configuration only). The one place an S3Client is built. Missing config
- * stops the app at startup: there is no fallback storage.
+ * LEGACY, read and delete only: media uploaded to the Backblaze B2 bucket
+ * before Phase 12 moved every new upload to ImageKit. Rows with
+ * storageProvider B2 stay viewable (short-lived presigned GET) and deletable by
+ * their owner; nothing is ever uploaded here and nothing is deleted
+ * automatically. Remove once no live B2 row remains (docs/media-storage.md).
  */
-@Injectable()
-export class S3MediaStorage extends MediaStorage {
-  private readonly logger = new Logger(S3MediaStorage.name);
+export class LegacyB2MediaStorage {
+  private readonly logger = new Logger(LegacyB2MediaStorage.name);
   private readonly client: S3Client;
   private readonly bucket: string;
 
   constructor(config: ConfigService) {
-    super();
     const missing = REQUIRED.filter((key) => !config.get<string>(key)?.trim());
     if (missing.length) {
       throw new Error(
@@ -68,25 +65,9 @@ export class S3MediaStorage extends MediaStorage {
       },
       forcePathStyle:
         config.get<string>('OBJECT_STORAGE_FORCE_PATH_STYLE') === 'true',
-      // Newer SDKs add CRC checksums to uploads by default, which a presigned
-      // PUT from Postman/browsers cannot supply; only use them when required.
       requestChecksumCalculation: 'WHEN_REQUIRED',
       responseChecksumValidation: 'WHEN_REQUIRED',
     });
-  }
-
-  // Content-Type is part of the signature, so the upload must send exactly it.
-  createUploadUrl(key: string, contentType: string, ttlSeconds: number) {
-    return getSignedUrl(
-      this.client,
-      new PutObjectCommand({
-        Bucket: this.bucket,
-        Key: key,
-        ContentType: contentType,
-      }),
-      // The presigner signs only host unless told otherwise.
-      { expiresIn: ttlSeconds, signableHeaders: new Set(['content-type']) },
-    );
   }
 
   createAccessUrl(key: string, ttlSeconds: number) {
@@ -97,32 +78,19 @@ export class S3MediaStorage extends MediaStorage {
     );
   }
 
-  async headObject(key: string): Promise<StoredObject | null> {
-    try {
-      const head = await this.client.send(
-        new HeadObjectCommand({ Bucket: this.bucket, Key: key }),
-      );
-      return {
-        sizeBytes: head.ContentLength ?? 0,
-        contentType: head.ContentType,
-      };
-    } catch (err) {
-      if (
-        err instanceof S3ServiceException &&
-        err.$metadata.httpStatusCode === 404
-      ) {
-        return null;
-      }
-      throw this.unavailable('head', err);
-    }
-  }
-
   async deleteObject(key: string): Promise<void> {
     try {
       await this.client.send(
         new DeleteObjectCommand({ Bucket: this.bucket, Key: key }),
       );
     } catch (err) {
+      // Already gone counts as deleted.
+      if (
+        err instanceof S3ServiceException &&
+        err.$metadata.httpStatusCode === 404
+      ) {
+        return;
+      }
       throw this.unavailable('delete', err);
     }
   }

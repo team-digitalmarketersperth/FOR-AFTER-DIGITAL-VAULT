@@ -20,11 +20,13 @@
     "test:cov": "vitest run --coverage",
     "test:debug": "vitest --inspect-brk --no-file-parallelism",
     "test:e2e": "vitest run --config ./vitest.config.e2e.ts",
-    "backfill:access-grants": "node dist/message-release/backfill-access-grants.js"
+    "backfill:access-grants": "node dist/message-release/backfill-access-grants.js",
+    "migrate:b2-to-imagekit": "node dist/media/migrate-b2-to-imagekit.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1140.0",
     "@aws-sdk/s3-request-presigner": "^3.1140.0",
+    "@imagekit/nodejs": "^7.12.1",
     "@nestjs/common": "^12.0.1",
     "@nestjs/config": "^12.0.1",
     "@nestjs/core": "^12.0.1",

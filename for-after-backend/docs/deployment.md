@@ -32,8 +32,7 @@
 | NestJS backend | Docker container on AWS ECS / App Runner |
 | PostgreSQL | Managed (AWS RDS or Supabase), Sydney region |
 | Redis | Managed (AWS ElastiCache or Upstash): sessions, OTP challenges, rate limits, BullMQ |
-| Object storage | Private S3-compatible buckets in `ap-southeast-2` (Backblaze B2 in development) |
-| Video | Mux (external SaaS, planned) |
+| Media (photo, audio, video) | ImageKit, private files and signed URLs (Phase 12). Legacy B2 bucket read-only for old rows |
 
 ---
 
@@ -87,7 +86,9 @@ flowchart LR
 | `DATABASE_URL`, `REDIS_URL` | Steps 1–2 | managed PostgreSQL / Redis (TLS: `rediss://`) |
 | `RECIPIENT_OTP_PEPPER` | Step 13 | 32+ characters |
 | `TRUSTED_CONTACT_OTP_PEPPER` | Step 14 | 32+ characters, **different** from the Recipient pepper |
-| `OBJECT_STORAGE_*` credentials | Step 7 | separate production bucket and keys |
+| `IMAGEKIT_PUBLIC_KEY`, `IMAGEKIT_PRIVATE_KEY`, `IMAGEKIT_URL_ENDPOINT` | Phase 12 | a **separate production ImageKit account**; the private key is backend-only (never `NEXT_PUBLIC_*`) |
+| `CLAMAV_HOST` (+ `CLAMAV_PORT`) | Phase 12B | a reachable clamd (e.g. the `clamav/clamav` image as a private service) with `CLAMD_CONF_StreamMaxLength` ≥ 110M; without it every upload fails closed (503) |
+| `OBJECT_STORAGE_*` credentials | Step 7 | **legacy, optional**: only while live B2 rows remain (`docs/media-storage.md` §2c) |
 
 ### Production settings
 
@@ -101,6 +102,8 @@ flowchart LR
 | `EMAIL_FROM_ADDRESS` | an address on a For After domain authenticated in Brevo ([email setup](email-production-setup.md)) |
 | `APP_BASE_URL` | `https://app.forafter.com.au` (https required) |
 | `DEATH_VERIFICATION_SAFEGUARD_SECONDS` | `1209600` (14 days) or the approved value; **never** a testing value like 60 |
+| `STORAGE_LIMIT_BYTES` | per-Customer storage limit; default 5 GiB (Phase 12C, approved 2026-10-08) |
+| `MEDIA_MALWARE_SCAN_TIMEOUT_MS` | 120000 (download + scan of one file) |
 
 ### One-off tasks
 
@@ -108,6 +111,10 @@ flowchart LR
 - Step 14–15 migrations (`add_death_report_intake`, `death_report_owner_deletion`, `add_death_verification_workflow`)
   are additive; run `npx prisma migrate deploy`. Existing Step 14 cases are picked up by the death reconciler.
 - Admin accounts: register, then set `User.role` to `ADMIN` in PostgreSQL (no sign-up path). Step 16 adds admin 2FA.
+- Phase 12 media move (once per environment that still has B2 media): back up the database, set `IMAGEKIT_*` and
+  `CLAMAV_HOST` (clamd running), `npx prisma migrate deploy`, then `npm run migrate:b2-to-imagekit` (dry run) and
+  `-- --apply`; check each migrated row (private ImageKit file, size, signed `200` / unsigned refused) and that no live
+  B2 row remains. Never `migrate reset` or `db push`. The B2 bucket stays as a backup until its deletion is approved.
 
 ---
 
@@ -121,7 +128,9 @@ These must be solved before Recipients or Trusted Contacts can use production:
 | **Admin 2FA** (Step 16) | Admins can verify deaths; production must not rely on a password alone |
 | ~~**Death-case reopening rule**~~ ✅ | Resolved in Phase 10: a report after `CANCELLED`/`REJECTED` opens a new case ([death-verification.md](death-verification.md) §1.1) |
 | **Throttler storage in Redis** | Register/login limits are counted in memory per instance |
-| **Separate production bucket** | Development uses a Backblaze B2 dev bucket |
+| **Separate production media account** | Development uses the development ImageKit account; production needs its own keys (`IMAGEKIT_*`) |
+| **clamd service** | Every upload is malware-scanned and fails closed; a deployed API needs a reachable clamd (`CLAMAV_HOST`) |
+| **Deployed B2 media** | The Railway demo predates Phase 12: migrate its B2 rows to ImageKit before removing the legacy adapter |
 | **Frontend** | Next.js app built locally (Steps 17–19) but not yet deployed; needs a CSP, the production cookie domain and the storage bucket CORS rule before launch ([task.md](task.md)) |
 
 ---

@@ -15,7 +15,10 @@ import { ApiCookieAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { CustomerGuard } from '../auth/guards/customer.guard.js';
 import { SessionAuthGuard } from '../auth/guards/session-auth.guard.js';
-import { CreateMediaUploadDto } from '../media/dto/create-media-upload.dto.js';
+import {
+  CompleteMediaUploadDto,
+  CreateMediaUploadDto,
+} from '../media/dto/create-media-upload.dto.js';
 import type {
   AccessUrlResponse,
   MediaResponse,
@@ -27,9 +30,14 @@ import {
   MemoryVaultQueryDto,
 } from './dto/create-memory-vault-item.dto.js';
 import { UpdateMemoryVaultItemDto } from './dto/update-memory-vault-item.dto.js';
+import { CreateMessageFromMemoryDto } from './dto/create-message-from-memory.dto.js';
+import { MemoryToMessageService } from './memory-to-message.service.js';
 import { MemoryVaultMediaService } from './memory-vault-media.service.js';
+import type { MessageResponse } from '../messages/messages.service.js';
 import {
+  type MemoryPage,
   type MemoryResponse,
+  type MemoryTag,
   MemoryVaultService,
 } from './memory-vault.service.js';
 import { AUTH } from '../config/swagger.js';
@@ -44,6 +52,7 @@ export class MemoryVaultController {
   constructor(
     private readonly memories: MemoryVaultService,
     private readonly media: MemoryVaultMediaService,
+    private readonly toMessage: MemoryToMessageService,
   ) {}
 
   @Post()
@@ -54,12 +63,19 @@ export class MemoryVaultController {
     return this.memories.create(user.id, dto);
   }
 
+  // ?page&limit&category&search&tag, all optional and combinable.
   @Get()
   findAll(
     @CurrentUser() user: SafeUser,
     @Query() query: MemoryVaultQueryDto,
-  ): Promise<MemoryResponse[]> {
-    return this.memories.findAllForOwner(user.id, query.category);
+  ): Promise<MemoryPage> {
+    return this.memories.findPageForOwner(user.id, query);
+  }
+
+  // Declared before :memoryVaultItemId so "tags" is never parsed as an id.
+  @Get('tags')
+  findTags(@CurrentUser() user: SafeUser): Promise<MemoryTag[]> {
+    return this.memories.findTags(user.id);
   }
 
   @Get(':memoryVaultItemId')
@@ -88,6 +104,17 @@ export class MemoryVaultController {
     return this.memories.remove(user.id, id);
   }
 
+  // Phase 13B: a new DRAFT Message (201) made from this memory; the memory
+  // itself stays private and unchanged. Then the normal /messages routes.
+  @Post(':memoryVaultItemId/messages')
+  createMessage(
+    @CurrentUser() user: SafeUser,
+    @Param('memoryVaultItemId', ParseUUIDPipe) id: string,
+    @Body() dto: CreateMessageFromMemoryDto,
+  ): Promise<MessageResponse> {
+    return this.toMessage.createMessage(user.id, id, dto);
+  }
+
   @Post(':memoryVaultItemId/media/upload-url')
   createUploadUrl(
     @CurrentUser() user: SafeUser,
@@ -103,8 +130,9 @@ export class MemoryVaultController {
     @CurrentUser() user: SafeUser,
     @Param('memoryVaultItemId', ParseUUIDPipe) itemId: string,
     @Param('mediaAssetId', ParseUUIDPipe) id: string,
+    @Body() dto: CompleteMediaUploadDto,
   ): Promise<MediaResponse> {
-    return this.media.complete(user.id, itemId, id);
+    return this.media.complete(user.id, itemId, id, dto.providerFileId);
   }
 
   @Get(':memoryVaultItemId/media')

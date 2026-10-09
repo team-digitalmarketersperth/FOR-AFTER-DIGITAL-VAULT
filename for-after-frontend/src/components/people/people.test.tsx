@@ -179,9 +179,8 @@ describe('People I Love: photo (Phase 09)', () => {
   const uploadTarget = (id: string) =>
     json(201, {
       mediaAssetId: id,
-      uploadUrl: 'https://storage.test/put',
+      upload: { url: 'https://upload.test/files', fields: { token: 't' } },
       expiresAt: '2030-01-01T00:00:00Z',
-      requiredHeaders: { 'Content-Type': 'image/png' },
     });
 
   it('no photo: initials, no image and no URL requested', async () => {
@@ -202,7 +201,7 @@ describe('People I Love: photo (Phase 09)', () => {
     expect(screen.getByText('SR')).toBeInTheDocument();
   });
 
-  it('upload: direct PUT, verify, then the photo is current', async () => {
+  it('upload: direct upload to the provider, verify with its file id, then the photo is current', async () => {
     const puts = fakeStorage(200);
     let current: string | null = null;
     const api = routeFetch({
@@ -218,9 +217,8 @@ describe('People I Love: photo (Phase 09)', () => {
     await screen.findByRole('button', { name: 'Add a photo' });
     await pick(png());
     await waitFor(() => expect(document.querySelector('img')).toHaveAttribute('src', 'https://storage.test/p2'));
-    expect(puts).toEqual([
-      expect.objectContaining({ url: 'https://storage.test/put', headers: { 'Content-Type': 'image/png' } }),
-    ]);
+    expect(puts).toEqual([expect.objectContaining({ method: 'POST', url: 'https://upload.test/files' })]);
+    expect(api.called('POST', '/recipients/r1/photo/p2/complete')[0].body).toEqual({ providerFileId: 'provider-file-1' });
     expect(api.called('POST', '/recipients/r1/photo/upload-url')[0].body).toEqual({
       kind: 'PHOTO',
       originalFileName: 'mum.png',

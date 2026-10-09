@@ -9,7 +9,7 @@ import { Prisma } from '../generated/prisma/client.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
 import { CreateMessageDto } from './dto/create-message.dto.js';
 import { UpdateMessageDto } from './dto/update-message.dto.js';
-import type { MediaStorage } from '../media/storage/media-storage.service.js';
+import type { MediaCleanup } from '../media/media-cleanup.service.js';
 import {
   MessagesService,
   TEXT_PREVIEW_MAX,
@@ -49,7 +49,10 @@ const setup = (owned = 1) => {
     count: vi.fn().mockResolvedValue(0),
   };
   const recipient = { count: vi.fn().mockResolvedValue(owned) };
-  const storage = { deleteObject: vi.fn().mockResolvedValue(undefined) };
+  // The media cleanup (file purge); named storage for the assertions below.
+  const storage = {
+    purge: vi.fn().mockResolvedValue({ purged: 0, failed: 0 }),
+  };
   const prisma = {
     message,
     recipient,
@@ -62,7 +65,7 @@ const setup = (owned = 1) => {
     storage,
     service: new MessagesService(
       prisma as unknown as PrismaService,
-      storage as unknown as MediaStorage,
+      storage as unknown as MediaCleanup,
     ),
   };
 };
@@ -145,7 +148,8 @@ describe('CreateMessageDto', () => {
     ['ownerUserId', { ownerUserId: uuid2 }],
     ['status', { status: 'RELEASED' }],
     ['somethingElse', { somethingElse: 1 }],
-    ['contentType', { contentType: 'VIDEO' }],
+    ['contentType', { contentType: 'DOCUMENT' }],
+    ['contentType', { contentType: 'video' }],
     ['contentType', { contentType: 'text' }],
     ['contentType', { contentType: null }],
   ])('rejects %s in %o', async (field, patch) => {
@@ -163,7 +167,8 @@ describe('UpdateMessageDto', () => {
     expect(await errors({})).toEqual([]);
     expect(await errors({ title: 'New' })).toEqual([]);
     expect(await errors({ recipientIds: [uuid1, uuid2] })).toEqual([]);
-    for (const contentType of ['TEXT', 'PHOTO', 'AUDIO', 'MIXED']) {
+    // VIDEO since Phase 12.
+    for (const contentType of ['TEXT', 'PHOTO', 'AUDIO', 'VIDEO', 'MIXED']) {
       expect(await errors({ contentType })).toEqual([]);
     }
     expect(await errors({ textContent: null })).toEqual([]);
@@ -183,7 +188,7 @@ describe('UpdateMessageDto', () => {
     ['recipientIds', { recipientIds: [uuid1, uuid1] }],
     ['status', { status: 'RELEASED' }],
     ['ownerUserId', { ownerUserId: uuid2 }],
-    ['contentType', { contentType: 'VIDEO' }],
+    ['contentType', { contentType: 'DOCUMENT' }],
   ])('rejects %s in %o', async (field, body) => {
     expect(await errors(body)).toContain(field);
   });
@@ -422,23 +427,18 @@ describe('MessagesService', () => {
       updateMany: { where: { deletedAt: null }, data: { deletedAt } },
     });
     expect(select.mediaAssets.where).toEqual({ deletedAt });
-    expect(storage.deleteObject).not.toHaveBeenCalled();
+    expect(storage.purge).toHaveBeenCalledWith('mediaAsset', []);
   });
 
-  it('remove deletes each hidden object; a storage failure is swallowed', async () => {
+  it('remove purges exactly the media it hid', async () => {
     const { message, storage, service } = setup();
-    message.update.mockResolvedValue({
-      mediaAssets: [
-        { id: 'p1', storageKey: 'users/a/messages/m1/p1.jpg' },
-        { id: 'a1', storageKey: 'users/a/messages/m1/a1.mp3' },
-      ],
-    });
-    storage.deleteObject.mockRejectedValueOnce(new Error('B2 secret detail'));
+    const hidden = [
+      { id: 'p1', storageKey: '/for-after/u/messages/m1/photo/p1.jpg' },
+      { id: 'a1', storageKey: '/for-after/u/messages/m1/audio/a1.mp3' },
+    ];
+    message.update.mockResolvedValue({ mediaAssets: hidden });
     await expect(service.remove('owner-a', 'm1')).resolves.toBeUndefined();
-    expect(storage.deleteObject.mock.calls).toEqual([
-      ['users/a/messages/m1/p1.jpg'],
-      ['users/a/messages/m1/a1.mp3'],
-    ]);
+    expect(storage.purge).toHaveBeenCalledWith('mediaAsset', hidden);
   });
 
   it('remove of a missing/foreign/non-draft message touches no storage', async () => {
@@ -447,7 +447,7 @@ describe('MessagesService', () => {
     await expect(service.remove('owner-a', 'm1')).rejects.toThrow(
       NotFoundException,
     );
-    expect(storage.deleteObject).not.toHaveBeenCalled();
+    expect(storage.purge).not.toHaveBeenCalled();
   });
 
   it('does not turn unexpected database errors into 404s', async () => {

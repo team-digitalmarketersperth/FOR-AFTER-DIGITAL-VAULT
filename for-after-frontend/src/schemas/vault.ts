@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { MEMORY_CATEGORIES } from '@/lib/api/memory-vault';
 import { AFTER_DEATH_DAYS_MAX, CONTENT_TYPES, TEXT_CONTENT_MAX, TRIGGER_TYPES } from '@/lib/api/messages';
-import { ANSWER_MAX } from '@/lib/api/prompts';
+import { ANSWER_MAX, type PromptArea } from '@/lib/api/prompts';
 
 // Early, friendly feedback mirroring the backend DTO limits; the API stays
 // authoritative. Form values are strings; blank optional fields become null
@@ -61,10 +61,18 @@ export const messageSchema = z.object({
 });
 export type MessageValues = z.infer<typeof messageSchema>;
 
+// Phase 13B: a message made from a memory; the type is always chosen.
+export const memoryMessageSchema = messageSchema.omit({ textContent: true }).extend({
+  includeText: z.boolean(),
+  mediaAssetIds: z.array(z.string()),
+});
+export type MemoryMessageValues = z.infer<typeof memoryMessageSchema>;
+
 export const memorySchema = z.object({
   title: required('A title', 200),
   category: z.enum(MEMORY_CATEGORIES, { message: 'Choose a category.' }),
   textContent: z.string().max(TEXT_CONTENT_MAX, 'This is longer than 20,000 characters.'),
+  tags: z.array(z.string()),
 });
 export type MemoryValues = z.infer<typeof memorySchema>;
 
@@ -100,11 +108,16 @@ export const scheduleSchema = z
   });
 export type ScheduleValues = z.infer<typeof scheduleSchema>;
 
-// Backend AnswerText(): not blank, stored exactly as written (not trimmed).
-export const answerSchema = z.object({
-  textContent: z
-    .string()
-    .refine((v) => /\S/.test(v), 'Write something before saving.')
-    .refine((v) => v.length <= ANSWER_MAX, 'Your answer is longer than 20,000 characters.'),
-});
-export type AnswerValues = z.infer<typeof answerSchema>;
+// Backend AnswerText(): stored exactly as written (not trimmed). An answer
+// may be files (or, in My Story, memories) only (Phase 14B / 15B), so blank
+// text is sent as null and the server refuses an empty answer.
+export const answerSchema = (area: PromptArea) =>
+  z.object({
+    textContent: z
+      .string()
+      .refine(
+        (v) => v.length <= ANSWER_MAX[area],
+        `Your answer is longer than ${ANSWER_MAX[area].toLocaleString('en-AU')} characters.`,
+      ),
+  });
+export type AnswerValues = z.infer<ReturnType<typeof answerSchema>>;

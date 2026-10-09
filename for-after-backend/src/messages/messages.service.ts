@@ -2,7 +2,6 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
-  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { paginate } from '../audit/audit-log.service.js';
@@ -11,8 +10,8 @@ import {
   MessageStatus,
   Prisma,
 } from '../generated/prisma/client.js';
-import { deleteObjectQuietly } from '../media/media.service.js';
-import { MediaStorage } from '../media/storage/media-storage.service.js';
+import { MediaCleanup } from '../media/media-cleanup.service.js';
+import { storedRefSelect } from '../media/media.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateMessageDto } from './dto/create-message.dto.js';
 import { UpdateMessageDto } from './dto/update-message.dto.js';
@@ -100,11 +99,9 @@ const assign = (recipientIds: string[]) =>
 
 @Injectable()
 export class MessagesService {
-  private readonly logger = new Logger(MessagesService.name);
-
   constructor(
     private readonly prisma: PrismaService,
-    private readonly storage: MediaStorage,
+    private readonly cleanup: MediaCleanup,
   ) {}
 
   // Every read and write goes through this filter: ownership is part of the
@@ -205,10 +202,10 @@ export class MessagesService {
    * Soft delete; assignments stay attached to the deleted row. Its live media
    * (any status) are soft-deleted in the same UPDATE, so the database is
    * authoritative at once: every media route already refuses a deleted
-   * message. Objects are removed after commit, best effort; a storage failure
-   * never restores access and leaves the object for reconciliation (logged by
-   * id only). Media only change under this same DRAFT row lock, so none can be
-   * added once this commits.
+   * message. Files are removed after commit, best effort; a provider failure
+   * never restores access and is retried by the media cleanup reconciler
+   * (logged by id only). Media only change under this same DRAFT row lock, so
+   * none can be added once this commits.
    */
   async remove(ownerUserId: string, id: string): Promise<void> {
     const deletedAt = new Date();
@@ -222,23 +219,15 @@ export class MessagesService {
         },
       },
       // Read after the write: exactly the assets this delete just hid.
-      {
-        mediaAssets: {
-          where: { deletedAt },
-          select: { id: true, storageKey: true },
-        },
-      },
+      { mediaAssets: { where: { deletedAt }, select: storedRefSelect } },
     );
-    await Promise.all(
-      mediaAssets.map((m) =>
-        deleteObjectQuietly(this.storage, this.logger, m.id, m.storageKey),
-      ),
-    );
+    await this.cleanup.purge('mediaAsset', mediaAssets);
   }
 
   // Never trust UUID secrecy: every requested id must be a live recipient of
   // this owner. The DTO already rejected duplicates, so counts are comparable.
-  private async assertOwnedRecipients(
+  // Also used by Memory Vault's create-message (Phase 13B).
+  async assertOwnedRecipients(
     ownerUserId: string,
     ids: string[],
   ): Promise<void> {

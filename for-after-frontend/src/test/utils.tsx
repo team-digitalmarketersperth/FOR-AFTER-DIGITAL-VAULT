@@ -80,18 +80,29 @@ export function routeFetch(routes: Record<string, Handler>) {
   return { calls, called };
 }
 
-/** Browser → storage PUT stub: records requests, reports progress, then answers `status`. */
+/** The provider's file id the fake upload answers with. */
+export const FAKE_PROVIDER_FILE_ID = 'provider-file-1';
+
+/**
+ * Browser → media provider (ImageKit) upload stub: records each request (the
+ * multipart body is a FormData), reports progress, then answers `status`
+ * with ImageKit's JSON ({ fileId }) on success.
+ */
 export function fakeStorage(status = 200) {
-  const puts: { url: string; headers: Record<string, string>; body: unknown }[] = [];
+  const puts: { method: string; url: string; headers: Record<string, string>; body: unknown }[] = [];
   class FakeXHR {
     upload: { onprogress?: (e: { lengthComputable: boolean; loaded: number; total: number }) => void } = {};
     onload?: () => void;
     onerror?: () => void;
     onabort?: () => void;
     status = 0;
+    responseType = '';
+    response: unknown = null;
+    private method = '';
     private url = '';
     private headers: Record<string, string> = {};
-    open(_method: string, url: string) {
+    open(method: string, url: string) {
+      this.method = method;
       this.url = url;
     }
     setRequestHeader(name: string, value: string) {
@@ -101,10 +112,11 @@ export function fakeStorage(status = 200) {
       this.onabort?.();
     }
     send(body: unknown) {
-      puts.push({ url: this.url, headers: this.headers, body });
+      puts.push({ method: this.method, url: this.url, headers: this.headers, body });
       queueMicrotask(() => {
         this.upload.onprogress?.({ lengthComputable: true, loaded: 5, total: 10 });
         this.status = status;
+        this.response = status >= 200 && status < 300 ? { fileId: FAKE_PROVIDER_FILE_ID } : { message: 'refused' };
         if (status === 0) this.onerror?.();
         else this.onload?.();
       });

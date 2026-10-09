@@ -27,7 +27,7 @@
 
 ## 2. Architecture Principles & Invariants
 - **PostgreSQL as Source of Truth**: Permanent state lives in PostgreSQL (not Redis). Redis is strictly for ephemeral data (sessions, queues, caching).
-- **Offloaded Media Processing**: Video uploads go directly from the client to Mux/Cloudflare Stream, bypassing the NestJS API to save bandwidth and compute.
+- **Offloaded Media**: photo, audio and video uploads go directly from the browser to ImageKit (private files, server-signed upload tokens), bypassing the NestJS API to save bandwidth and compute. Playback and downloads use short-lived signed URLs.
 - **Deny-by-default Recipient Access**: Recipients never see unreleased content. Access control explicitly checks release schedules and status.
 - **Durable & Idempotent Delivery**: Database idempotency keys prevent duplicate sends in the delivery workers.
 - **Human-in-the-loop Death Verification**: Multi-step workflow involving Trusted Contacts and Administrators to verify death before releasing posthumous content. *As built (Step 15): report → safety notice → safeguard → explicit admin verification; nothing is released on a report or an elapsed safeguard.*
@@ -53,7 +53,7 @@ flowchart TD
     end
 
     subgraph External Services
-        Mux[Mux / Cloudflare Stream\nVideo]
+        Mux[ImageKit\nPhoto, audio, video]
         S3[S3 / Cloudflare R2\nFiles]
         Stripe[Stripe\nBilling]
         Postmark[Postmark\nEmail]
@@ -71,7 +71,7 @@ flowchart TD
     NestJS --> Postmark
     NestJS --> Twilio
     NestJS --> Sentry
-    Mux -.-> |Webhooks| NestJS
+    NestJS -.-> |Verify upload, delete| Mux
     Stripe -.-> |Webhooks| NestJS
 ```
 
@@ -205,7 +205,7 @@ Details: `docs/admin.md`.
 | **Database** | PostgreSQL 16 | Primary relational data store |
 | **ORM** | Prisma 7 | Type-safe database access |
 | **Cache & Queues** | Redis, BullMQ | Sessions (`redis` client); message release jobs (BullMQ + ioredis, Step 12). PostgreSQL stays the schedule source of truth |
-| **Video Processing**| Mux / Cloudflare Stream | Video encoding, hosting, and streaming |
+| **Media (photo, audio, video)**| ImageKit | Private storage and signed delivery (Phase 12; replaced Backblaze B2 and the planned Mux / Cloudflare Stream) |
 | **File Storage** | AWS S3 / Cloudflare R2 | Static file and asset storage |
 | **Payments** | Stripe | Subscriptions and billing |
 | **Communications**| Postmark, Twilio | Transactional emails and SMS notifications |

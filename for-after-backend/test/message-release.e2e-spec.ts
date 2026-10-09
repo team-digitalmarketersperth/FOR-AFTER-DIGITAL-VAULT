@@ -176,6 +176,7 @@ describe('Message release (e2e, PostgreSQL + Redis + BullMQ)', () => {
     await lisa.delete(`${msg}/media/${crypto.randomUUID()}`).expect(409);
     await lisa
       .post(`${msg}/media/${crypto.randomUUID()}/complete`)
+      .send({ providerFileId: 'f1' })
       .expect((res) => expect([404, 409]).toContain(res.status));
     await schedule(id, { triggerType: 'ON_DEATH' }).expect(409);
     await lisa

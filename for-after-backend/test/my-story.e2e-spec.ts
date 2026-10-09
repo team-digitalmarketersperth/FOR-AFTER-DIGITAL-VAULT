@@ -6,9 +6,12 @@ import request from 'supertest';
 import { adminSignIn } from './admin-sign-in.js';
 import { AuthModule } from '../src/auth/auth.module.js';
 import { configureApp } from '../src/config/app.setup.js';
-import { TEXT_CONTENT_MAX } from '../src/messages/dto/create-message.dto.js';
 import { MyStoryModule } from '../src/my-story/my-story.module.js';
-import { MY_STORY_PROMPTS } from '../src/my-story/my-story.prompts.js';
+import {
+  MY_STORY_ANSWER_MAX,
+  MY_STORY_CATEGORIES,
+  MY_STORY_PROMPTS,
+} from '../src/my-story/my-story.prompts.js';
 import { PrismaModule } from '../src/prisma/prisma.module.js';
 import { PrismaService } from '../src/prisma/prisma.service.js';
 
@@ -40,9 +43,7 @@ describe('My Story (e2e, PostgreSQL)', () => {
   const earlyAnswer = `${early}/response`;
   const legacyAnswer = `${root}/legacy.remembered/response`;
   const noLeaks = (body: unknown) =>
-    expect(JSON.stringify(body)).not.toMatch(
-      /ownerUserId|deletedAt|promptTextSnapshot/,
-    );
+    expect(JSON.stringify(body)).not.toMatch(/ownerUserId|deletedAt/);
   type PromptView = { key: string; answered: boolean; response: unknown };
   const promptIn = (body: PromptView[], key: string) =>
     body.find((p) => p.key === key)!;
@@ -114,10 +115,20 @@ describe('My Story (e2e, PostgreSQL)', () => {
       answered: false,
       response: null,
     });
+    // V1 (approved 2026-10-08): categories in life order.
+    expect([
+      ...new Set(all.body.map((p: { category: string }) => p.category)),
+    ]).toEqual([...MY_STORY_CATEGORIES]);
     const childhood = await lisa.get(`${root}?category=CHILDHOOD`).expect(200);
     expect(childhood.body.map((p: PromptView) => p.key)).toEqual([
       'childhood.earliest-memory',
       'childhood.home',
+      'childhood.school',
+    ]);
+    const work = await lisa.get(`${root}?category=WORK`).expect(200);
+    expect(work.body.map((p: PromptView) => p.key)).toEqual([
+      'work.first-job',
+      'work.meaningful',
     ]);
     await lisa.get(`${root}?category=RECIPES`).expect(400);
     await lisa.get(`${root}?category=childhood`).expect(400);
@@ -146,7 +157,7 @@ describe('My Story (e2e, PostgreSQL)', () => {
       { textContent: '   \n ' },
       { textContent: null },
       { textContent: 42 },
-      { textContent: 'x'.repeat(TEXT_CONTENT_MAX + 1) },
+      { textContent: 'x'.repeat(MY_STORY_ANSWER_MAX + 1) },
       { textContent: 'x', ownerUserId: crypto.randomUUID() },
       { textContent: 'x', promptVersion: 2 },
       { textContent: 'x', promptTextSnapshot: 'Another question' },
@@ -169,10 +180,18 @@ describe('My Story (e2e, PostgreSQL)', () => {
     expect(Object.keys(first.body).sort()).toEqual([
       'createdAt',
       'id',
+      'mediaCount',
+      'memories',
       'promptKey',
+      'promptTextSnapshot',
+      'promptVersion',
       'textContent',
       'updatedAt',
     ]);
+    expect(first.body).toMatchObject({
+      promptTextSnapshot: 'What is one of your earliest memories?',
+      promptVersion: 1,
+    });
     const id = first.body.id;
 
     const list = await lisa.get(root).expect(200);
@@ -237,11 +256,69 @@ describe('My Story (e2e, PostgreSQL)', () => {
       .send({ textContent: raw })
       .expect(200);
     expect(res.body.textContent).toBe(raw);
-    const long = 'x'.repeat(TEXT_CONTENT_MAX);
+    // Approved limit: 50,000 characters, enforced by the server.
     await lisa
       .put(`${root}/values.guiding-values/response`)
-      .send({ textContent: long })
+      .send({ textContent: 'x'.repeat(MY_STORY_ANSWER_MAX) })
       .expect(200);
+    await lisa
+      .put(`${root}/values.guiding-values/response`)
+      .send({ textContent: 'x'.repeat(MY_STORY_ANSWER_MAX + 1) })
+      .expect(400);
+  });
+
+  it('an answer keeps the wording it was written for; re-answering after a delete takes the current wording', async () => {
+    const answer = `${root}/milestones.favourite-day/response`;
+    await lisa
+      .put(answer)
+      .send({ textContent: 'A summer day at the beach.' })
+      .expect(200);
+    // Simulate a catalogue change after this answer: it was written for an
+    // older (v1) wording; the catalogue now has a newer one.
+    const [row] = await rowsFor(emails[0], 'milestones.favourite-day');
+    await prisma.myStoryResponse.update({
+      where: { id: row.id },
+      data: { promptTextSnapshot: 'An older wording.', promptVersion: 0 },
+    });
+    // Editing keeps the answered wording and version.
+    const edited = await lisa
+      .put(answer)
+      .send({ textContent: 'A summer day at the beach, edited.' })
+      .expect(200);
+    expect(edited.body).toMatchObject({
+      id: row.id,
+      promptTextSnapshot: 'An older wording.',
+      promptVersion: 0,
+      textContent: 'A summer day at the beach, edited.',
+    });
+    const listed = promptIn(
+      (await lisa.get(`${root}?category=MILESTONES`).expect(200)).body,
+      'milestones.favourite-day',
+    );
+    expect(listed).toMatchObject({
+      prompt: 'What is a day you would happily live again?',
+      response: { promptTextSnapshot: 'An older wording.' },
+    });
+    // Deleted, then written again: the same row, with the current wording.
+    await lisa.delete(answer).expect(204);
+    const again = await lisa
+      .put(answer)
+      .send({ textContent: 'Written again.' })
+      .expect(200);
+    expect(again.body).toMatchObject({
+      id: row.id,
+      promptTextSnapshot: 'What is a day you would happily live again?',
+      promptVersion: 1,
+    });
+    expect(await rowsFor(emails[0], 'milestones.favourite-day')).toHaveLength(
+      1,
+    );
+    // John can neither read nor change Lisa's answer.
+    await john.get(answer).expect(404);
+    await john.delete(answer).expect(404);
+    expect((await lisa.get(answer).expect(200)).body.textContent).toBe(
+      'Written again.',
+    );
   });
 
   it('keeps Lisa and John completely separate', async () => {

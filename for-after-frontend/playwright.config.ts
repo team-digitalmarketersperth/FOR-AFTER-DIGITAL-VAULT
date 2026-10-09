@@ -7,8 +7,9 @@ import { defineConfig, devices } from '@playwright/test';
 // 5/min per IP, and the suite spends 5 of each (3 in auth.spec, 2 in
 // vault.setup). Wait a minute or two between runs.
 //
-// vault.spec uploads a few tiny test files to the development storage bucket
-// (the backend's "complete" step checks the real object).
+// vault, portals and people specs upload a few tiny synthetic files to the
+// development ImageKit account (the backend's "complete" step checks the real
+// file); e2e/imagekit.ts deletes exactly those files after each test.
 export default defineConfig({
   testDir: './e2e',
   globalSetup: './e2e/global-setup.ts',
@@ -40,8 +41,8 @@ export default defineConfig({
       use: {
         ...devices['Desktop Chrome'],
         baseURL: 'http://localhost:3000',
-        // A fake microphone for the browser recorder test; no real audio is captured.
-        permissions: ['microphone'],
+        // Chromium's fake camera + microphone for the recorder tests; nothing real is captured.
+        permissions: ['microphone', 'camera'],
         launchOptions: { args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] },
       },
     },

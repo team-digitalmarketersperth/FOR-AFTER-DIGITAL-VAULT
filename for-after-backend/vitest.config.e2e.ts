@@ -13,6 +13,9 @@ const RELEASE_WORKER_SUITES = [
   'test/email-delivery.e2e-spec.ts',
   'test/error-boundary.e2e-spec.ts',
   'test/media.e2e-spec.ts',
+  'test/memory-to-message.e2e-spec.ts',
+  'test/my-story-rich.e2e-spec.ts',
+  'test/my-wishes-rich.e2e-spec.ts',
   'test/message-composition.e2e-spec.ts',
   'test/message-release.e2e-spec.ts',
   'test/message-schedules.e2e-spec.ts',
@@ -49,6 +52,18 @@ export default defineConfig({
       // tests completes real TOTP via test/admin-sign-in.ts.
       ADMIN_TOTP_ENCRYPTION_KEY: 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=',
       ADMIN_TOTP_VERIFY_IP_LIMIT: '10000',
+      // Phase 12: no periodic media cleanup in tests. Suites share the dev
+      // database and use a fake provider, which must never mark real rows'
+      // ImageKit files as deleted.
+      MEDIA_CLEANUP_INTERVAL_SECONDS: '0',
+      // Phase 12B: suites that complete uploads override MalwareScanner with a
+      // fake. Anything else reaches this closed port and fails closed.
+      CLAMAV_HOST: '127.0.0.1',
+      CLAMAV_PORT: '1',
+      // The ImageKit Free plan limits (code defaults), whatever .env says.
+      MEDIA_PHOTO_MAX_BYTES: String(20 * 1024 * 1024),
+      MEDIA_AUDIO_MAX_BYTES: String(25 * 1024 * 1024),
+      MEDIA_VIDEO_MAX_BYTES: String(100 * 1024 * 1024),
     },
     // Both projects run at the same time; only the release-worker suites are
     // serialised among themselves.

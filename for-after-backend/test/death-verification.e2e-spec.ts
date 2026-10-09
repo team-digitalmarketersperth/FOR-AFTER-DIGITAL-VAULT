@@ -17,6 +17,7 @@ import { DeathVerificationWorkflow } from '../src/death-verification/death-verif
 import { DeathVerificationModule } from '../src/death-verification/death-verification.module.js';
 import { MediaModule } from '../src/media/media.module.js';
 import { MediaStorage } from '../src/media/storage/media-storage.service.js';
+import { FakeMediaStorage } from './fake-media-storage.js';
 import { MessageReleaseService } from '../src/message-release/message-release.service.js';
 import { MessageSchedulesModule } from '../src/message-schedules/message-schedules.module.js';
 import { MessagesModule } from '../src/messages/messages.module.js';
@@ -78,12 +79,7 @@ describe('Death verification workflow (e2e)', () => {
       otps.push(input);
     }),
   };
-  const storage = {
-    createUploadUrl: vi.fn(async () => 'https://storage.test/put'),
-    createAccessUrl: vi.fn(async () => 'https://storage.test/get'),
-    headObject: vi.fn(async () => ({ sizeBytes: 1, contentType: 'x' })),
-    deleteObject: vi.fn(async () => undefined),
-  };
+  const storage = new FakeMediaStorage();
 
   type Agent = ReturnType<typeof request.agent>;
   const agents: Record<string, Agent> = {};

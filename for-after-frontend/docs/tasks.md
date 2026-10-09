@@ -50,17 +50,17 @@
 | FE-6 | Shared loading / error / empty states | ✅ | 17 | `components/shared/states.tsx` |
 | FE-7 | `/dev-login`, real 404 in production builds | ✅ | 17 | `app/(auth)/dev-login`, `src/proxy.ts` |
 | FE-8 | Register / login pages | ✅ | 17 | `app/(auth)` |
-| FE-9 | Account settings: name, read-only email, password change | ✅ | 22 | `components/account/account-settings.tsx`, `app/(dashboard)/settings` |
+| FE-9 | Account settings: name, read-only email, password change; storage meter with 80/90/100 % notices (Phase 12C) | ✅ | 22 | `components/account/account-settings.tsx`, `storage-usage.tsx`, `app/(dashboard)/settings` |
 | FE-10 | People I Love: list (25 per page, Previous / Next), add, view, edit, remove, private photo (Phase 09) | ✅ | 18 | `components/people/recipients.tsx`, `person-card.tsx` |
 | FE-11 | Trusted Contacts (Customer side): list, add, edit, remove; Phase 10: max 2, invitation status, send/resend | ✅ | 18, Phase 10 | `components/people/trusted-contacts.tsx` |
 | FE-12 | Messages: drafts, content type, recipients | ✅ | 18 | `components/messages/` |
-| FE-13 | Message media: direct upload with progress + cancel, previews, delete | ✅ | 18 | `components/media/media-manager.tsx` |
-| FE-14 | Browser audio recorder | ✅ | 18 | `components/media/audio-recorder.tsx` (E2E with Chromium's fake microphone) |
+| FE-13 | Message media: direct upload with progress + cancel, previews, delete (ImageKit + VIDEO since Phase 12) | ✅ | 18 | `components/media/media-manager.tsx` |
+| FE-14 | Browser audio and video recorder (video: Phase 12A) | ✅ | 18 | `components/media/recorder.tsx` (E2E with Chromium's fake camera and microphone) |
 | FE-15 | Schedule picker: FIXED_DATE (+ timezone offset), ON_DEATH, AFTER_DEATH; change; unschedule | ✅ | 18 | `components/messages/schedule-panel.tsx` |
 | FE-16 | Status views + explicit "unschedule to edit" | ✅ | 18 | `message-detail.tsx`, `LockedNotice` |
-| FE-17 | Memory Vault: category filter, CRUD, photo/audio | ✅ | 18 | `components/memory-vault/memories.tsx` |
-| FE-18 | My Story: prompts by category, answer/edit/delete | ✅ | 18 | `components/prompts/prompts.tsx` |
-| FE-19 | My Wishes: same, with the exact non-legal disclaimer | ✅ | 18 | `components/prompts/prompts.tsx` |
+| FE-17 | Memory Vault: category filter, CRUD, photo/audio; search, tags, pagination (Phase 13A); create a message from a memory (Phase 13B) | ✅ | 18 | `components/memory-vault/memories.tsx`, `memory-to-message.tsx` |
+| FE-18 | My Story: prompts by category, answer/edit/delete; approved V1 catalogue (from the API), 50,000-char answers, earlier-wording notice (Phase 14A); photo/audio/video answers with recorders, linked memories, create a message (Phase 14B) | ✅ | 18 | `components/prompts/prompts.tsx`, `memory-vault/memory-to-message.tsx` |
+| FE-19 | My Wishes: same, with the non-legal notice served by the API and an explicit per-version acknowledgement before writing (Phase 15A); photo/audio/video with the shared uploader and recorders, files-only wishes, "Create message for loved ones" → existing message page for people and After-my-passing timing (Phase 15B); no AI (deferred post-MVP) | ✅ | 18 | `components/prompts/prompts.tsx`, `components/memory-vault/memory-to-message.tsx` |
 | FE-20 | Plan / billing pages (Stripe) | ⬜ | — | Backend not built (phase 21) |
 | FE-21 | Recipient sign-in: email → 6-digit code | ✅ | 19 | `components/portals/otp-sign-in.tsx`, `recipient.tsx` |
 | FE-22 | Released messages list + message page | ✅ | 19 | `components/portals/recipient.tsx` |
@@ -147,6 +147,15 @@ password?". Tests: `account-links.test.tsx` (10) and `e2e/account-recovery.spec.
   longer awaited (`hooks/use-portals.ts`); regression test in `portals.test.tsx`.
 - **New E2E:** a failed storage PUT stays `PENDING_UPLOAD`, scheduling is refused (409), retry → READY, the unfinished
   attempt can be removed, and the browser recorder (fake microphone) uploads to READY (`vault.spec.ts`).
+- **Video recorder (Phase 12A, 2026-10-07):** `Recorder kind="VIDEO"` next to "Add a video" on editable VIDEO/MIXED
+  drafts. Camera + microphone are asked for together, only on "Record a video" (no silent video: refusing either one
+  is a calm error, and "Add a video" stays usable). Live preview → Start → timer and size so far → Stop → play back →
+  "Use this recording" (the normal upload, so progress, cancel, Try again, server verification and the signed preview
+  are the existing ones), "Record again" or Discard. Tracks are stopped and the preview URL revoked on stop, discard,
+  cancel, success and leaving the page; the recording lives in memory only. Over 100 MB is refused before any upload;
+  there is no duration limit. Format: WebM (VP9/VP8 + Opus) when the browser supports it, else MP4; otherwise the
+  recorder says recording is not available. Verified only in Chromium (Playwright fake camera, real ImageKit); Safari
+  and Firefox, and a real camera, not yet tested.
 - **Other failures seen were environment, not app:** `next dev` first compiles (21 s–77 s per route) and HMR rebuilds
   aborting navigations, one Turbopack panic (`restoring failed`), one Backblaze `500` on a PUT. The real-backend suites
   now run against a production build (see the README).

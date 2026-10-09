@@ -4,6 +4,7 @@ import {
   IsInt,
   IsNotEmpty,
   IsString,
+  Matches,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -24,6 +25,12 @@ export const MIME_TYPES = {
     'audio/webm': 'webm',
     'audio/wav': 'wav',
   },
+  // Phase 12: message media only (Memory Vault stays PHOTO/AUDIO). Formats a
+  // browser <video> plays as uploaded; webm is what the browser records.
+  [MediaKind.VIDEO]: {
+    'video/mp4': 'mp4',
+    'video/webm': 'webm',
+  },
 } as const;
 export type UploadKind = keyof typeof MIME_TYPES;
 
@@ -32,7 +39,7 @@ export type UploadKind = keyof typeof MIME_TYPES;
 // per-kind size limit (configurable) are checked in MediaService.
 export class CreateMediaUploadDto {
   @IsIn(Object.keys(MIME_TYPES), {
-    message: 'kind must be PHOTO or AUDIO (VIDEO is not available yet)',
+    message: 'kind must be PHOTO, AUDIO or VIDEO',
   })
   kind: UploadKind;
 
@@ -48,8 +55,18 @@ export class CreateMediaUploadDto {
   })
   mimeType: string;
 
-  // Expected size; the real size is checked with a HEAD request on complete.
+  // Expected size: the upload is capped at it, and complete checks it exactly.
   @IsInt()
   @Min(1)
   sizeBytes: number;
+}
+
+// complete: the id ImageKit returned to the browser. Only a lookup hint: the
+// file it names must sit at this asset's own server-chosen path.
+export class CompleteMediaUploadDto {
+  @IsString()
+  @Matches(/^[A-Za-z0-9_-]{1,100}$/, {
+    message: 'providerFileId is not valid',
+  })
+  providerFileId: string;
 }

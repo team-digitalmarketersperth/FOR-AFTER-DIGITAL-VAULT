@@ -1,6 +1,14 @@
+import type { StorageQuota } from '../media/storage-quota.service.js';
 import { Logger } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import { Prisma } from '../generated/prisma/client.js';
+import {
+  FAKE_MALWARE,
+  FakeMalwareScanner,
+} from '../../test/fake-malware-scanner.js';
+import { fileStart } from '../../test/fake-media-storage.js';
+import type { MalwareScanner } from '../media/scanner/malware-scanner.service.js';
+import type { MediaCleanup } from '../media/media-cleanup.service.js';
 import type { MediaStorage } from '../media/storage/media-storage.service.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
 import { RecipientPhotoService } from './recipient-photo.service.js';
@@ -23,7 +31,14 @@ const pending = {
   originalFileName: 'mum.jpg',
   mimeType: 'image/jpeg',
   sizeBytes: 2 * MB,
-  storageKey: 'users/o/recipients/r/photo/p.jpg',
+  storageKey: '/for-after/users/o/recipients/r/photo/p.jpg',
+};
+const ref = {
+  id: PHOTO,
+  storageKey: pending.storageKey,
+  storageProvider: 'IMAGEKIT',
+  providerFileId: 'file1',
+  createdAt: new Date(),
 };
 
 const setup = () => {
@@ -34,7 +49,7 @@ const setup = () => {
     findUniqueOrThrow: vi
       .fn()
       .mockResolvedValue({ ...pending, status: 'READY' }),
-    update: vi.fn().mockResolvedValue({ storageKey: pending.storageKey }),
+    update: vi.fn().mockResolvedValue(ref),
     updateMany: vi.fn().mockResolvedValue({ count: 1 }),
   };
   const tx = {
@@ -47,21 +62,54 @@ const setup = () => {
     $transaction: vi.fn((fn: (t: typeof tx) => unknown) => fn(tx)),
   };
   const storage = {
-    createUploadUrl: vi.fn().mockResolvedValue('https://signed.put/x'),
-    createAccessUrl: vi.fn().mockResolvedValue('https://signed.get/x'),
-    headObject: vi.fn().mockResolvedValue({
+    createUpload: vi.fn().mockResolvedValue({
+      url: 'https://upload.test/files',
+      fields: { token: 't' },
+    }),
+    verifyUpload: vi.fn().mockResolvedValue({
       sizeBytes: 2 * MB,
       contentType: 'image/jpeg',
+      isPrivate: true,
+      providerFileId: 'file1',
     }),
+    readStart: vi.fn().mockResolvedValue(fileStart('image/jpeg')),
+    openRead: vi.fn(
+      async (
+        _ref: unknown,
+        _signal: AbortSignal,
+      ): Promise<AsyncIterable<Uint8Array>> =>
+        (async function* () {
+          yield fileStart('image/jpeg');
+        })(),
+    ),
+    createAccessUrl: vi.fn().mockResolvedValue('https://media.test/signed'),
     deleteObject: vi.fn().mockResolvedValue(undefined),
   };
+  // Phase 12C: within quota unless a test says otherwise.
+  const quota = { reserve: vi.fn().mockResolvedValue(undefined) };
+  const cleanup = {
+    purge: vi.fn().mockResolvedValue({ purged: 1, failed: 0 }),
+  };
+  const scanner = new FakeMalwareScanner();
   const config = { get: () => undefined } as unknown as ConfigService;
   const service = new RecipientPhotoService(
     prisma as unknown as PrismaService,
     storage as unknown as MediaStorage,
+    scanner as unknown as MalwareScanner,
+    cleanup as unknown as MediaCleanup,
+    quota as unknown as StorageQuota,
     config,
   );
-  return { service, prisma, tx, recipientPhoto, storage };
+  return {
+    service,
+    prisma,
+    tx,
+    recipientPhoto,
+    storage,
+    scanner,
+    cleanup,
+    quota,
+  };
 };
 
 describe('RecipientPhotoService (Phase 09)', () => {
@@ -70,25 +118,25 @@ describe('RecipientPhotoService (Phase 09)', () => {
   );
   afterEach(() => vi.restoreAllMocks());
 
-  it('signs a PUT for a server-made key of ids only (no name, contact or note)', async () => {
+  it('signs an upload for a server-made path of ids only (no name, contact or note)', async () => {
     const { service, storage, recipientPhoto } = setup();
     const res = await service.createUploadUrl(OWNER, RECIPIENT, upload());
     const key = recipientPhoto.create.mock.calls[0][0].data.storageKey;
     expect(key).toMatch(
       new RegExp(
-        `^users/${OWNER}/recipients/${RECIPIENT}/photo/[0-9a-f-]{36}\\.jpg$`,
+        `^/for-after/users/${OWNER}/recipients/${RECIPIENT}/photo/[0-9a-f-]{36}\\.jpg$`,
       ),
     );
-    expect(storage.createUploadUrl).toHaveBeenCalledWith(
+    expect(storage.createUpload).toHaveBeenCalledWith(
       key,
       'image/jpeg',
+      2 * MB,
       600,
     );
     expect(res).toMatchObject({
       mediaAssetId: expect.any(String),
-      requiredHeaders: { 'Content-Type': 'image/jpeg' },
+      upload: { url: 'https://upload.test/files' },
     });
-    expect(JSON.stringify(res)).not.toContain(key);
   });
 
   it.each([
@@ -120,33 +168,53 @@ describe('RecipientPhotoService (Phase 09)', () => {
     expect(tx.recipient.count).toHaveBeenCalledWith({
       where: { id: RECIPIENT, ownerUserId: OWNER, deletedAt: null },
     });
-    expect(storage.createUploadUrl).not.toHaveBeenCalled();
+    expect(storage.createUpload).not.toHaveBeenCalled();
   });
 
-  it('complete: no object yet → 409; size mismatch → FAILED and the object removed', async () => {
+  it('complete: no file at this path → 409; size mismatch → FAILED and the file purged', async () => {
     const a = setup();
-    a.storage.headObject.mockResolvedValue(null);
-    await expect(a.service.complete(OWNER, RECIPIENT, PHOTO)).rejects.toThrow(
-      'The file has not been uploaded yet.',
-    );
+    a.storage.verifyUpload.mockResolvedValue(null);
+    await expect(
+      a.service.complete(OWNER, RECIPIENT, PHOTO, 'file1'),
+    ).rejects.toThrow('The file has not been uploaded yet.');
     const b = setup();
-    b.storage.headObject.mockResolvedValue({ sizeBytes: 1 });
-    await expect(b.service.complete(OWNER, RECIPIENT, PHOTO)).rejects.toThrow(
-      'does not match',
-    );
-    expect(b.recipientPhoto.update).toHaveBeenCalledWith({
-      where: { id: PHOTO },
-      data: { status: 'FAILED' },
+    b.storage.verifyUpload.mockResolvedValue({
+      sizeBytes: 1,
+      providerFileId: 'file1',
     });
-    expect(b.storage.deleteObject).toHaveBeenCalledWith(pending.storageKey);
+    await expect(
+      b.service.complete(OWNER, RECIPIENT, PHOTO, 'file1'),
+    ).rejects.toThrow('does not match');
+    expect(b.recipientPhoto.update.mock.calls[0][0]).toMatchObject({
+      where: { id: PHOTO },
+      data: { status: 'FAILED', providerFileId: 'file1' },
+    });
+    expect(b.cleanup.purge).toHaveBeenCalledWith('recipientPhoto', [ref]);
   });
 
-  it('complete: locks the live Recipient, supersedes the old photo, then READY; old object removed after commit', async () => {
-    const { service, tx, recipientPhoto, storage } = setup();
-    recipientPhoto.findMany.mockResolvedValue([
-      { id: 'old', storageKey: 'users/o/recipients/r/photo/old.png' },
-    ]);
-    const res = await service.complete(OWNER, RECIPIENT, PHOTO);
+  it('complete: an infected photo → FAILED and purged, never READY', async () => {
+    const { service, storage, recipientPhoto, cleanup } = setup();
+    storage.openRead.mockImplementation(async () =>
+      (async function* () {
+        yield new Uint8Array([
+          ...fileStart('image/jpeg'),
+          ...Buffer.from(FAKE_MALWARE),
+        ]);
+      })(),
+    );
+    await expect(
+      service.complete(OWNER, RECIPIENT, PHOTO, 'file1'),
+    ).rejects.toThrow('could not be accepted');
+    expect(recipientPhoto.update.mock.calls[0][0].data.status).toBe('FAILED');
+    expect(recipientPhoto.updateMany).not.toHaveBeenCalled();
+    expect(cleanup.purge).toHaveBeenCalledWith('recipientPhoto', [ref]);
+  });
+
+  it('complete: locks the live Recipient, supersedes the old photo, then READY; old file purged after commit', async () => {
+    const { service, tx, recipientPhoto, cleanup } = setup();
+    const old = { ...ref, id: 'old', storageKey: '/for-after/x/old.png' };
+    recipientPhoto.findMany.mockResolvedValue([old]);
+    const res = await service.complete(OWNER, RECIPIENT, PHOTO, 'file1');
     expect(res.status).toBe('READY');
     expect(tx.$queryRaw).toHaveBeenCalled();
     const [supersede, ready] = recipientPhoto.updateMany.mock.calls.map(
@@ -158,28 +226,17 @@ describe('RecipientPhotoService (Phase 09)', () => {
     });
     expect(ready).toMatchObject({
       where: { id: PHOTO, status: 'PENDING_UPLOAD', deletedAt: null },
-      data: { status: 'READY' },
+      data: { status: 'READY', providerFileId: 'file1' },
     });
-    expect(storage.deleteObject).toHaveBeenCalledWith(
-      'users/o/recipients/r/photo/old.png',
-    );
-  });
-
-  it('complete: an old object that cannot be deleted never undoes the new photo', async () => {
-    const { service, recipientPhoto, storage } = setup();
-    recipientPhoto.findMany.mockResolvedValue([{ id: 'old', storageKey: 'k' }]);
-    storage.deleteObject.mockRejectedValue(new Error('storage down'));
-    await expect(
-      service.complete(OWNER, RECIPIENT, PHOTO),
-    ).resolves.toMatchObject({ status: 'READY' });
+    expect(cleanup.purge).toHaveBeenCalledWith('recipientPhoto', [old]);
   });
 
   it('complete: a Recipient deleted meanwhile gets no photo (404, nothing superseded)', async () => {
     const { service, tx, recipientPhoto } = setup();
     tx.$queryRaw.mockResolvedValue([]);
-    await expect(service.complete(OWNER, RECIPIENT, PHOTO)).rejects.toThrow(
-      'Recipient not found.',
-    );
+    await expect(
+      service.complete(OWNER, RECIPIENT, PHOTO, 'file1'),
+    ).rejects.toThrow('Recipient not found.');
     expect(recipientPhoto.updateMany).not.toHaveBeenCalled();
   });
 
@@ -188,11 +245,11 @@ describe('RecipientPhotoService (Phase 09)', () => {
     await expect(
       service.createAccessUrl(OWNER, RECIPIENT, PHOTO),
     ).rejects.toThrow('Media is not ready.');
-    recipientPhoto.findFirst.mockResolvedValue({ ...pending, status: 'READY' });
+    recipientPhoto.findFirst.mockResolvedValue({ ...ref, status: 'READY' });
     const res = await service.createAccessUrl(OWNER, RECIPIENT, PHOTO);
-    expect(res.url).toBe('https://signed.get/x');
+    expect(res.url).toBe('https://media.test/signed');
     expect(storage.createAccessUrl).toHaveBeenCalledWith(
-      pending.storageKey,
+      { ...ref, status: 'READY' },
       300,
     );
     expect(recipientPhoto.findFirst.mock.calls.at(-1)![0].where).toMatchObject({
@@ -204,7 +261,7 @@ describe('RecipientPhotoService (Phase 09)', () => {
     expect(recipientPhoto.update).not.toHaveBeenCalled();
   });
 
-  it('remove: someone else’s photo is 404; a storage failure after the soft delete is swallowed', async () => {
+  it('remove: someone else’s photo is 404; otherwise soft delete, then purge', async () => {
     const a = setup();
     a.recipientPhoto.update.mockRejectedValue(
       new Prisma.PrismaClientKnownRequestError('none', {
@@ -215,10 +272,11 @@ describe('RecipientPhotoService (Phase 09)', () => {
     await expect(a.service.remove(OWNER, RECIPIENT, PHOTO)).rejects.toThrow(
       'Photo not found.',
     );
+    expect(a.cleanup.purge).not.toHaveBeenCalled();
     const b = setup();
-    b.storage.deleteObject.mockRejectedValue(new Error('storage down'));
     await expect(
       b.service.remove(OWNER, RECIPIENT, PHOTO),
     ).resolves.toBeUndefined();
+    expect(b.cleanup.purge).toHaveBeenCalledWith('recipientPhoto', [ref]);
   });
 });

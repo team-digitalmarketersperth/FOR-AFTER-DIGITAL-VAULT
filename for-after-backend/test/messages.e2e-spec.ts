@@ -109,8 +109,8 @@ describe('Messages (e2e, PostgreSQL)', () => {
       { ...forSofia(), recipientIds: ['not-a-uuid'] },
       { ...forSofia(), ownerUserId: crypto.randomUUID() },
       { ...forSofia(), status: 'RELEASED' },
-      // PHOTO/AUDIO/MIXED are valid since Step 8; VIDEO stays reserved.
-      { ...forSofia(), contentType: 'VIDEO' },
+      // PHOTO/AUDIO/MIXED are valid since Step 8, VIDEO since Phase 12.
+      { ...forSofia(), contentType: 'DOCUMENT' },
       { ...forSofia(), contentType: 'text' },
     ]) {
       await lisa.post(base).send(body).expect(400);
@@ -186,7 +186,7 @@ describe('Messages (e2e, PostgreSQL)', () => {
       { recipientIds: [] },
       { status: 'RELEASED' },
       { ownerUserId: crypto.randomUUID() },
-      { contentType: 'VIDEO' },
+      { contentType: 'DOCUMENT' },
     ]) {
       await lisa.patch(url).send(body).expect(400);
     }

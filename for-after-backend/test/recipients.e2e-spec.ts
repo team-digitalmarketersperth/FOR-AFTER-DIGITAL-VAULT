@@ -6,7 +6,10 @@ import request from 'supertest';
 import { adminSignIn } from './admin-sign-in.js';
 import { AuthModule } from '../src/auth/auth.module.js';
 import { configureApp } from '../src/config/app.setup.js';
+import { MalwareScanner } from '../src/media/scanner/malware-scanner.service.js';
 import { MediaStorage } from '../src/media/storage/media-storage.service.js';
+import { FakeMalwareScanner } from './fake-malware-scanner.js';
+import { FakeMediaStorage } from './fake-media-storage.js';
 import { PrismaModule } from '../src/prisma/prisma.module.js';
 import { PrismaService } from '../src/prisma/prisma.service.js';
 import { RecipientsModule } from '../src/recipients/recipients.module.js';
@@ -14,40 +17,16 @@ import { RecipientsModule } from '../src/recipients/recipients.module.js';
 // Real HTTP, validation, guards and PostgreSQL (DATABASE_URL from .env).
 // Sessions use MemoryStore so Redis is not needed. Fictional data only; the
 // test users are removed afterwards (cascade removes their recipients).
-// Phase 09: object storage is an in-memory fake (deterministic); a test
-// "browser upload" puts the object straight in. Real B2 runs in Playwright.
-class FakeStorage {
-  readonly objects = new Map<
-    string,
-    { sizeBytes: number; contentType: string }
-  >();
-  readonly signed: string[] = [];
-  createUploadUrl(key: string) {
-    const url = `https://storage.test/put/${key}?sig=fake`;
-    this.signed.push(url);
-    return Promise.resolve(url);
-  }
-  createAccessUrl(key: string) {
-    const url = `https://storage.test/get/${key}?sig=fake`;
-    this.signed.push(url);
-    return Promise.resolve(url);
-  }
-  headObject(key: string) {
-    return Promise.resolve(this.objects.get(key) ?? null);
-  }
-  deleteObject(key: string) {
-    this.objects.delete(key);
-    return Promise.resolve();
-  }
-  /** What the browser's PUT to the signed URL would store. */
-  put(uploadUrl: string, sizeBytes: number, contentType: string) {
-    const key = new URL(uploadUrl).pathname.replace('/put/', '');
-    this.objects.set(key, { sizeBytes, contentType });
-  }
-}
-
+// Phase 09: the media provider is the shared in-memory fake; a test "browser
+// upload" puts the file straight in. Real ImageKit runs only in the manual
+// local test (docs/media-storage.md).
 describe('Recipients (e2e, PostgreSQL)', () => {
-  const storage = new FakeStorage();
+  const storage = new FakeMediaStorage();
+  const scanner = new FakeMalwareScanner();
+  const stored = (key: string) =>
+    [...storage.files.values()].some((f) => f.key === key);
+  // Asset id → the provider file id its upload produced.
+  const fileIds = new Map<string, string>();
   let app: NestExpressApplication;
   let prisma: PrismaService;
   const run = Date.now();
@@ -79,6 +58,8 @@ describe('Recipients (e2e, PostgreSQL)', () => {
     })
       .overrideProvider(MediaStorage)
       .useValue(storage)
+      .overrideProvider(MalwareScanner)
+      .useValue(scanner)
       .compile();
     app = moduleRef.createNestApplication<NestExpressApplication>();
     configureApp(app, new session.MemoryStore());
@@ -310,9 +291,17 @@ describe('Recipients (e2e, PostgreSQL)', () => {
           sizeBytes,
         })
         .expect(201);
-      storage.put(target.body.uploadUrl, sizeBytes, PNG);
-      return target.body.mediaAssetId as string;
+      const id = target.body.mediaAssetId as string;
+      fileIds.set(
+        id,
+        storage.upload(target.body.upload, { sizeBytes, contentType: PNG }),
+      );
+      return id;
     };
+    const complete = (id: string, agent = lisa) =>
+      agent
+        .post(photoUrl(`/${id}/complete`))
+        .send({ providerFileId: fileIds.get(id) ?? 'never-uploaded' });
     const current = async () =>
       (await lisa.get(`/api/v1/recipients/${rid}`).expect(200)).body.photoId as
         string | null;
@@ -332,14 +321,16 @@ describe('Recipients (e2e, PostgreSQL)', () => {
     it('upload → verify → READY → the Recipient shows it; signed access only, no key in responses', async () => {
       const id = await uploadPhoto();
       expect(await current()).toBeNull();
-      const done = await lisa.post(photoUrl(`/${id}/complete`)).expect(200);
+      const done = await complete(id).expect(200);
       expect(done.body).toMatchObject({ id, kind: 'PHOTO', status: 'READY' });
       expect(await current()).toBe(id);
       const access = await lisa.get(photoUrl(`/${id}/access-url`)).expect(200);
-      expect(access.body.url).toMatch(/^https:\/\/storage\.test\/get\//);
+      expect(access.body.url).toMatch(/^https:\/\/media\.test\/signed/);
       const key = await keyOf(id);
       expect(key).toMatch(
-        new RegExp(`^users/[0-9a-f-]+/recipients/${rid}/photo/${id}\\.png$`),
+        new RegExp(
+          `^/for-after/users/[0-9a-f-]+/recipients/${rid}/photo/${id}\\.png$`,
+        ),
       );
       expect(key).not.toMatch(/Mum|note/i);
       const all = JSON.stringify([
@@ -348,7 +339,7 @@ describe('Recipients (e2e, PostgreSQL)', () => {
         (await lisa.get('/api/v1/recipients')).body,
       ]);
       expect(all).not.toContain(key);
-      expect(all).not.toContain('sig=fake');
+      expect(all).not.toMatch(/media\.test|providerFileId|storageProvider/);
     });
 
     it('an unfinished upload never replaces the current photo; completing it swaps and removes the old object', async () => {
@@ -356,18 +347,15 @@ describe('Recipients (e2e, PostgreSQL)', () => {
       const oldKey = await keyOf(old);
       const next = await uploadPhoto(2000);
       expect(await current()).toBe(old);
-      await lisa.post(photoUrl(`/${next}/complete`)).expect(200);
+      await complete(next).expect(200);
       expect(await current()).toBe(next);
-      expect(storage.objects.has(oldKey)).toBe(false);
+      expect(stored(oldKey)).toBe(false);
       await lisa.get(photoUrl(`/${old}/access-url`)).expect(404);
     });
 
     it('two uploads completed at once leave exactly one current photo', async () => {
       const [a, b] = [await uploadPhoto(3000), await uploadPhoto(4000)];
-      const results = await Promise.all([
-        lisa.post(photoUrl(`/${a}/complete`)),
-        lisa.post(photoUrl(`/${b}/complete`)),
-      ]);
+      const results = await Promise.all([complete(a), complete(b)]);
       expect(results.map((r) => r.status)).toEqual([200, 200]);
       const live = await prisma.recipientPhoto.findMany({
         where: { recipientId: rid, status: 'READY', deletedAt: null },
@@ -389,10 +377,13 @@ describe('Recipients (e2e, PostgreSQL)', () => {
       await send({ mimeType: 'image/svg+xml' }).expect(400);
       await send({ sizeBytes: 5 * 1024 * 1024 + 1 }).expect(400);
       const pending = (await send({}).expect(201)).body.mediaAssetId;
-      await lisa.post(photoUrl(`/${pending}/complete`)).expect(409);
+      await complete(pending).expect(409);
       const wrong = (await send({ sizeBytes: 50 }).expect(201)).body;
-      storage.put(wrong.uploadUrl, 49, PNG);
-      await lisa.post(photoUrl(`/${wrong.mediaAssetId}/complete`)).expect(400);
+      fileIds.set(
+        wrong.mediaAssetId,
+        storage.upload(wrong.upload, { sizeBytes: 49, contentType: PNG }),
+      );
+      await complete(wrong.mediaAssetId).expect(400);
       await lisa.get(photoUrl(`/${pending}/access-url`)).expect(409);
     });
 
@@ -407,7 +398,7 @@ describe('Recipients (e2e, PostgreSQL)', () => {
           sizeBytes: 10,
         })
         .expect(404);
-      await john.post(photoUrl(`/${id}/complete`)).expect(404);
+      await complete(id, john).expect(404);
       await john.get(photoUrl(`/${id}/access-url`)).expect(404);
       await john.delete(photoUrl(`/${id}`)).expect(404);
       expect(await current()).toBe(id);
@@ -418,19 +409,19 @@ describe('Recipients (e2e, PostgreSQL)', () => {
       const key = await keyOf(id);
       await lisa.delete(photoUrl(`/${id}`)).expect(204);
       expect(await current()).toBeNull();
-      expect(storage.objects.has(key)).toBe(false);
+      expect(stored(key)).toBe(false);
       await lisa.get(photoUrl(`/${id}/access-url`)).expect(404);
     });
 
     it('a deleted Recipient loses its photo and cannot be given one', async () => {
       const id = await uploadPhoto();
-      await lisa.post(photoUrl(`/${id}/complete`)).expect(200);
+      await complete(id).expect(200);
       const key = await keyOf(id);
       const late = await uploadPhoto(1234);
       await lisa.delete(`/api/v1/recipients/${rid}`).expect(204);
       await lisa.get(photoUrl(`/${id}/access-url`)).expect(404);
-      await lisa.post(photoUrl(`/${late}/complete`)).expect(404);
-      expect(storage.objects.has(key)).toBe(false);
+      await complete(late).expect(404);
+      expect(stored(key)).toBe(false);
       expect(
         await prisma.recipientPhoto.count({
           where: { recipientId: rid, deletedAt: null },

@@ -53,7 +53,7 @@ const eligible = {
 const visibleMedia = {
   status: 'READY',
   deletedAt: null,
-  kind: { in: ['PHOTO', 'AUDIO'] },
+  kind: { in: ['PHOTO', 'AUDIO', 'VIDEO'] },
 };
 
 describe('RecipientMessagesService', () => {
@@ -136,7 +136,7 @@ describe('RecipientMessagesService', () => {
     }
   });
 
-  it('media list: READY, live PHOTO/AUDIO of this message only, after the grant check', async () => {
+  it('media list: READY, live PHOTO/AUDIO/VIDEO of this message only, after the grant check', async () => {
     const { prisma, service } = setup();
     prisma.recipientMessageAccessGrant.findFirst.mockResolvedValue(grant());
     await service.findMedia(SOFIA, MSG);
@@ -157,15 +157,20 @@ describe('RecipientMessagesService', () => {
   it('access URL: signed only after grant + READY media checks, never stored', async () => {
     const { prisma, storage, service } = setup();
     prisma.recipientMessageAccessGrant.findFirst.mockResolvedValue(grant());
-    prisma.mediaAsset.findFirst.mockResolvedValue({ storageKey: 'k/1.jpg' });
+    const file = {
+      storageKey: 'k/1.jpg',
+      storageProvider: 'IMAGEKIT',
+      providerFileId: 'f1',
+    };
+    prisma.mediaAsset.findFirst.mockResolvedValue(file);
     const res = await service.createMediaAccessUrl(SOFIA, MSG, MEDIA);
     expect(res.url).toBe('https://storage.test/signed-get');
     expect(res.expiresAt.getTime()).toBeGreaterThan(Date.now());
     expect(prisma.mediaAsset.findFirst).toHaveBeenCalledWith({
       where: { id: MEDIA, messageId: MSG, ...visibleMedia },
-      select: { storageKey: true },
+      select: { storageKey: true, storageProvider: true, providerFileId: true },
     });
-    expect(storage.createAccessUrl).toHaveBeenCalledWith('k/1.jpg', 300);
+    expect(storage.createAccessUrl).toHaveBeenCalledWith(file, 300);
     // Nothing written anywhere.
     expect(Object.keys(prisma.mediaAsset)).toEqual(['findMany', 'findFirst']);
   });

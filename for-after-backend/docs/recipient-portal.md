@@ -36,6 +36,7 @@
 - **`MessageRecipient` = pre-release assignment. `RecipientMessageAccessGrant` = post-release authorization.** The portal
   never authorizes from `MessageRecipient` or from the live `Recipient.email`.
 - **Read-only.** No Memory Vault, My Story, My Wishes, Trusted Contacts, other recipients, sender account data or schedules.
+  A Message made from a story or a wish (Phase 14B / 15B) is an ordinary Message with its own copied files.
 
 > ℹ️ A Step 14 death report never creates grants. Grants still come **only** from a successful release.
 
@@ -184,7 +185,7 @@ Prefix `/api/v1`.
 
 - `404 "Message not found."` for draft, scheduled, cancelled, deleted, unknown and other people's Messages alike; never
   `403`, which would confirm someone else's released content exists. Malformed UUIDs → `400`.
-- **Media:** only `READY`, non-deleted `PHOTO`/`AUDIO` assets of that Message. Pending, failed, deleted, VIDEO or other
+- **Media:** only `READY`, non-deleted `PHOTO`/`AUDIO`/`VIDEO` (Phase 12) assets of that Message. Pending, failed, deleted or other
   Messages' assets → `404 "Media not found."` and nothing is signed. The URL is a short-lived signed GET
   (`MEDIA_ACCESS_URL_TTL_SECONDS`), created only after the grant check, never stored or logged.
 - `hasMedia` counts the same visible media.

@@ -50,8 +50,12 @@ model User {
   messages        Message[]
   mediaAssets     MediaAsset[]
 
-  memoryVaultItems       MemoryVaultItem[]
-  memoryVaultMediaAssets MemoryVaultMediaAsset[]
+  memoryVaultItems                   MemoryVaultItem[]
+  memoryVaultMediaAssets             MemoryVaultMediaAsset[]
+  memoryVaultTags                    MemoryVaultTag[]
+  myStoryMediaAssets                 MyStoryMediaAsset[]
+  myWishMediaAssets                  MyWishMediaAsset[]
+  myWishesDisclaimerAcknowledgements MyWishesDisclaimerAcknowledgement[]
 
   myStoryResponses MyStoryResponse[]
   myWishResponses  MyWishResponse[]
@@ -152,6 +156,8 @@ enum AuditEventType {
   TRUSTED_CONTACT_INVITATION_SENT
   TRUSTED_CONTACT_INVITATION_ACCEPTED
   TRUSTED_CONTACT_INVITATION_DECLINED
+  // Phase 15A: the version only (never wish content or the notice text).
+  MY_WISHES_DISCLAIMER_ACKNOWLEDGED
 }
 
 // Admin actors (Step 16), the Customer acting on their own account (Step 22)
@@ -299,9 +305,9 @@ enum DeathVerificationCaseStatus {
 // explicit admin verification (VERIFIED) activates death-triggered Messages;
 // nothing else changes the User, Messages, schedules, releases or grants.
 model DeathVerificationCase {
-  id          String @id @default(uuid()) @db.Uuid
-  ownerUserId String @db.Uuid
-  owner       User   @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  id                 String  @id @default(uuid()) @db.Uuid
+  ownerUserId        String  @db.Uuid
+  owner              User    @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
   // The closed (CANCELLED/REJECTED) case this one follows, as plain history.
   reopenedFromCaseId String? @db.Uuid
 
@@ -624,9 +630,18 @@ enum MediaAssetStatus {
   FAILED
 }
 
-// A file attached to a draft Message. The bytes live in a private
-// S3-compatible bucket and never pass through the API; only this metadata is
-// stored. storageKey is server-generated and never leaves the API.
+// Where a media file's bytes live. New uploads always go to IMAGEKIT (Phase 12);
+// B2 rows were uploaded before the move and stay readable through the legacy
+// adapter. storageKey is the provider path either way, never reinterpreted.
+enum MediaStorageProvider {
+  B2
+  IMAGEKIT
+}
+
+// A file attached to a draft Message. The bytes live with a private media
+// provider (ImageKit; legacy rows on B2) and never pass through the API; only
+// this metadata is stored. storageKey, providerFileId and storageProvider are
+// server-controlled and never leave the API.
 model MediaAsset {
   id          String  @id @default(uuid()) @db.Uuid
   ownerUserId String  @db.Uuid
@@ -637,6 +652,13 @@ model MediaAsset {
   kind       MediaKind
   status     MediaAssetStatus @default(PENDING_UPLOAD)
   storageKey String           @unique
+
+  storageProvider  MediaStorageProvider @default(IMAGEKIT)
+  // Provider's own id, set once the upload is verified (ImageKit fileId).
+  providerFileId   String?
+  // Set once the provider object is gone; a soft-deleted row without it is
+  // retried by the media cleanup reconciler.
+  storageDeletedAt DateTime?
 
   originalFileName String // metadata only, never used as a path
   mimeType         String
@@ -676,6 +698,8 @@ model MemoryVaultItem {
   textContent String?
 
   mediaAssets MemoryVaultMediaAsset[]
+  tags        MemoryVaultItemTag[]
+  storyLinks  MyStoryMemoryLink[]
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -683,6 +707,34 @@ model MemoryVaultItem {
 
   @@index([ownerUserId])
   @@index([ownerUserId, category])
+}
+
+// A Customer's own Memory Vault tag (Phase 13A). Given by name, never by id:
+// "Family", " family " and "FAMILY" are one tag (normalizedName = trimmed,
+// inner whitespace collapsed, lower-cased); name keeps the first spelling.
+// Kept when no memory uses it any more, for reuse.
+model MemoryVaultTag {
+  id             String @id @default(uuid()) @db.Uuid
+  ownerUserId    String @db.Uuid
+  owner          User   @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  name           String
+  normalizedName String
+
+  items MemoryVaultItemTag[]
+
+  createdAt DateTime @default(now())
+
+  @@unique([ownerUserId, normalizedName])
+}
+
+model MemoryVaultItemTag {
+  memoryVaultItemId String          @db.Uuid
+  memoryVaultItem   MemoryVaultItem @relation(fields: [memoryVaultItemId], references: [id], onDelete: Cascade)
+  tagId             String          @db.Uuid
+  tag               MemoryVaultTag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([memoryVaultItemId, tagId])
+  @@index([tagId])
 }
 
 // Same storage, rules and lifecycle as MediaAsset (Step 7), attached to a
@@ -697,6 +749,13 @@ model MemoryVaultMediaAsset {
   kind       MediaKind
   status     MediaAssetStatus @default(PENDING_UPLOAD)
   storageKey String           @unique
+
+  storageProvider  MediaStorageProvider @default(IMAGEKIT)
+  // Provider's own id, set once the upload is verified (ImageKit fileId).
+  providerFileId   String?
+  // Set once the provider object is gone; a soft-deleted row without it is
+  // retried by the media cleanup reconciler.
+  storageDeletedAt DateTime?
 
   originalFileName String // metadata only, never used as a path
   mimeType         String
@@ -726,13 +785,64 @@ model MyStoryResponse {
   promptTextSnapshot String
   promptVersion      Int
 
-  textContent String
+  // Optional since Phase 14B: an answer may be photos/recordings or linked
+  // memories only. The service never lets a saved answer be empty.
+  textContent String?
+
+  mediaAssets MyStoryMediaAsset[]
+  memoryLinks MyStoryMemoryLink[]
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
   @@unique([ownerUserId, promptKey])
+}
+
+// Phase 14B: PHOTO/AUDIO/VIDEO on a My Story answer. Same storage, rules and
+// lifecycle as MemoryVaultMediaAsset (ImageKit, verification, malware scan,
+// quota, cleanup). Private: only its owner, never Recipients.
+model MyStoryMediaAsset {
+  id                String          @id @default(uuid()) @db.Uuid
+  ownerUserId       String          @db.Uuid
+  owner             User            @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  myStoryResponseId String          @db.Uuid
+  myStoryResponse   MyStoryResponse @relation(fields: [myStoryResponseId], references: [id], onDelete: Cascade)
+
+  kind       MediaKind
+  status     MediaAssetStatus @default(PENDING_UPLOAD)
+  storageKey String           @unique
+
+  storageProvider  MediaStorageProvider @default(IMAGEKIT)
+  providerFileId   String?
+  storageDeletedAt DateTime?
+
+  originalFileName String // metadata only, never used as a path
+  mimeType         String
+  sizeBytes        Int // expected size, verified against storage on complete
+
+  uploadedAt DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([ownerUserId])
+  @@index([myStoryResponseId, status])
+}
+
+// Phase 14B: private context: a My Story answer points at the Customer's own
+// memories. A link never shares anything and is never copied into a Message.
+model MyStoryMemoryLink {
+  myStoryResponseId String          @db.Uuid
+  myStoryResponse   MyStoryResponse @relation(fields: [myStoryResponseId], references: [id], onDelete: Cascade)
+  memoryVaultItemId String          @db.Uuid
+  memoryVaultItem   MemoryVaultItem @relation(fields: [memoryVaultItemId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@id([myStoryResponseId, memoryVaultItemId])
+  @@index([memoryVaultItemId])
 }
 
 // A customer's private answer to one My Wishes prompt: personal preferences
@@ -749,13 +859,65 @@ model MyWishResponse {
   promptTextSnapshot String
   promptVersion      Int
 
-  textContent String
+  // Optional since Phase 15B: a wish may be photos/recordings only. The
+  // service never lets a saved wish be empty.
+  textContent String?
+
+  mediaAssets MyWishMediaAsset[]
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
   @@unique([ownerUserId, promptKey])
+}
+
+// Phase 15B: PHOTO/AUDIO/VIDEO on a My Wishes answer. Same storage, rules and
+// lifecycle as MyStoryMediaAsset (ImageKit, verification, malware scan,
+// quota, cleanup). Private: only its owner, never Recipients, Trusted
+// Contacts or admins. Shared only as a copy inside a new Message.
+model MyWishMediaAsset {
+  id               String         @id @default(uuid()) @db.Uuid
+  ownerUserId      String         @db.Uuid
+  owner            User           @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  myWishResponseId String         @db.Uuid
+  myWishResponse   MyWishResponse @relation(fields: [myWishResponseId], references: [id], onDelete: Cascade)
+
+  kind       MediaKind
+  status     MediaAssetStatus @default(PENDING_UPLOAD)
+  storageKey String           @unique
+
+  storageProvider  MediaStorageProvider @default(IMAGEKIT)
+  providerFileId   String?
+  storageDeletedAt DateTime?
+
+  originalFileName String // metadata only, never used as a path
+  mimeType         String
+  sizeBytes        Int // expected size, verified against storage on complete
+
+  uploadedAt DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([ownerUserId])
+  @@index([myWishResponseId, status])
+}
+
+// Phase 15A (approved 2026-10-08): a Customer read the My Wishes non-legal
+// notice in this version before writing wishes. An acknowledgement only:
+// never consent, a waiver or anything legal. One row per user and version,
+// kept as history (a new version needs a new row). Existing users are never
+// backfilled. No IP, device or wish content.
+model MyWishesDisclaimerAcknowledgement {
+  id                String   @id @default(uuid()) @db.Uuid
+  userId            String   @db.Uuid
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  disclaimerVersion Int
+  acknowledgedAt    DateTime @default(now())
+
+  @@unique([userId, disclaimerVersion])
 }
 
 // Phase 09: a Customer's private profile photo for one Recipient. Same storage,
@@ -772,6 +934,13 @@ model RecipientPhoto {
   kind       MediaKind        @default(PHOTO)
   status     MediaAssetStatus @default(PENDING_UPLOAD)
   storageKey String           @unique
+
+  storageProvider  MediaStorageProvider @default(IMAGEKIT)
+  // Provider's own id, set once the upload is verified (ImageKit fileId).
+  providerFileId   String?
+  // Set once the provider object is gone; a soft-deleted row without it is
+  // retried by the media cleanup reconciler.
+  storageDeletedAt DateTime?
 
   originalFileName String // metadata only, never used as a path
   mimeType         String

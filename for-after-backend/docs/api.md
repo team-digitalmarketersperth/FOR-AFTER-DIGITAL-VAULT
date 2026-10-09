@@ -129,9 +129,9 @@ Admin user listing is `/admin/users` (Step 16); there is deliberately no admin c
 | `POST` | `/recipients` | Create recipient (body: `firstName`, `lastName`, `relationship`, `email`, `mobile`) |
 | `GET` | `/recipients/:id` | Get recipient |
 | `PATCH` | `/recipients/:id` | Update recipient |
-| `DELETE`| `/recipients/:id` | Remove recipient (soft delete, 204); its photo is soft-deleted and its object removed (best effort) |
-| `POST` | `/recipients/:id/photo/upload-url` | Phase 09. Body like media uploads (`kind: PHOTO`, `originalFileName`, `mimeType` JPEG/PNG/WebP, `sizeBytes` ≤ `RECIPIENT_PHOTO_MAX_BYTES`, 5 MB) → `{mediaAssetId, uploadUrl, expiresAt, requiredHeaders}` (10 min presigned PUT). Foreign/deleted recipient `404` |
-| `POST` | `/recipients/:id/photo/:photoId/complete` | HEAD-verifies size/type, then READY **and** current in one transaction (the previous photo is superseded only now; its object removed after commit, best effort). Not uploaded `409`, mismatch `400` (FAILED) |
+| `DELETE`| `/recipients/:id` | Remove recipient (soft delete, 204); its photo is soft-deleted and its file deleted (best effort, retried) |
+| `POST` | `/recipients/:id/photo/upload-url` | Phase 09. Body like media uploads (`kind: PHOTO`, `originalFileName`, `mimeType` JPEG/PNG/WebP, `sizeBytes` ≤ `RECIPIENT_PHOTO_MAX_BYTES`, 5 MB) → `{mediaAssetId, upload: {url, fields}, expiresAt}` (signed ImageKit upload, 10 min). Foreign/deleted recipient `404` |
+| `POST` | `/recipients/:id/photo/:photoId/complete` | Body `{providerFileId}`. Verifies the ImageKit file (path, privacy, size, type, magic bytes), then READY **and** current in one transaction (the previous photo is superseded only now; its file deleted after commit). Not uploaded `409`, mismatch `400` (FAILED) |
 | `GET` | `/recipients/:id/photo/:photoId/access-url` | `{url, expiresAt}`: 5 min signed GET for the current READY photo only; never stored or logged |
 | `DELETE` | `/recipients/:id/photo/:photoId` | Removes the photo (or cancels a pending upload) → `204`; the Recipient shows initials (`photoId: null`) |
 
@@ -176,7 +176,7 @@ serialised by a lock on the Customer row). Every response carries `invitation: {
 
 Implemented in Step 5. All five routes require a session **and** the `CUSTOMER` role (admins get 403; any future admin access needs separate audited APIs).
 `ownerUserId` always comes from the session. `status` is server-controlled: every message is created `DRAFT`, and neither field is accepted in a body (400).
-Body fields (create): `title` (required, trimmed, 1-200), `contentType` (optional, default `TEXT`; `TEXT` | `PHOTO` | `AUDIO` | `MIXED`, `VIDEO` returns 400),
+Body fields (create): `title` (required, trimmed, 1-200), `contentType` (optional, default `TEXT`; `TEXT` | `PHOTO` | `AUDIO` | `VIDEO` | `MIXED`; VIDEO since Phase 12),
 `textContent` (optional, plain text, outer whitespace trimmed, blank stored as `null`, max 20,000, product-configurable), `recipientIds` (required, 1-100 unique UUIDs).
 Drafts may be incomplete (e.g. a `PHOTO` draft before its upload, `TEXT` with no text yet): completeness is checked when scheduling (see `docs/message-composition.md`).
 `PATCH` accepts the same fields, all optional. Only `textContent` accepts `null` (clears it); a missing field is left unchanged. `recipientIds` replaces the whole assignment list atomically.
@@ -226,27 +226,31 @@ A `RELEASED` message is read-only: message `PATCH`/`DELETE`, media upload/comple
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
 | `POST` | `/messages/:messageId/media/upload-url` | Authorize an upload to an own DRAFT message (201) |
-| `POST` | `/messages/:messageId/media/:mediaAssetId/complete` | Verify the upload in storage; `READY` (200) |
+| `POST` | `/messages/:messageId/media/:mediaAssetId/complete` | Body `{providerFileId}`. Verify the upload with the provider; `READY` (200) |
 | `GET` | `/messages/:messageId/media` | List the message's media |
 | `GET` | `/messages/:messageId/media/:mediaAssetId/access-url` | Short-lived signed download URL (READY only) |
-| `DELETE`| `/messages/:messageId/media/:mediaAssetId` | Soft delete, then remove the stored object (204) |
+| `DELETE`| `/messages/:messageId/media/:mediaAssetId` | Soft delete, then delete the provider file (204) |
 
-Implemented in Step 7. All five routes require a session **and** the `CUSTOMER` role (others get 403); non-UUID ids return 400.
-**File bytes never go through the API**: the client `PUT`s the file straight to the private bucket using `uploadUrl`, sending exactly `requiredHeaders`
-(the signed `Content-Type`) and **no** session cookie or `Authorization` header. See `docs/media-storage.md`.
+Implemented in Step 7; ImageKit since Phase 12. All five routes require a session **and** the `CUSTOMER` role (others get 403); non-UUID ids return 400.
+**File bytes never go through the API**: the browser POSTs the file straight to ImageKit (`upload.url`, multipart: every `upload.fields`
+entry plus the file as `file`), with **no** session cookie or `Authorization` header, then calls `complete` with the returned `fileId`.
+See `docs/media-storage.md`.
 
-Upload body: `kind` (`PHOTO` | `AUDIO`; `VIDEO` is 400), `originalFileName` (trimmed, 1-255, metadata only), `mimeType`, `sizeBytes` (integer >= 1).
+Upload body: `kind` (`PHOTO` | `AUDIO` | `VIDEO`), `originalFileName` (trimmed, 1-255, metadata only), `mimeType`, `sizeBytes` (integer >= 1).
 
-| kind | mimeType | Max size (default, `MEDIA_*_MAX_BYTES`) |
+| kind | mimeType | Max size (default, `MEDIA_*_MAX_BYTES`; ImageKit Free plan limits) |
 | :--- | :--- | :--- |
 | `PHOTO` | `image/jpeg`, `image/png`, `image/webp` | 20 MB (20,971,520) |
-| `AUDIO` | `audio/mpeg`, `audio/mp4`, `audio/webm`, `audio/wav` | 100 MB (104,857,600) |
+| `AUDIO` | `audio/mpeg`, `audio/mp4`, `audio/webm`, `audio/wav` | 25 MB (26,214,400) |
+| `VIDEO` | `video/mp4`, `video/webm` (message media only) | 100 MB (104,857,600) |
 
-A MIME type of the other kind, SVG, wildcards, oversize or any extra field (`ownerUserId`, `storageKey`, `status`, ...) returns 400.
-Upload response: `{ mediaAssetId, uploadUrl, expiresAt, requiredHeaders: { "Content-Type" } }` (URL valid `MEDIA_UPLOAD_URL_TTL_SECONDS`, default 600).
-`complete`: HEADs the object. Not uploaded yet: 409 (retry after uploading). Size or type differs: 400 and the asset becomes `FAILED` (request a new URL).
-Already `READY`: returns it unchanged.
-Media response: `{ id, kind, status, originalFileName, mimeType, sizeBytes, uploadedAt, createdAt, updatedAt }`; never `storageKey`, `ownerUserId` or `deletedAt`.
+A MIME type of another kind, SVG, wildcards, oversize or any extra field (`ownerUserId`, `storageKey`, `status`, ...) returns 400.
+Upload response: `{ mediaAssetId, upload: { url, fields }, expiresAt }` (the signed token in `fields` is valid `MEDIA_UPLOAD_URL_TTL_SECONDS`, default 600).
+The fields fix the path, privacy (private), no overwrite and the maximum size; the browser cannot change them.
+`complete` body: `{ providerFileId }` (the `fileId` ImageKit returned; letters, digits, `_`, `-`). Only a hint: the file must be at this
+asset's own path. Not uploaded yet (or another path): 409. Size, privacy, provider type or file signature (magic bytes) differs: 400 and the
+asset becomes `FAILED` (request a new upload). Already `READY`: returns it unchanged. No `PROCESSING` state (videos are served as uploaded).
+Media response: `{ id, kind, status, originalFileName, mimeType, sizeBytes, uploadedAt, createdAt, updatedAt }`; never `storageKey`, `storageProvider`, `providerFileId`, `ownerUserId` or `deletedAt`.
 Access response: `{ url, expiresAt }` (default 300 s); only for `READY` media (otherwise 409).
 Message state: upload, complete and delete need a **DRAFT** message (`SCHEDULED`/`RELEASED`/`CANCELLED` give 409; unschedule first). List and access-url work in any state.
 Uploads do not depend on the message's `contentType` (a TEXT draft may upload a photo before switching to MIXED); scheduling checks the final composition.
@@ -257,15 +261,17 @@ Owner-only: recipients, trusted contacts and admins have no media access yet.
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
 | `POST` | `/memory-vault` | Create a memory (201) |
-| `GET` | `/memory-vault` | List own memories, newest first; optional `?category=FAMILY` |
+| `GET` | `/memory-vault` | One page of own memories, newest first: `?page&limit` (25, max 100) `&category&search&tag`, combinable; `{ items, pagination }` (Phase 13A) |
+| `GET` | `/memory-vault/tags` | Own tags `[{ id, name }]` |
 | `GET` | `/memory-vault/:memoryVaultItemId` | Get one |
-| `PATCH` | `/memory-vault/:memoryVaultItemId` | Update `title`, `category`, `textContent` |
-| `DELETE`| `/memory-vault/:memoryVaultItemId` | Soft delete (204); its media becomes unreachable |
-| `POST` | `/memory-vault/:memoryVaultItemId/media/upload-url` | Authorize a PHOTO/AUDIO upload (201) |
-| `POST` | `/memory-vault/:memoryVaultItemId/media/:mediaAssetId/complete` | Verify the upload; `READY` (200) |
+| `PATCH` | `/memory-vault/:memoryVaultItemId` | Update `title`, `category`, `textContent`; `tags` (names) replaces the tag set |
+| `DELETE`| `/memory-vault/:memoryVaultItemId` | Soft delete (204); its media is soft-deleted with it and the files deleted |
+| `POST` | `/memory-vault/:memoryVaultItemId/messages` | Phase 13B: new DRAFT Message from the memory (201). Body `{ title, contentType, includeText, mediaAssetIds, recipientIds }`; files are copied and re-verified; the memory never changes |
+| `POST` | `/memory-vault/:memoryVaultItemId/media/upload-url` | Authorize a PHOTO/AUDIO upload (201); VIDEO is 400 here |
+| `POST` | `/memory-vault/:memoryVaultItemId/media/:mediaAssetId/complete` | Body `{providerFileId}`. Verify the upload; `READY` (200) |
 | `GET` | `/memory-vault/:memoryVaultItemId/media` | List the memory's media |
 | `GET` | `/memory-vault/:memoryVaultItemId/media/:mediaAssetId/access-url` | Short-lived signed download URL (READY only) |
-| `DELETE`| `/memory-vault/:memoryVaultItemId/media/:mediaAssetId` | Soft delete, then remove the stored object (204) |
+| `DELETE`| `/memory-vault/:memoryVaultItemId/media/:mediaAssetId` | Soft delete, then delete the provider file (204) |
 
 Implemented in Step 9 (`docs/memory-vault.md`). Session + `CUSTOMER` role (others 403); non-UUID ids 400.
 Body: `title` (required, trimmed, 1-200), `category` (`FAMILY`, `TRAVEL`, `CHILDHOOD`, `FUNNY_STORIES`, `LIFE_LESSONS`, `RECIPES`,
@@ -278,11 +284,17 @@ always editable). Missing, deleted or someone else's memory/media: 404.
 ### My Story
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
-| `GET` | `/my-story/prompts` | Prompt catalogue with the customer's answers; optional `?category=CHILDHOOD` |
+| `GET` | `/my-story/prompts` | Approved V1 catalogue (9 categories, 22 prompts, Phase 14A) with the customer's answers; optional `?category=CHILDHOOD` |
 | `GET` | `/my-story/prompts/:promptKey` | One prompt with the customer's answer (or `response: null`) |
 | `GET` | `/my-story/prompts/:promptKey/response` | The customer's answer (404 if not answered) |
-| `PUT` | `/my-story/prompts/:promptKey/response` | Create, update or restore the answer (always 200) |
-| `DELETE`| `/my-story/prompts/:promptKey/response` | Soft delete (204); the prompt can be answered again |
+| `PUT` | `/my-story/prompts/:promptKey/response` | Create, update or restore the answer (always 200). Body `{ textContent?, memoryVaultItemIds? }` (text max 50,000, null clears; ids replace the linked memories); never empty; an edit keeps the answered wording |
+| `DELETE`| `/my-story/prompts/:promptKey/response` | Soft delete (204) with its files and memory links; the prompt can be answered again |
+| `POST` | `/my-story/prompts/:promptKey/response/messages` | Phase 14B: new DRAFT Message from chosen parts `{ title, contentType, includeText, mediaAssetIds, recipientIds }` (201); the answer stays private |
+| `POST` | `/my-story/prompts/:promptKey/response/media/upload-url` | Phase 14B: authorize a PHOTO/AUDIO/VIDEO upload (201); quota checked |
+| `POST` | `/my-story/prompts/:promptKey/response/media/:mediaAssetId/complete` | Verify + scan the upload; `READY` (200) |
+| `GET` | `/my-story/prompts/:promptKey/response/media` | The answer's files |
+| `GET` | `/my-story/prompts/:promptKey/response/media/:mediaAssetId/access-url` | Short-lived signed URL (READY only) |
+| `DELETE`| `/my-story/prompts/:promptKey/response/media/:mediaAssetId` | Soft delete, then delete the provider file (204) |
 
 Implemented in Step 10 (`docs/my-story.md`). Session + `CUSTOMER` role (others 403).
 `:promptKey` is a catalogue key such as `childhood.earliest-memory`: malformed (uppercase, slashes, `..`) 400, unknown 404.
@@ -298,12 +310,21 @@ There is no separate `/my-story/responses` list: `GET /my-story/prompts` already
 | `GET` | `/my-wishes/prompts` | Wish prompts with the customer's answers; optional `?category=CEREMONY` |
 | `GET` | `/my-wishes/prompts/:promptKey` | One prompt with the customer's answer (or `response: null`) |
 | `GET` | `/my-wishes/prompts/:promptKey/response` | The customer's answer (404 if not answered) |
-| `PUT` | `/my-wishes/prompts/:promptKey/response` | Create, update or restore the answer (always 200) |
-| `DELETE`| `/my-wishes/prompts/:promptKey/response` | Soft delete (204); the prompt can be answered again |
+| `PUT` | `/my-wishes/prompts/:promptKey/response` | Create, update or restore the answer (always 200). Body `{ textContent? }` (null clears; Phase 15B); never empty |
+| `GET` | `/my-wishes/disclaimer` | Phase 15A: the current My Wishes notice `{ version, text, requiresAcknowledgement, acknowledged, acknowledgedAt }` |
+| `POST` | `/my-wishes/disclaimer/acknowledgement` | Body `{ version }`: acknowledge the current version (idempotent; 409 if outdated). `PUT` of a wish is 409 until done |
+| `DELETE`| `/my-wishes/prompts/:promptKey/response` | Soft delete (204) with its files; the prompt can be answered again. Messages made from it stay |
+| `POST` | `/my-wishes/prompts/:promptKey/response/messages` | Phase 15B: new independent DRAFT Message from chosen parts `{ title, contentType, includeText, mediaAssetIds, recipientIds }` (201); the wish stays private. After-death sharing = the Message's `ON_DEATH` / `AFTER_DEATH` schedule |
+| `POST` | `/my-wishes/prompts/:promptKey/response/media/upload-url` | Phase 15B: authorize a PHOTO/AUDIO/VIDEO upload (201); quota checked; 409 until the notice is acknowledged |
+| `POST` | `/my-wishes/prompts/:promptKey/response/media/:mediaAssetId/complete` | Verify + scan the upload; `READY` (200) |
+| `GET` | `/my-wishes/prompts/:promptKey/response/media` | The wish's files |
+| `GET` | `/my-wishes/prompts/:promptKey/response/media/:mediaAssetId/access-url` | Short-lived signed URL (READY only) |
+| `DELETE`| `/my-wishes/prompts/:promptKey/response/media/:mediaAssetId` | Soft delete, then delete the provider file (204) |
 
 Implemented in Step 11 (`docs/my-wishes.md`). Personal preferences and guidance only, not a will or legal document.
 Same rules and response shapes as My Story: session + `CUSTOMER` role (others 403); malformed `:promptKey` 400, unknown 404
-(My Story keys are unknown here); PUT body `{ "textContent": "..." }` only (required, not blank, max 20,000, stored as written);
+(My Story keys are unknown here); PUT body `{ "textContent": "..." }` only (optional since Phase 15B, null clears; when sent not
+blank, max 20,000, stored as written; a wish with no text and no READY file is 400); responses add `mediaCount`;
 any other field (`ownerUserId`, `promptVersion`, `promptTextSnapshot`, `recipientIds`, `acceptedLegalDisclaimer`, ...) 400.
 `?category`: `CEREMONY`, `ATMOSPHERE`, `MUSIC_AND_READINGS`, `PEOPLE_AND_TRADITIONS`, `PERSONAL_PREFERENCES`, `PERSONAL_MESSAGE`,
 `OTHER`; anything else 400. No `/my-wishes/responses` list and no `/wishes` route.
@@ -313,7 +334,7 @@ any other field (`ownerUserId`, `promptVersion`, `promptTextSnapshot`, `recipien
 | :--- | :--- | :--- |
 | `GET` | `/recipient/messages` | Step 13. Released Messages granted to the verified email, newest first |
 | `GET` | `/recipient/messages/:messageId` | Step 13. Released content (`textContent`); `404` without a grant |
-| `GET` | `/recipient/messages/:messageId/media` | Step 13. READY PHOTO/AUDIO only |
+| `GET` | `/recipient/messages/:messageId/media` | Step 13. READY PHOTO/AUDIO/VIDEO only |
 | `GET` | `/recipient/messages/:messageId/media/:mediaAssetId/access-url` | Step 13. Short-lived signed GET URL |
 
 Recipient session only (`for_after_recipient_session`); a Customer session gets `401`. Read-only. Draft, scheduled, deleted,
@@ -372,7 +393,7 @@ Verify/reject also write `DEATH_VERIFICATION_VERIFIED` / `_REJECTED` to the gene
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
 | `POST` | `/webhooks/stripe` | Stripe lifecycle events |
-| `POST` | `/webhooks/mux` | Video transcode completion |
+| — | (no video webhook) | Phase 12: videos are served as uploaded from ImageKit; no transcoding or processing webhook |
 
 ---
 

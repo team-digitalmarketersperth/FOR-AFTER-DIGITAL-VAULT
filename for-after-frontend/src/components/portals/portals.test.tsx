@@ -170,6 +170,22 @@ describe('Released messages (FE-22, FE-23)', () => {
     expect(api.calls.every((c) => c.path.startsWith('/recipient/'))).toBe(true);
   });
 
+  it('VIDEO (Phase 12): plays from a signed URL fetched only when asked, view-only', async () => {
+    const api = routeFetch({
+      'GET /recipient/messages/m1': json(200, { ...released, contentType: 'VIDEO', textContent: null }),
+      'GET /recipient/messages/m1/media': json(200, [
+        { id: 'v1', kind: 'VIDEO', originalFileName: 'hello.mp4', mimeType: 'video/mp4', sizeBytes: 9000, uploadedAt: null },
+      ]),
+      'GET /recipient/messages/m1/media/v1/access-url': json(200, { url: 'https://media.test/v?ik-s=1', expiresAt: '2030-01-01T00:00:00Z' }),
+    });
+    renderWithClient(<ReleasedMessageView id="m1" />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Watch' }));
+    expect(await screen.findByLabelText('Play hello.mp4')).toHaveAttribute('src', 'https://media.test/v?ik-s=1');
+    expect(api.called('GET', '/recipient/messages/m1/media/v1/access-url')).toHaveLength(1);
+    expect(screen.queryByText(/can.t be shown here/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Remove|Add a video/ })).not.toBeInTheDocument();
+  });
+
   it('keeps a failed media link local, with a retry that fetches a fresh URL', async () => {
     let attempts = 0;
     routeFetch({

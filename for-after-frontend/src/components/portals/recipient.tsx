@@ -8,11 +8,7 @@ import { OtpSignIn, WrongPlaceNote } from '@/components/portals/otp-sign-in';
 import { PageHeader } from '@/components/shared/page-header';
 import { EmptyState, QueryView } from '@/components/shared/states';
 import { useReleasedMessage, useReleasedMessages } from '@/hooks/use-portals';
-import type { ReleasedMessage } from '@/lib/api/portals';
 import { formatDate } from '@/lib/format';
-
-const typeLabel = (t: ReleasedMessage['contentType']) =>
-  t === 'VIDEO' ? 'Video' : CONTENT_TYPE_INFO[t].label;
 
 export function RecipientSignIn() {
   return (
@@ -49,7 +45,7 @@ export function ReleasedMessageList() {
           ) : (
             <ul className="grid gap-3">
               {messages.map((m) => {
-                const Icon = m.contentType === 'VIDEO' ? Mail : CONTENT_TYPE_INFO[m.contentType].icon;
+                const Icon = CONTENT_TYPE_INFO[m.contentType].icon;
                 return (
                   <li key={m.id}>
                     <Link
@@ -62,7 +58,7 @@ export function ReleasedMessageList() {
                       <span className="grid min-w-0 gap-1">
                         <span className="font-heading text-2xl leading-tight break-words">{m.title}</span>
                         <span className="text-sm text-foreground-muted">
-                          {typeLabel(m.contentType)} · Shared {formatDate(m.releasedAt)}
+                          {CONTENT_TYPE_INFO[m.contentType].label} · Shared {formatDate(m.releasedAt)}
                         </span>
                       </span>
                     </Link>
@@ -91,25 +87,16 @@ export function ReleasedMessageView({ id }: { id: string }) {
             eyebrow={`Shared ${formatDate(m.releasedAt)}`}
             title={m.title}
           />
-          {m.contentType === 'VIDEO' ? (
-            <p className="rounded-lg bg-surface-muted p-5 text-foreground-secondary">
-              This message is in a format that can&apos;t be shown here yet.
-            </p>
-          ) : (
-            <>
-              {m.textContent && (
-                <div className="rounded-xl border border-border bg-surface px-6 py-8 sm:px-12 sm:py-12">
-                  {/* Plain text, preserved line breaks; never HTML. */}
-                  <p className="mx-auto max-w-[65ch] font-heading text-xl leading-relaxed whitespace-pre-wrap break-words sm:text-[22px]">
-                    {m.textContent}
-                  </p>
-                </div>
-              )}
-              {m.hasMedia && (
-                <MediaManager scope={{ kind: 'recipient/messages', id: m.id }} kinds={[]} editable={false} />
-              )}
-            </>
+          {m.textContent && (
+            <div className="rounded-xl border border-border bg-surface px-6 py-8 sm:px-12 sm:py-12">
+              {/* Plain text, preserved line breaks; never HTML. */}
+              <p className="mx-auto max-w-[65ch] font-heading text-xl leading-relaxed whitespace-pre-wrap break-words sm:text-[22px]">
+                {m.textContent}
+              </p>
+            </div>
           )}
+          {/* Photos, audio and (Phase 12) video, each from a short-lived signed URL. */}
+          {m.hasMedia && <MediaManager scope={{ kind: 'recipient/messages', id: m.id }} kinds={[]} editable={false} />}
         </article>
       )}
     </QueryView>

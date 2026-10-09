@@ -68,14 +68,14 @@ describe('Messages', () => {
     expect(screen.queryByRole('region', { name: 'Released' })).not.toBeInTheDocument();
   });
 
-  it('creates a draft with the chosen type and people; VIDEO is not offered', async () => {
+  it('creates a draft with the chosen type and people; VIDEO is offered (Phase 12)', async () => {
     const api = routeFetch({
       'GET /recipients': json(200, page([person('r1', 'Sofia'), person('r2', 'Tom')])),
       'POST /messages': json(201, message()),
     });
     renderWithClient(<NewMessage />);
     expect(await screen.findByRole('radio', { name: /Written/ })).toBeChecked();
-    expect(screen.getAllByRole('radio').map((r) => (r as HTMLInputElement).value)).toEqual(['TEXT', 'PHOTO', 'AUDIO', 'MIXED']);
+    expect(screen.getAllByRole('radio').map((r) => (r as HTMLInputElement).value)).toEqual(['TEXT', 'PHOTO', 'AUDIO', 'VIDEO', 'MIXED']);
 
     await userEvent.click(screen.getByRole('button', { name: 'Save draft' }));
     expect(await screen.findByText('Choose at least one person.')).toBeInTheDocument();

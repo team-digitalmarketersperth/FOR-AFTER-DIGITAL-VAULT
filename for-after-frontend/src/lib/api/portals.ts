@@ -33,8 +33,7 @@ export const trustedContactAuthApi = otpAuth('trusted-contact-auth');
 export type ReleasedMessage = {
   id: string;
   title: string;
-  // VIDEO is not released today, but the database enum allows it.
-  contentType: ContentType | 'VIDEO';
+  contentType: ContentType;
   releasedAt: string;
   hasMedia: boolean;
 };

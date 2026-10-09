@@ -32,6 +32,7 @@
 | npm | v11.x |
 | PostgreSQL | v16 |
 | Redis | v7+ (Docker: `docker run -d --name for-after-redis --restart unless-stopped -p 6379:6379 redis:7-alpine`) |
+| ClamAV (clamd) | Phase 12B malware scanning, required to complete uploads (Docker: `docker run -d --name for-after-clamav --restart unless-stopped -p 127.0.0.1:3310:3310 -e CLAMD_CONF_StreamMaxLength=110M clamav/clamav:stable`; first start downloads signatures for a few minutes; see `docs/media-storage.md` §2e) |
 | Git | any recent |
 
 ---
@@ -169,6 +170,7 @@ UPDATE "User" SET role = 'ADMIN' WHERE email = 'admin.dev@example.test';
 | NestJS backend | `localhost:4000` |
 | PostgreSQL | `localhost:5432` |
 | Redis | `localhost:6379` |
+| ClamAV clamd | `127.0.0.1:3310` |
 
 ---
 
@@ -205,8 +207,11 @@ ADMIN_TOTP_ENCRYPTION_KEY="<openssl rand -base64 32>"  # 32 random bytes, base64
 # Release queue (Step 12): QUEUE_REDIS_URL, RELEASE_*   (optional, defaults in .env.example)
 ```
 
-**Planned (not used by the code yet):** `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `MUX_TOKEN_ID`,
-`MUX_TOKEN_SECRET`, `POSTMARK_SERVER_TOKEN`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `SENTRY_DSN`.
+**Planned (not used by the code yet):** `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
+`POSTMARK_SERVER_TOKEN`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `SENTRY_DSN`. Media uses `IMAGEKIT_PUBLIC_KEY`,
+`IMAGEKIT_PRIVATE_KEY`, `IMAGEKIT_URL_ENDPOINT` (Phase 12; Mux is no longer planned). Storage quota uses `STORAGE_LIMIT_BYTES` (Phase 12C; set it small, e.g. `50000`, to try the 80/90/100 % states
+locally). Malware scanning uses `CLAMAV_HOST`,
+`CLAMAV_PORT`, `MEDIA_MALWARE_SCAN_TIMEOUT_MS` (Phase 12B).
 
 > ℹ️ Earlier versions of this guide used `APP_ENV`; the code reads **`NODE_ENV`**.
 

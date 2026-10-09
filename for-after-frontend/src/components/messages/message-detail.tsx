@@ -23,7 +23,8 @@ const KINDS: Record<ContentType, MediaKind[]> = {
   TEXT: [],
   PHOTO: ['PHOTO'],
   AUDIO: ['AUDIO'],
-  MIXED: ['PHOTO', 'AUDIO'],
+  VIDEO: ['VIDEO'],
+  MIXED: ['PHOTO', 'AUDIO', 'VIDEO'],
 };
 
 export function MessageDetail({ id }: { id: string }) {
