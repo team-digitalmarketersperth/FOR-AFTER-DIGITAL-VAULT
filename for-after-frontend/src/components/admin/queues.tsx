@@ -1,16 +1,33 @@
 'use client';
 
-import { CheckCircle2, RotateCcw } from 'lucide-react';
+import { CheckCircle2, Eye, RotateCcw } from 'lucide-react';
 import Link from 'next/link';
+import { useState } from 'react';
 import { toast } from 'sonner';
-import { DataTable, linkClass, Pager, Panel, useFilterNav } from '@/components/admin/admin-ui';
+import { Badge, DataTable, Facts, linkClass, Pager, Panel, SelectField, useFilterNav } from '@/components/admin/admin-ui';
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import { FilterChips } from '@/components/shared/form-field';
 import { PageHeader } from '@/components/shared/page-header';
 import { EmptyState, QueryView } from '@/components/shared/states';
 import { Button } from '@/components/ui/button';
-import { useFailedJobs, useQueues, useRetryJob } from '@/hooks/use-admin';
-import type { FailedJob, QueueSummary } from '@/lib/api/admin';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import {
+  useDeadLetter,
+  useDeadLetters,
+  useFailedJobs,
+  useQueues,
+  useRetryDeadLetter,
+  useRetryJob,
+} from '@/hooks/use-admin';
+import {
+  DEAD_LETTER_QUEUES,
+  DEAD_LETTER_STATUSES,
+  type DeadLetter,
+  type DeadLetterStatus,
+  type FailedJob,
+  type OpsAlertStatus,
+  type QueueSummary,
+} from '@/lib/api/admin';
 import { formatTimestamp } from '@/lib/format';
 import { shortId } from '@/lib/admin';
 
@@ -23,7 +40,14 @@ const QUEUE_COPY: Record<string, string> = {
 
 const COUNTS: (keyof Omit<QueueSummary, 'name'>)[] = ['waiting', 'active', 'delayed', 'prioritized', 'completed', 'failed'];
 
-export type QueueFilters = { queue?: string; page: number };
+export type QueueFilters = {
+  queue?: string;
+  page: number;
+  // Dead letters (Phase 17A): status defaults to OPEN; ALL = no status filter.
+  dlQueue?: (typeof DEAD_LETTER_QUEUES)[number];
+  dlStatus?: DeadLetterStatus | 'ALL';
+  dlPage?: number;
+};
 
 /**
  * Queue names come only from the API's own summary (its allowlist): there is
@@ -81,6 +105,7 @@ export function Queues({ filters }: { filters: QueueFilters }) {
                   <FailedJobs queue={selected.name} page={selected.name === filters.queue ? filters.page : 1} hrefFor={(page) => nav.href({ queue: selected.name, page })} />
                 </Panel>
               )}
+              <DeadLetters filters={filters} nav={nav} />
             </div>
           );
         }}
@@ -169,6 +194,221 @@ function RetryButton({ job }: { job: FailedJob }) {
       error={retry.error}
       onOpenChange={(open) => !open && retry.reset()}
       onConfirm={() => retry.mutateAsync({ queue: job.queue, jobId: job.jobId }).then(() => toast('Job queued to run again'))}
+    />
+  );
+}
+
+// ─── Dead letters (Phase 17A) ───────────────────────────────────────────────
+
+const DL_STATUS: Record<DeadLetterStatus, { label: string; tone: 'danger' | 'open' | 'done' }> = {
+  OPEN: { label: 'Open', tone: 'danger' },
+  REQUEUED: { label: 'Re-queued', tone: 'open' },
+  RESOLVED: { label: 'Resolved', tone: 'done' },
+};
+
+const ALERT_LABEL: Record<OpsAlertStatus, string> = {
+  PENDING: 'Pending',
+  SENT: 'Sent',
+  FAILED: 'Failed',
+  NOT_CONFIGURED: 'Not configured',
+};
+
+const ENTITY_LABEL: Record<string, string> = {
+  Message: 'Message',
+  MessageRecipientRelease: 'Yearly release',
+  DeathVerificationCase: 'Case',
+  ReleaseNotification: 'Email',
+};
+
+/**
+ * Jobs whose automatic retries ran out, from PostgreSQL (kept, unlike BullMQ's
+ * 7-day failed list). Ids and safe categories only: the API never sends a
+ * payload, content, address or stack.
+ */
+function DeadLetters({ filters, nav }: { filters: QueueFilters; nav: ReturnType<typeof useFilterNav<QueueFilters>> }) {
+  const statusParam = filters.dlStatus ?? 'OPEN';
+  const list = useDeadLetters({
+    queue: filters.dlQueue,
+    status: statusParam === 'ALL' ? undefined : statusParam,
+    page: filters.dlPage,
+  });
+  return (
+    <Panel title="Dead letters">
+      <p className="-mt-2 text-sm text-foreground-muted">
+        Jobs that used up their automatic retries. Retrying runs the job again through the normal checks; anything no
+        longer eligible is skipped.
+      </p>
+      <div className="grid gap-4 sm:max-w-xl sm:grid-cols-2">
+        <SelectField
+          id="dl-status"
+          label="Status"
+          value={statusParam}
+          onChange={(e) => nav.set({ dlStatus: e.target.value as QueueFilters['dlStatus'], dlPage: undefined })}
+          options={[
+            ...DEAD_LETTER_STATUSES.map((s) => ({ value: s, label: DL_STATUS[s].label })),
+            { value: 'ALL', label: 'All' },
+          ]}
+        />
+        <SelectField
+          id="dl-queue"
+          label="Queue"
+          value={filters.dlQueue ?? ''}
+          onChange={(e) =>
+            nav.set({ dlQueue: (e.target.value || undefined) as QueueFilters['dlQueue'], dlPage: undefined })
+          }
+          options={[{ value: '', label: 'All queues' }, ...DEAD_LETTER_QUEUES.map((q) => ({ value: q, label: q }))]}
+        />
+      </div>
+      <QueryView query={list} loadingLabel="Loading dead letters">
+        {({ items, pagination }) =>
+          items.length === 0 ? (
+            <EmptyState icon={CheckCircle2} title="No dead letters" description="Nothing matches these filters." />
+          ) : (
+            <div aria-busy={list.isPlaceholderData || undefined}>
+              <DataTable
+                caption="Dead letters"
+                rows={items}
+                rowKey={(d) => d.id}
+                columns={[
+                  {
+                    header: 'Job',
+                    cell: (d) => (
+                      <span className="grid gap-0.5">
+                        <span className="font-medium">{d.queueName}</span>
+                        <span className="font-mono text-xs break-all text-foreground-muted">{d.jobId}</span>
+                      </span>
+                    ),
+                  },
+                  { header: 'Related', cell: (d) => <Entity d={d} /> },
+                  {
+                    header: 'Failed',
+                    cell: (d) => (
+                      <span className="grid gap-0.5">
+                        <span>{formatTimestamp(d.failedAt)}</span>
+                        {d.failureCount > 1 && (
+                          <span className="text-xs text-foreground-muted">{d.failureCount} times</span>
+                        )}
+                      </span>
+                    ),
+                  },
+                  { header: 'Attempts', cell: (d) => d.attemptsMade },
+                  {
+                    header: 'Status',
+                    cell: (d) => <Badge tone={DL_STATUS[d.status].tone}>{DL_STATUS[d.status].label}</Badge>,
+                  },
+                  {
+                    header: 'Action',
+                    cell: (d) => (
+                      <span className="flex flex-wrap gap-2">
+                        <DeadLetterDetails id={d.id} jobId={d.jobId} />
+                        {d.status === 'OPEN' && <RetryDeadLetter d={d} />}
+                      </span>
+                    ),
+                  },
+                ]}
+              />
+              <Pager pagination={pagination} hrefFor={(page) => nav.href({ dlPage: page })} />
+            </div>
+          )
+        }
+      </QueryView>
+    </Panel>
+  );
+}
+
+// Ids only. A message has no admin page: content stays private.
+const Entity = ({ d }: { d: DeadLetter }) => {
+  const label = ENTITY_LABEL[d.entityType] ?? d.entityType;
+  if (!d.entityId) return <>{label}</>;
+  return d.entityType === 'DeathVerificationCase' ? (
+    <Link href={`/admin/death-verifications/${d.entityId}`} className={linkClass}>
+      Case {shortId(d.entityId)}
+    </Link>
+  ) : (
+    <span className="font-mono text-xs" title={d.entityId}>
+      {label} {shortId(d.entityId)}
+    </span>
+  );
+};
+
+function DeadLetterDetails({ id, jobId }: { id: string; jobId: string }) {
+  const [open, setOpen] = useState(false);
+  const detail = useDeadLetter(id, open);
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button variant="outline" size="sm" aria-label={`View dead letter ${jobId}`}>
+          <Eye aria-hidden strokeWidth={1.5} className="size-4" />
+          View
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] gap-6 overflow-y-auto rounded-xl bg-surface p-7 sm:max-w-2xl sm:p-8">
+        <DialogHeader className="gap-3">
+          <DialogTitle className="text-[28px] leading-tight font-normal">Dead letter</DialogTitle>
+          <DialogDescription className="text-[15px] text-foreground-muted">
+            Ids and a sanitized error only. Job content is never shown.
+          </DialogDescription>
+        </DialogHeader>
+        <QueryView query={detail} loadingLabel="Loading dead letter">
+          {(d) => (
+            <Facts
+              items={[
+                ['Queue', d.queueName],
+                ['Job ID', <span key="j" className="font-mono text-sm break-all">{d.jobId}</span>],
+                ['Job type', d.jobName],
+                ['Related', <Entity key="e" d={d} />],
+                ['Attempts', d.attemptsMade],
+                ['Times failed', d.failureCount],
+                ['Last failed', formatTimestamp(d.failedAt)],
+                ['Error code', d.errorCode],
+                ['Error', d.errorMessage],
+                ['Status', <Badge key="s" tone={DL_STATUS[d.status].tone}>{DL_STATUS[d.status].label}</Badge>],
+                ['Outcome', d.resolution],
+                ['Re-queued', d.requeuedAt ? formatTimestamp(d.requeuedAt) : null],
+                ['Resolved', d.resolvedAt ? formatTimestamp(d.resolvedAt) : null],
+                ['Operator alert', ALERT_LABEL[d.alertStatus]],
+              ]}
+            />
+          )}
+        </QueryView>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function RetryDeadLetter({ d }: { d: DeadLetter }) {
+  const retry = useRetryDeadLetter();
+  return (
+    <ConfirmDialog
+      tone="default"
+      trigger={
+        <Button variant="outline" size="sm" aria-label={`Retry dead letter ${d.jobId}`}>
+          <RotateCcw aria-hidden strokeWidth={1.5} className="size-4" />
+          Retry
+        </Button>
+      }
+      title="Retry this dead letter?"
+      description={
+        <>
+          Job <span className="font-mono break-all">{d.jobId}</span> will be queued again. The worker re-checks
+          everything first and skips anything no longer eligible; nothing is sent or released twice.
+        </>
+      }
+      confirmLabel="Retry job"
+      pending={retry.isPending}
+      error={retry.error}
+      onOpenChange={(open) => !open && retry.reset()}
+      onConfirm={() =>
+        retry
+          .mutateAsync(d.id)
+          .then((res) =>
+            toast(
+              res.status === 'RESOLVED'
+                ? 'Nothing to run: the related record no longer exists'
+                : 'Job queued to run again',
+            ),
+          )
+      }
     />
   );
 }

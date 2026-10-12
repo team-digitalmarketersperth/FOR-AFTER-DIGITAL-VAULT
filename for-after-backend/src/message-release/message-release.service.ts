@@ -7,6 +7,7 @@ import {
 } from '../generated/prisma/client.js';
 import { emailKey } from '../auth/dto/register.dto.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { isRecurring, nextOccurrence } from './recipient-occurrences.js';
 
 export type ReleaseOutcome =
   | {
@@ -14,6 +15,14 @@ export type ReleaseOutcome =
       triggerType: ReleaseTriggerType;
       scheduledFor: Date;
       grants: number;
+    }
+  // Phase 16: one Recipient's yearly occurrence; the Message stays SCHEDULED.
+  | {
+      result: 'occurrence_released';
+      triggerType: ReleaseTriggerType;
+      scheduledFor: Date;
+      grants: number;
+      next: Date | null;
     }
   | { result: 'already_released' }
   // The job no longer matches PostgreSQL (unscheduled, deleted, trigger changed).
@@ -27,16 +36,19 @@ const isUniqueViolation = (err: unknown) =>
   err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002';
 
 /**
- * When a scheduled Message may release, or null if its trigger cannot run:
- * FIXED_DATE → scheduledFor (Step 12). ON_DEATH / AFTER_DEATH → the activation
- * dueAt, only if the activation matches the trigger and its case is VERIFIED
- * (Step 15). Every other trigger never runs.
+ * When a scheduled Message may release as a whole, or null if its trigger
+ * cannot run that way: FIXED_DATE / CUSTOM_EVENT → scheduledFor (Step 12,
+ * Phase 16). NOW → the moment it was scheduled. ON_DEATH / AFTER_DEATH → the
+ * activation dueAt, only if the activation matches the trigger and its case
+ * is VERIFIED (Step 15). Recurring triggers release per Recipient instead
+ * (releaseOccurrence), never here.
  */
 export const releaseDueAt = (
   schedule: {
     triggerType: ReleaseTriggerType;
     scheduledFor: Date | null;
     afterDeathDays: number | null;
+    createdAt?: Date;
   },
   activation: {
     triggerType: ReleaseTriggerType;
@@ -46,7 +58,10 @@ export const releaseDueAt = (
 ): Date | null => {
   switch (schedule.triggerType) {
     case ReleaseTriggerType.FIXED_DATE:
+    case ReleaseTriggerType.CUSTOM_EVENT:
       return schedule.scheduledFor;
+    case ReleaseTriggerType.NOW:
+      return schedule.createdAt ?? null;
     case ReleaseTriggerType.ON_DEATH:
     case ReleaseTriggerType.AFTER_DEATH:
       if (
@@ -66,17 +81,23 @@ export const releaseDueAt = (
 };
 
 /**
- * One RecipientMessageAccessGrant per live assigned Recipient, snapshotting
- * contact details only (never notes, birthday or relationship). Idempotent:
- * existing (release, recipient) pairs are skipped. Runs inside the caller's
- * transaction; also used by the backfill script. Returns grants created.
+ * One RecipientMessageAccessGrant per live assigned Recipient (or just
+ * `recipientId`), snapshotting contact details only (never notes, birthday or
+ * relationship). Idempotent: existing (release, recipient) pairs are skipped.
+ * Runs inside the caller's transaction; also used by the backfill script.
+ * Returns grants created.
  */
 export const createAccessGrants = async (
   tx: Prisma.TransactionClient,
   release: { id: string; messageId: string },
+  recipientId?: string,
 ): Promise<number> => {
   const assigned = await tx.messageRecipient.findMany({
-    where: { messageId: release.messageId, recipient: { deletedAt: null } },
+    where: {
+      messageId: release.messageId,
+      recipient: { deletedAt: null },
+      ...(recipientId ? { recipientId } : {}),
+    },
     select: {
       recipientId: true,
       recipient: { select: { email: true, mobile: true } },
@@ -135,6 +156,7 @@ export class MessageReleaseService {
                 triggerType: true,
                 scheduledFor: true,
                 afterDeathDays: true,
+                createdAt: true,
               },
             },
             // Step 15: death triggers run only from an activation whose case
@@ -213,6 +235,184 @@ export class MessageReleaseService {
       });
     } catch (err) {
       // Backstop: another transaction created the release first.
+      if (isUniqueViolation(err)) return { result: 'already_released' };
+      throw err;
+    }
+  }
+
+  /**
+   * Phase 16: releases one Recipient's yearly occurrence of a recurring
+   * trigger (BIRTHDAY, ANNIVERSARY, ANNUAL_AFTER_DEATH). The first occurrence
+   * of the Message creates its MessageRelease; the Recipient's first one
+   * creates their grant (permanent, as for any release). Every occurrence
+   * gets its own ReleaseNotification and creates next year's occurrence. The
+   * Message stays SCHEDULED: it keeps recurring. Other Recipients are never
+   * touched, so nobody gets access before their own due time.
+   */
+  async releaseOccurrence(
+    occurrenceId: string,
+    now = new Date(),
+  ): Promise<ReleaseOutcome> {
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const found = await tx.messageRecipientRelease.findUnique({
+          where: { id: occurrenceId },
+          select: { messageId: true },
+        });
+        if (!found) return { result: 'stale', reason: 'occurrence not found' };
+        const { messageId } = found;
+        // Same lock as release, PATCH and unschedule: serialises every
+        // occurrence of this Message and any schedule change.
+        const [locked] = await tx.$queryRaw<{ status: MessageStatus }[]>`
+          SELECT status FROM "Message"
+          WHERE id = ${messageId}::uuid AND "deletedAt" IS NULL
+          FOR UPDATE`;
+        if (locked?.status !== MessageStatus.SCHEDULED) {
+          return {
+            result: 'stale',
+            reason: locked ? `status ${locked.status}` : 'message not found',
+          };
+        }
+        // Re-read under the lock: unschedule may have removed it, or another
+        // worker released it.
+        const occ = await tx.messageRecipientRelease.findUnique({
+          where: { id: occurrenceId },
+          select: {
+            recipientId: true,
+            occurrenceYear: true,
+            dueAt: true,
+            releasedAt: true,
+          },
+        });
+        if (!occ) return { result: 'stale', reason: 'occurrence not found' };
+        if (occ.releasedAt) return { result: 'already_released' };
+
+        const message = await tx.message.findUniqueOrThrow({
+          where: { id: messageId },
+          select: {
+            schedule: {
+              select: {
+                triggerType: true,
+                timezone: true,
+                localTime: true,
+                annualMonth: true,
+                annualDay: true,
+              },
+            },
+            deathActivation: {
+              select: {
+                triggerType: true,
+                deathVerificationCase: {
+                  select: { status: true, verifiedDeathAt: true },
+                },
+              },
+            },
+            release: { select: { id: true } },
+          },
+        });
+        const schedule = message.schedule;
+        if (!schedule || !isRecurring(schedule.triggerType)) {
+          return { result: 'stale', reason: 'trigger changed' };
+        }
+        let verifiedDeathAt: Date | null = null;
+        if (schedule.triggerType === ReleaseTriggerType.ANNUAL_AFTER_DEATH) {
+          // Only an admin-verified death; a report is never enough.
+          const a = message.deathActivation;
+          if (
+            a?.triggerType !== ReleaseTriggerType.ANNUAL_AFTER_DEATH ||
+            a.deathVerificationCase.status !==
+              DeathVerificationCaseStatus.VERIFIED
+          ) {
+            return { result: 'stale', reason: 'death not verified' };
+          }
+          verifiedDeathAt = a.deathVerificationCase.verifiedDeathAt;
+        }
+        if (occ.dueAt > now) return { result: 'not_due', dueAt: occ.dueAt };
+
+        const assigned = await tx.messageRecipient.findFirst({
+          where: {
+            messageId,
+            recipientId: occ.recipientId,
+            recipient: { deletedAt: null },
+          },
+          select: { recipient: { select: { birthday: true } } },
+        });
+        // Deleted Recipient: no access, no email, no further years.
+        if (!assigned) {
+          await tx.messageRecipientRelease.delete({
+            where: { id: occurrenceId },
+          });
+          return { result: 'stale', reason: 'recipient removed' };
+        }
+
+        const release =
+          message.release ??
+          (await tx.messageRelease.create({
+            data: {
+              messageId,
+              triggerType: schedule.triggerType,
+              scheduledFor: occ.dueAt,
+              releasedAt: now,
+            },
+            select: { id: true },
+          }));
+        const grants = await createAccessGrants(
+          tx,
+          { id: release.id, messageId },
+          occ.recipientId,
+        );
+        const grant = await tx.recipientMessageAccessGrant.findUniqueOrThrow({
+          where: {
+            messageReleaseId_recipientId: {
+              messageReleaseId: release.id,
+              recipientId: occ.recipientId,
+            },
+          },
+          select: { id: true, recipientEmailNormalized: true },
+        });
+        await tx.messageRecipientRelease.update({
+          where: { id: occurrenceId },
+          data: { releasedAt: now },
+        });
+        // occurrenceId is unique: one email per occurrence, ever.
+        if (grant.recipientEmailNormalized) {
+          await tx.releaseNotification.create({
+            data: { grantId: grant.id, occurrenceId },
+          });
+        }
+        // ponytail: uses the birthday at release time; a birthday edited while
+        // scheduled moves only the years after the pending one.
+        const next = nextOccurrence(
+          schedule,
+          assigned.recipient.birthday,
+          verifiedDeathAt,
+          now,
+          occ.occurrenceYear + 1,
+        );
+        if (next) {
+          await tx.messageRecipientRelease.createMany({
+            data: [
+              {
+                messageId,
+                recipientId: occ.recipientId,
+                occurrenceYear: next.year,
+                dueAt: next.dueAt,
+              },
+            ],
+            skipDuplicates: true,
+          });
+        }
+        return {
+          result: 'occurrence_released',
+          triggerType: schedule.triggerType,
+          scheduledFor: occ.dueAt,
+          grants,
+          next: next?.dueAt ?? null,
+        };
+      });
+    } catch (err) {
+      // Backstop: a unique key (release, notification, next year) was taken
+      // by a concurrent transaction; the whole transaction rolled back.
       if (isUniqueViolation(err)) return { result: 'already_released' };
       throw err;
     }

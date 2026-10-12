@@ -274,3 +274,34 @@ export const trustedContactInvitation = (
     `This link expires in ${lifetime(expiresInSeconds)}. If you weren't expecting this, you can ignore this email; nothing happens unless you accept.`,
   );
 };
+
+/**
+ * Phase 17A operational alert for the operator, not a customer: ids, counts
+ * and a safe error category only. Never content, addresses, notes or the
+ * sanitized message text (that stays in the admin view).
+ */
+export const deadLetterAlert = (row: {
+  queueName: string;
+  jobId: string;
+  entityType: string;
+  entityId: string | null;
+  attemptsMade: number;
+  errorCode: string | null;
+  failedAt: Date;
+}): RenderedEmail => {
+  const subject = 'For After queue failure requires attention';
+  const lines = [
+    `Queue: ${row.queueName}`,
+    `Job ID: ${row.jobId}`,
+    `Entity: ${row.entityType} ${row.entityId ?? '(unknown)'}`,
+    `Failed at: ${row.failedAt.toISOString()}`,
+    `Attempts: ${row.attemptsMade}`,
+    `Error code: ${row.errorCode ?? 'unknown_error'}`,
+    'Action: Review Admin → Queues → Dead letters',
+  ];
+  return {
+    subject,
+    html: layout(subject, lines.map((l) => para(escape(l))).join(''), ''),
+    text: lines.join('\n'),
+  };
+};

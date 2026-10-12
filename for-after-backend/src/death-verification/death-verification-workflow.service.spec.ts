@@ -99,6 +99,51 @@ describe('deathTriggerDueAt', () => {
   });
 });
 
+describe('deathTriggerDueAt: ANNUAL_AFTER_DEATH (Phase 16)', () => {
+  const annual = {
+    triggerType: 'ANNUAL_AFTER_DEATH' as const,
+    afterDeathDays: null,
+    timezone: 'Australia/Perth',
+    localTime: '09:00',
+  };
+
+  it('first anniversary one calendar year after the verified death, local time', () => {
+    // Death 2026-09-20 18:00 Perth → first release 2027-09-20 09:00 Perth.
+    expect(deathTriggerDueAt(annual, VERIFIED_AT, DEATH_AT)).toEqual(
+      new Date('2027-09-20T01:00:00Z'),
+    );
+  });
+
+  it('never +365 days: a death on 29 Feb releases on 28 Feb the next year', () => {
+    const died = new Date('2028-02-29T02:00:00Z');
+    const due = deathTriggerDueAt(
+      annual,
+      new Date('2028-03-05T00:00:00Z'),
+      died,
+    );
+    expect(due).toEqual(new Date('2029-02-28T01:00:00Z'));
+  });
+
+  it('a verification long after the death: the first anniversary is overdue (released promptly)', () => {
+    const due = deathTriggerDueAt(
+      annual,
+      new Date('2029-01-01T00:00:00Z'),
+      DEATH_AT,
+    );
+    expect(due).toEqual(new Date('2027-09-20T01:00:00Z'));
+  });
+
+  it('without a zone/time it cannot activate', () => {
+    expect(
+      deathTriggerDueAt(
+        { triggerType: 'ANNUAL_AFTER_DEATH', afterDeathDays: null },
+        VERIFIED_AT,
+        DEATH_AT,
+      ),
+    ).toBeNull();
+  });
+});
+
 describe('releaseDueAt (release worker eligibility)', () => {
   const activation = (status: string, triggerType = 'ON_DEATH') => ({
     triggerType: triggerType as never,
@@ -133,6 +178,43 @@ describe('releaseDueAt (release worker eligibility)', () => {
       expect(releaseDueAt(onDeath, activation(status))).toBeNull();
     }
     expect(releaseDueAt(onDeath, activation('VERIFIED'))).toEqual(VERIFIED_AT);
+  });
+
+  it('NOW is due when it was scheduled; CUSTOM_EVENT at its derived time', () => {
+    const created = new Date('2030-01-01T00:00:00Z');
+    expect(
+      releaseDueAt(
+        {
+          triggerType: 'NOW',
+          scheduledFor: null,
+          afterDeathDays: null,
+          createdAt: created,
+        },
+        null,
+      ),
+    ).toEqual(created);
+    const at = new Date('2031-01-01T00:00:00Z');
+    expect(
+      releaseDueAt(
+        { triggerType: 'CUSTOM_EVENT', scheduledFor: at, afterDeathDays: null },
+        null,
+      ),
+    ).toEqual(at);
+  });
+
+  it('recurring triggers never release the whole Message (per Recipient only)', () => {
+    for (const triggerType of [
+      'BIRTHDAY',
+      'ANNIVERSARY',
+      'ANNUAL_AFTER_DEATH',
+    ] as const) {
+      expect(
+        releaseDueAt(
+          { triggerType, scheduledFor: null, afterDeathDays: null },
+          activation('VERIFIED', triggerType),
+        ),
+      ).toBeNull();
+    }
   });
 
   it('a mismatched activation trigger or AFTER_DEATH without days never runs', () => {

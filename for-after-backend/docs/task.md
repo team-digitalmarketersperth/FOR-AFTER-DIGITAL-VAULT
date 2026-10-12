@@ -5,12 +5,12 @@
 
 |                              |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Last updated**             | 2026-10-07                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| **Last updated**             | 2026-10-12                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | **Latest backend step**      | Step 24: transactional email through Brevo (provider-neutral `EmailProvider`; migrated from Resend 2026-10-05): sign-in codes, "a message is waiting" release emails (durable `ReleaseNotification` + `email-delivery` queue), account-holder safety notice. Step 24.1: per-Recipient release emails verified for all three triggers. Brevo key accepted (dev IP blocking off, 2026-10-05); **first real OTP to an inbox pending confirmation** ([`email-production-setup.md`](email-production-setup.md)) |
 | **Latest frontend step**     | Step 24: admin queues show `email-delivery` jobs; portal E2E reads codes from the console email provider                                                                                                                                                                                                                                                                                                                                                                                                   |
 | **Backend**                  | Steps 1–16 + 22–24.1 + Phases 03, 04, 08 and 09 built and tested                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | **Frontend**                 | **27 of 30 tasks** built and verified (FE-1–19, FE-21–28); 204 unit/component tests; Playwright 36 passing, 0 failing, 0 skipped against the real local API (console email provider), PostgreSQL, Redis and the development bucket (Step 24, 2026-10-03). Frontend tracker: `for-after-frontend/docs/tasks.md`                                                                                                                                                                                             |
-| **Checklist (phases 02–27)** | **178 of 221** items done (recounted from the checkboxes 2026-10-09 after Phase 15B: 178 `[x]`, 40 `[ ]`, 3 `[~]`; earlier history: 176 of 227 recounted 2026-10-05; +2 Phase 11, +1 Phase 11 VIDEO and +3 Phase 12, 2026-10-07; +1 Phase 12B malware scanning, +1 Phase 13A search/tags/pagination, +1 Phase 13B create a message from a memory, +1 Phase 12C storage quota, +1 Phase 14A My Story catalogue, +1 Phase 14B rich answers + sharing, +1 Phase 15A My Wishes notice, 2026-10-08; +1 Phase 15B My Wishes media + after-death sharing, 2026-10-09)                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| **Checklist (phases 02–27)** | **179 of 221** items done (recounted from the checkboxes 2026-10-09 after Phase 16: 179 `[x]`, 39 `[ ]`, 3 `[~]`; before: 178 after Phase 15B; earlier history: 176 of 227 recounted 2026-10-05; +2 Phase 11, +1 Phase 11 VIDEO and +3 Phase 12, 2026-10-07; +1 Phase 12B malware scanning, +1 Phase 13A search/tags/pagination, +1 Phase 13B create a message from a memory, +1 Phase 12C storage quota, +1 Phase 14A My Story catalogue, +1 Phase 14B rich answers + sharing, +1 Phase 15A My Wishes notice, 2026-10-08; +1 Phase 15B My Wishes media + after-death sharing, 2026-10-09)                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
 ---
 
@@ -47,7 +47,7 @@ Each phase lists **Done** items first, then **To do**. "Backend ready" means the
 
 | Phase | Area                       | Status                                                                                                                                                                                   |    Done / items    |
 | :---: | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :----------------: |
-|  01   | Product decisions          | 🟡 Docs written, most decisions still open; Phase 10 decided the Trusted Contact maximum, permissions and reopening; composition rules approved (2026-10-07); My Story catalogue, answer length, snapshot, answer formats + sharing; My Wishes notice decided, legal review open (2026-10-08); who sees wishes after death, media, AI deferred (2026-10-09) | 8 (+3 partly) / 34 |
+|  01   | Product decisions          | 🟡 Docs written, most decisions still open; Phase 10 decided the Trusted Contact maximum, permissions and reopening; composition rules approved (2026-10-07); My Story catalogue, answer length, snapshot, answer formats + sharing; My Wishes notice decided, legal review open (2026-10-08); who sees wishes after death, media, AI deferred (2026-10-09); scheduling rules for every trigger (Phase 16, 2026-10-09); worker as its own process (Phase 17B, 2026-10-12) | 9 (+4 partly) / 34 |
 |  02   | PostgreSQL + Prisma        | ✅ Done                                                                                                                                                                                  |       6 / 6        |
 |  03   | NestJS foundation          | ✅ Done (Swagger + global exception filter, 2026-10-05)                                                                                                                                  |      12 / 12       |
 |  04   | Authentication (core)      | ✅ Done: core, admin TOTP, change password, email verification, reset, Redis rate limits                                                                                                 |      13 / 13       |
@@ -62,8 +62,8 @@ Each phase lists **Done** items first, then **To do**. "Backend ready" means the
 |  13   | Memory Vault               | ✅ Backend + UI (Step 18); search, tags, pagination (13A); sharing = create a message from a memory (13B)                                                                                  |       7 / 7        |
 |  14   | My Story                   | ✅ Backend + UI (Step 18); V1 catalogue + snapshot policy (14A); photo/audio/video answers, linked memories, sharing as a Message (14B)                                                  |       6 / 6        |
 |  15   | My Wishes                  | ✅ Backend + UI (Step 18); notice + per-version acknowledgement (15A); media + after-death sharing as a Message snapshot, AI deferred post-MVP (15B) | 7 / 7 |
-|  16   | Scheduling                 | 🟡 FIXED_DATE, ON_DEATH, AFTER_DEATH executed + schedule UI (Step 18); recurring triggers open                                                                                           |      10 / 11       |
-|  17   | Redis + BullMQ             | 🟡 Release, death-verification and `email-delivery` (Step 24) queues, admin failed-job view/retry done; DLQ/alerts open                                                                  | 8 (+1 partly) / 10 |
+|  16   | Scheduling                 | ✅ All 8 triggers executed + schedule UI: FIXED_DATE (Step 12), ON_DEATH/AFTER_DEATH (Step 15), NOW, BIRTHDAY, ANNIVERSARY, CUSTOM_EVENT, ANNUAL_AFTER_DEATH + per-recipient releases (Phase 16) |      11 / 11       |
+|  17   | Redis + BullMQ             | 🟡 Release, death-verification and `email-delivery` (Step 24) queues, admin failed-job view/retry, separate worker process done; DLQ/alerts open                                                          | 9 (+1 partly) / 10 |
 |  18   | Recipient portal           | 🟡 Backend (Step 13) + UI (Step 19) + email sign-in codes and release emails (Step 24) done; SMS open                                                                                    |       5 / 7        |
 |  19   | Death verification         | 🟡 Workflow (Steps 14–15) + Trusted Contact portal, Customer safety UI (Step 19) and admin review UI (Step 20) done; evidence, second confirmation open                                  |      13 / 15       |
 |  20   | Notifications              | 🟡 Brevo email: codes, release, safety, verify/reset (Phase 04), invitations (Phase 10); **real-inbox OTP + production domain pending (manual)**; SMS deferred                           |       2 / 5        |
@@ -72,7 +72,7 @@ Each phase lists **Done** items first, then **To do**. "Backend ready" means the
 |  23   | Audit + security           | 🟡 `AuditLog` + admin events (Step 16) + `PASSWORD_CHANGED` (Step 22); full app audit (Step 23); other customer events, export, deletion open                                            | 2 (+1 partly) / 7  |
 |  24   | Testing                    | 🟡 Backend tests + Postman done; frontend 199 component + Playwright green (Step 22); §50 security cases, load test open                                                                 |       5 / 7        |
 |  25   | WordPress integration      | ⬜ Not started                                                                                                                                                                           |       0 / 3        |
-|  26   | Staging                    | 🟡 Railway client demo live (frontend, API, PostgreSQL, Redis); CI, separate secrets, worker process, QA open                                                                           |       2 / 6        |
+|  26   | Staging                    | 🟡 Railway client demo live (frontend, API, PostgreSQL, Redis); CI, separate secrets, worker service deploy, QA open                                                                   |       2 / 6        |
 |  27   | Production                 | ⬜ Not started                                                                                                                                                                           |       0 / 9        |
 |  FE   | **Frontend (all apps)**    | 🟡 Customer app + vault + portals (Steps 17–19) + Admin Portal (Step 20) + Account settings (Step 22); billing, WordPress open                                                           |    **27 / 30**     |
 
@@ -81,7 +81,8 @@ Each phase lists **Done** items first, then **To do**. "Backend ready" means the
 ```text
 Customer ──login──► vault: People I Love · Trusted Contacts · Messages (+ photo/audio) · Schedules
                            Memory Vault · My Story · My Wishes
-FIXED_DATE schedule ──BullMQ──► Message RELEASED ──► Recipient access grants
+FIXED_DATE / NOW / CUSTOM_EVENT schedule ──BullMQ──► Message RELEASED ──► Recipient access grants
+BIRTHDAY / ANNIVERSARY / ANNUAL_AFTER_DEATH ──per Recipient, yearly──► grant + email (Message stays SCHEDULED, Phase 16)
 Recipient ──email code──► read released Messages + media                         (Step 13)
 Customer adds Trusted Contact (max 2) ──email invitation──► accept / decline     (Phase 10; SMS deferred)
 Trusted Contact ──email code──► see accounts ──► file death report (PENDING)       (Step 14)
@@ -97,7 +98,7 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 
 > Phase 01. Questions only the product owner can answer. Many backend limits are placeholders until these are decided.
 
-### 01 · Product decisions — 🟡 8 (+3 partly) of 34 done
+### 01 · Product decisions — 🟡 9 (+4 partly) of 34 done
 
 **Done**
 
@@ -126,8 +127,13 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 
 **Messages, scheduling and release**
 
-- [ ] Scheduling: rules for birthdays, anniversaries, after-death and annual releases (BIRTHDAY needs: timezone, time of
-      day, 29 Feb, several recipients with different birthdays, recurrence)
+- [x] **Scheduling rules (approved 2026-10-09, Phase 16)**: NOW = queued right after scheduling, released by the worker;
+      BIRTHDAY = each Recipient's own birthday, every year, at a Customer-chosen local time + IANA zone (409 if a live
+      Recipient has no birthday); ANNIVERSARY = month/day every year (past this year → next year); CUSTOM_EVENT = one
+      named local date/time/zone, once; ANNUAL_AFTER_DEATH = only after an admin-verified death, first anniversary of the
+      verified date of death, then yearly; 29 Feb → 28 Feb in non-leap years; calendar recurrence, never +365 days;
+      repeat years = new email, same permanent grant; a recurring Message stays SCHEDULED and is locked once shared
+      ([scheduling.md §10](scheduling.md#10-phase-16-every-trigger-approved-2026-10-09))
 - [ ] Scheduled messages are locked (edit = unschedule → edit → reschedule): is that the UX we want?
 - [x] **Composition rules (approved 2026-10-07)**: a single modality uses its own type (text → TEXT, photo → PHOTO,
       audio → AUDIO, video → VIDEO; PHOTO/AUDIO/VIDEO carry no text); MIXED = at least two distinct of TEXT, PHOTO, AUDIO,
@@ -137,7 +143,8 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 - [ ] Limits: message text 20,000 chars, 100 recipients per message, after-death offset ≤ 36,500 days (all configurable placeholders)
 - [ ] Release: what should happen to a due message whose recipients were all deleted (currently stays SCHEDULED,
       re-checked every minute)?
-- [ ] Release: alerting/admin view for stuck releases; run the worker as its own process in production?
+- [~] Release: alerting/admin view for stuck releases; run the worker as its own process in production? **Own process
+      approved and built (Phase 17B, 2026-10-12)**; stuck-release alerting still open
 
 **Media, storage and billing**
 
@@ -461,7 +468,10 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
       in the row-inserting transaction under a lock on the Customer's `User` row (no parallel oversubscription; also for
       memory→message copies); 409 when full or when the file would cross the limit; existing files stay available.
       `GET /users/me/storage`; Account settings meter with 80/90/100 % notices. Unit, PostgreSQL e2e (incl. a 5-request
-      race), component and Playwright tests
+      race), component and Playwright tests. **Follow-up (2026-10-09): Storage Manager** `/settings/storage`: per-source
+      breakdown, `GET /users/me/storage/items` (largest first, type/source filters, paged), deletion only through each
+      feature's own endpoint and rules (scheduled/released message media not deletable), full storage still deletes
+      (`docs/media-storage.md` §5a)
 - [x] Frontend: upload with progress + cancel, browser audio recorder, signed previews, delete → **FE-13**, **FE-14**
   (Step 18) (Playwright verified, Step 21); video select/upload/preview/delete (Phase 12). **Browser video recorder
   (Phase 12A, 2026-10-07)**: camera + mic only on click, live preview, timer, play back, Record again / Discard, then the
@@ -574,15 +584,16 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 
 ## ⏰ Part 4 — Scheduling and release engine
 
-> Phases 16–17. When a message is released. Only `FIXED_DATE` is executed today; `ON_DEATH` and `AFTER_DEATH` are
-> stored and wait for death verification (phase 19).
+> Phases 16–17. When a message is released. Every trigger executes: `FIXED_DATE` (Step 12), `ON_DEATH` /
+> `AFTER_DEATH` after an admin-verified death (Step 15), and since Phase 16 `NOW`, `CUSTOM_EVENT` and the per-Recipient
+> yearly `BIRTHDAY`, `ANNIVERSARY` and `ANNUAL_AFTER_DEATH`.
 
-### 16 · Scheduling — 🟡 10 of 11
+### 16 · Scheduling — ✅ 11 of 11
 
 **Done**
 
 - [x] `ReleaseTriggerType` enum (all 8 product types) + `MessageSchedule` (one per message), migration `add_message_schedules`
-- [x] API: `POST/GET/PATCH/DELETE /messages/:id/schedule`; supports FIXED_DATE, ON_DEATH, AFTER_DEATH (others → 400, reserved)
+- [x] API: `POST/GET/PATCH/DELETE /messages/:id/schedule`; supports FIXED_DATE, ON_DEATH, AFTER_DEATH (Phase 16: all 8 triggers)
 - [x] DRAFT → SCHEDULED on create, SCHEDULED → DRAFT on delete, both atomic; only the Step 12 release worker sets RELEASED
 - [x] FIXED_DATE needs an explicit timezone offset, stored as UTC, must be in the future; DB CHECK enforces fields per trigger
 - [x] Stored in PostgreSQL only (no Redis-only schedules, no `setTimeout`)
@@ -592,13 +603,17 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 - [x] ON_DEATH / AFTER_DEATH execution (Step 15) after an admin-verified death: `DeathTriggeredMessageActivation`
       (`dueAt` = `verifiedAt` / `verifiedDeathAt + afterDeathDays`), released through the same queue and transaction
 
-**To do**
-
-- [ ] NOW, BIRTHDAY, ANNIVERSARY, CUSTOM_EVENT, ANNUAL_AFTER_DEATH (waiting on product decisions); per-recipient
-      release/delivery records
+- [x] NOW, BIRTHDAY, ANNIVERSARY, CUSTOM_EVENT, ANNUAL_AFTER_DEATH; per-recipient release/delivery records
+      (**Phase 16, 2026-10-09**, rules approved in phase 01, `docs/scheduling.md` §10): IANA zone + local time, calendar
+      recurrence (29 Feb → 28 Feb), `MessageRecipientRelease` (unique message + recipient + year) → grant for that
+      Recipient only → one `ReleaseNotification` per occurrence (email-delivery queue); recurring Messages stay SCHEDULED,
+      locked once shared; DB CHECK per trigger; migrations `recurring_and_per_recipient_schedules`,
+      `schedule_check_not_null` (additive). Unit (recurrence, schedules, occurrence release, reconciler, death) + e2e with
+      real PostgreSQL/Redis/BullMQ (`recurring-schedules`, `death-verification` with ANNUAL_AFTER_DEATH) + FE component
+      tests + Playwright (`schedules.vault.spec.ts`, isolated console-email API)
 - [x] Frontend: schedule picker (FIXED_DATE with timezone offset, ON_DEATH, AFTER_DEATH), change timing, unschedule → **FE-15** (Step 18) (Playwright verified, Step 21)
 
-### 17 · Redis + BullMQ — 🟡 8 (+1 partly) of 10
+### 17 · Redis + BullMQ — 🟡 9 (+1 partly) of 10
 
 **Done**
 
@@ -622,7 +637,15 @@ Admin ──password + TOTP──► dashboard · users (suspend/reactivate) · 
 - [~] Dead-letter handling, queue monitoring and alerts: **monitoring done (Step 16)**: `GET /admin/system/queues`,
   failed-job list (sanitized) and retry (audited; the worker re-checks PostgreSQL). Exhausted jobs stay in BullMQ's
   `failed` set for 7 days; a real DLQ and alerting are still open
-- [ ] Separate worker process (currently runs inside the API process)
+- [x] Separate worker process (**Phase 17B, 2026-10-12**, `docs/message-release.md` §3): `src/main.ts` → `AppModule`
+      (HTTP + queue producers only, zero BullMQ consumers, no reconcilers) and `src/worker.ts` → `WorkerModule`
+      (`QueueWorkersModule`: message-release, death-verification and email-delivery workers + their reconcilers +
+      dead-letter hooks; Nest application context, no HTTP/controllers). Shared domain services, no duplicated logic, no
+      migration. Workers fail fast without queue Redis; SIGTERM/SIGINT stop timers, finish the active job, await a running
+      reconcile, then close Redis/PostgreSQL. Scripts `worker:dev` (own `dist-worker/`) / `worker:prod` (`dist/worker.js`).
+      Tests: `src/worker.module.spec.ts` (composition roots + lifecycle), `test/worker-process.e2e-spec.ts` (API-only →
+      job queued, nothing released; worker-only → release + grant + one email; worker/API restart → no duplicates);
+      full backend e2e 29 files green with suites opting into `QueueWorkersModule`. Not deployed anywhere
 
 ---
 
@@ -917,7 +940,8 @@ drop the proxy and point `NEXT_PUBLIC_API_BASE_URL` at the API. Short `DEATH_VER
 demo-only.
 
 - [x] Choose hosting: Railway (demo/staging; production region still open, see §27)
-- [ ] Railpack builds for API and frontend (no Dockerfile needed); separate worker process still open (workers run in the API)
+- [ ] Railpack builds for API and frontend (no Dockerfile needed); the code now has a separate worker entrypoint
+      (Phase 17B, local only) but the demo still runs the API service alone — a worker service is not deployed
 - [x] Managed PostgreSQL and Redis (Railway; `prisma migrate deploy` as the pre-deploy step)
 - [ ] GitHub Actions: lint → type check → tests → build → deploy staging → E2E
 - [ ] Staging secrets separate from production; Stripe test mode

@@ -45,6 +45,7 @@ export const AUDIT_EVENT_LABEL: Record<AuditEventType, string> = {
   DEATH_VERIFICATION_REJECTED: 'Death report rejected',
   FAILED_JOB_RETRIED: 'Failed job retried',
   PASSWORD_CHANGED: 'Customer changed their password',
+  DEAD_LETTER_RETRY_REQUESTED: 'Dead-lettered job retried',
 };
 
 export const AUDIT_ACTOR_LABEL: Record<AuditActorType, string> = {

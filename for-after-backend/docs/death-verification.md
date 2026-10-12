@@ -236,7 +236,8 @@ Only `DeathVerificationCase.status = VERIFIED` authorizes activation. A `DeathRe
 | `ON_DEATH` | `verifiedAt` (release as soon as verification succeeds, never at the historical time of death) | verified 2026-09-29T05:00Z → due then |
 | `AFTER_DEATH` | `verifiedDeathAt + afterDeathDays` (UTC days) | died 2026-09-20T10:00Z, 30 days → 2026-10-20T10:00Z |
 | `AFTER_DEATH`, 0 days | `verifiedDeathAt` | usually due immediately |
-| `ANNUAL_AFTER_DEATH`, `BIRTHDAY`, `ANNIVERSARY`, `CUSTOM_EVENT` | not activated (deferred) | |
+| `ANNUAL_AFTER_DEATH` (Phase 16) | first anniversary of `verifiedDeathAt` (local date in the schedule's zone, at its local time); one `MessageRecipientRelease` per live Recipient created in the same transaction, then yearly | died 2026-09-20 18:00 Perth, 09:00 Perth → 2027-09-20T01:00Z |
+| `BIRTHDAY`, `ANNIVERSARY`, `CUSTOM_EVENT` | not death triggers | |
 
 - **Activation** (after commit, and by the reconciler): for every `SCHEDULED`, non-deleted Message of the Customer with an
   `ON_DEATH`/`AFTER_DEATH` schedule and no activation yet → one row (`createMany … skipDuplicates`), under a row lock on
@@ -280,6 +281,10 @@ PostgreSQL is the source of truth; Redis/BullMQ only accelerates execution.
 | Safeguard worker | Re-reads PostgreSQL. Due → `READY_FOR_REVIEW`. Early → moved back to delayed for the stored `safeguardEndsAt`. Cancelled/rejected/verified/advanced → no-op |
 | Death reconciler (startup + every `DEATH_VERIFICATION_RECONCILE_INTERVAL_SECONDS`) | ① `PENDING` cases with a report and no notice → send notice (retry). ② `SAFEGUARD_ACTIVE` → overdue ones advance now, others get their job ensured. ③ `VERIFIED` cases with `deathTriggersActivatedAt = null` or a death-trigger Message missing an activation → activate + queue |
 | Release reconciler (Step 12, extended) | Also queues every `VERIFIED`, still-`SCHEDULED` activation due within the lookahead |
+
+The safeguard worker and the death reconciler run only in the worker process (`DeathVerificationProcessor`, Phase 17B);
+the API sends the safety notice right after a report and queues the safeguard job, and the reconciler retries anything
+that step missed.
 
 | Failure | Behaviour |
 |---|---|
@@ -353,6 +358,11 @@ My Story, My Wishes, OTPs, session ids, secrets or presigned URLs. There is no `
 | `DEATH_VERIFICATION_JOB_ATTEMPTS` | `5` | Safeguard job attempts |
 | `DEATH_VERIFICATION_JOB_BACKOFF_MS` | `5000` | Exponential backoff base |
 | `QUEUE_REDIS_URL` / `REDIS_URL` | | Same Redis as the release queue |
+
+A safeguard job that exhausts its attempts becomes a durable dead letter (entity `DeathVerificationCase`, ids only:
+never notes or reporter data) with one operator alert (Phase 17A, [admin.md §8](admin.md#8-queue-monitoring-and-failed-job-retry)).
+An admin retry only queues the job again: the worker re-reads the case, so a `CANCELLED`, `REJECTED` or `VERIFIED`
+case is never advanced (outcome `stale`) and a not-yet-due one goes back to its stored time.
 
 ---
 

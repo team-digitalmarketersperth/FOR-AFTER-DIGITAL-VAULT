@@ -146,7 +146,7 @@ Worker --locks + re-reads PostgreSQL--> SCHEDULED -> RELEASED + MessageRelease (
 ```
 PostgreSQL is authoritative; Redis only holds near-term execution jobs and can be lost without losing a schedule.
 FIXED_DATE only; ON_DEATH/AFTER_DEATH wait for death verification. Release is not delivery (no email/SMS yet).
-The worker runs inside the API process for now. Details: `docs/message-release.md`.
+The worker and reconcilers run in their own process (`src/worker.ts`, Phase 17B); the API only produces jobs. Details: `docs/message-release.md`.
 
 ### Recipient Portal (Step 13, implemented)
 ```

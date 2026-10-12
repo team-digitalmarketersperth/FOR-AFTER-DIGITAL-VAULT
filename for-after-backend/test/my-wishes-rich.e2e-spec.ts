@@ -33,6 +33,7 @@ import { TrustedContactPortalModule } from '../src/trusted-contact-portal/truste
 import { TrustedContactsModule } from '../src/trusted-contacts/trusted-contacts.module.js';
 import { FAKE_MALWARE, FakeMalwareScanner } from './fake-malware-scanner.js';
 import { FakeMediaStorage, fileStart } from './fake-media-storage.js';
+import { QueueWorkersModule } from '../src/worker.module.js';
 
 // Phase 15B (approved policy): rich My Wishes (photo/audio/video) and
 // Wish → Message: an independent DRAFT that goes through the normal
@@ -190,6 +191,8 @@ describe('My Wishes rich answers + Wish → Message + verified-death release (e2
     });
     const moduleRef = await Test.createTestingModule({
       imports: [
+        // Phase 17B: the worker process's consumers, started explicitly.
+        QueueWorkersModule,
         ConfigModule.forRoot({ isGlobal: true }),
         PrismaModule,
         RedisModule,

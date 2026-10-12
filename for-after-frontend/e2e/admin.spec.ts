@@ -226,6 +226,39 @@ test.describe.serial('signed-in admin', () => {
     await expect(page.getByRole('link', { name: 'Failed job retried' }).first()).toBeVisible();
   });
 
+  test('dead letters: sanitized detail, retry resolves a stale one safely (Phase 17A)', async () => {
+    const id = process.env.E2E_ADMIN_DEAD_LETTER;
+    test.skip(!id, 'Set E2E_ADMIN_DEAD_LETTER (backend: node scripts/dev-dead-letter-fixture.mjs)');
+    const dl = await (await page.request.get(`${API}/admin/system/dead-letters/${id}`)).json();
+    await page.goto('/admin/system/queues');
+    const table = page.getByRole('table', { name: 'Dead letters' });
+    const row = table.getByRole('row').filter({ hasText: dl.jobId });
+    await expect(row).toContainText('Open');
+    await expect(row).toContainText('message-release');
+
+    await row.getByRole('button', { name: `View dead letter ${dl.jobId}` }).click();
+    const detail = page.getByRole('dialog', { name: 'Dead letter' });
+    await expect(detail).toContainText('E2E fixture: connect ECONNREFUSED [url]');
+    await expect(detail).toContainText('ECONNREFUSED');
+    await expect(detail).toContainText('Not configured');
+    await expect(detail).not.toContainText(/stack|payload|@|postgres/i);
+    await page.keyboard.press('Escape');
+    await expect(detail).toBeHidden();
+
+    await row.getByRole('button', { name: `Retry dead letter ${dl.jobId}` }).click();
+    const confirm = page.getByRole('dialog', { name: 'Retry this dead letter?' });
+    await confirm.getByRole('button', { name: 'Retry job' }).click();
+    await expect(confirm).toBeHidden();
+    // Its fictional message has no row: nothing runs, the dead letter is resolved as stale.
+    await expect(page.getByText('Nothing to run: the related record no longer exists')).toBeVisible();
+    await expect(table.getByRole('row').filter({ hasText: dl.jobId })).toHaveCount(0);
+    const after = await (await page.request.get(`${API}/admin/system/dead-letters/${id}`)).json();
+    expect(after).toMatchObject({ status: 'RESOLVED', resolution: 'stale' });
+    expect((await page.request.post(`${API}/admin/system/dead-letters/${id}/retry`)).status()).toBe(409);
+    await page.getByLabel('Status').selectOption('RESOLVED');
+    await expect(table.getByRole('row').filter({ hasText: dl.jobId })).toContainText('Resolved');
+  });
+
   test('sign out ends only the admin session; /admin then asks to sign in', async () => {
     await page.goto('/admin');
     await page.getByRole('button', { name: 'Sign out' }).first().click();

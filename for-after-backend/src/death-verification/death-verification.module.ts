@@ -15,18 +15,13 @@ import {
 } from './death-verification.controller.js';
 import { DeathVerificationService } from './death-verification.service.js';
 
-// Reports arrive through the Trusted Contact portal (Step 14). Step 15 adds
-// the safeguard workflow, the Customer confirm-alive routes and the minimal
-// admin decision routes. UsersModule backs SessionAuthGuard; MessageReleaseModule
-// provides the one message-release queue death triggers are executed through.
+// The safeguard workflow and its producer queue, shared by the API and the
+// worker process (Phase 17B; the consumer is DeathVerificationProcessor in
+// QueueWorkersModule). MessageReleaseModule provides the one message-release
+// queue death triggers are executed through.
 @Module({
-  imports: [UsersModule, MessageReleaseModule, EmailModule],
-  controllers: [
-    CustomerDeathVerificationController,
-    AdminDeathVerificationController,
-  ],
+  imports: [MessageReleaseModule, EmailModule],
   providers: [
-    DeathVerificationService,
     DeathVerificationWorkflow,
     DeathVerificationQueue,
     // The notice is an email (EMAIL_PROVIDER); tests override the token.
@@ -36,6 +31,20 @@ import { DeathVerificationService } from './death-verification.service.js';
       inject: [EmailProvider, EmailConfig],
     },
   ],
-  exports: [DeathVerificationService, DeathVerificationQueue],
+  exports: [DeathVerificationWorkflow, DeathVerificationQueue],
+})
+export class DeathVerificationQueueModule {}
+
+// Reports arrive through the Trusted Contact portal (Step 14). Step 15 adds
+// the Customer confirm-alive routes and the minimal admin decision routes.
+// UsersModule backs SessionAuthGuard.
+@Module({
+  imports: [UsersModule, DeathVerificationQueueModule],
+  controllers: [
+    CustomerDeathVerificationController,
+    AdminDeathVerificationController,
+  ],
+  providers: [DeathVerificationService],
+  exports: [DeathVerificationService, DeathVerificationQueueModule],
 })
 export class DeathVerificationModule {}

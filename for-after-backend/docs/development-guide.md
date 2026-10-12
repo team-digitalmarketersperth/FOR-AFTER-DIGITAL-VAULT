@@ -100,12 +100,13 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 | Task | Command |
 |---|---|
-| Development (hot reload, port 4000) | `npm run start:dev` |
+| Development API (hot reload, port 4000) | `npm run start:dev` |
+| Development worker (releases, emails, death safeguards) | `npm run worker:dev` |
 | Unit tests (Vitest, no database) | `npm test` |
 | E2E tests (real PostgreSQL + Redis) | `npm run test:e2e` |
 | Lint | `npm run lint` |
 | Format | `npm run format` |
-| Build / production | `npm run build` / `npm run start:prod` |
+| Build / production | `npm run build` / `npm run start:prod` (API) + `npm run worker:prod` (worker) |
 | Access-grant backfill (Step 13, one-off) | `npm run build && npm run backfill:access-grants` (dry run; add `-- --apply` to write) |
 
 **Postman:**

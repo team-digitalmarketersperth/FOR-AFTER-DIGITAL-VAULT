@@ -16,6 +16,7 @@ import { MessagesModule } from '../src/messages/messages.module.js';
 import { PrismaModule } from '../src/prisma/prisma.module.js';
 import { PrismaService } from '../src/prisma/prisma.service.js';
 import { RecipientsModule } from '../src/recipients/recipients.module.js';
+import { QueueWorkersModule } from '../src/worker.module.js';
 
 // Real HTTP, sessions (MemoryStore), PostgreSQL, local Redis (REDIS_URL) and a
 // real BullMQ worker on a queue used only by this run. Object storage is
@@ -71,6 +72,8 @@ describe('Message release (e2e, PostgreSQL + Redis + BullMQ)', () => {
     process.env.RELEASE_RECONCILE_INTERVAL_SECONDS = '3600';
     const moduleRef = await Test.createTestingModule({
       imports: [
+        // Phase 17B: the worker process's consumers, started explicitly.
+        QueueWorkersModule,
         ConfigModule.forRoot({ isGlobal: true }),
         PrismaModule,
         AuthModule,

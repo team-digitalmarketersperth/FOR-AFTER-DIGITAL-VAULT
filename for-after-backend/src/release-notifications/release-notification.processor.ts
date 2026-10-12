@@ -1,16 +1,20 @@
 import {
   Injectable,
   Logger,
+  OnApplicationBootstrap,
   OnModuleDestroy,
   OnModuleInit,
 } from '@nestjs/common';
 import { type Job, UnrecoverableError, Worker } from 'bullmq';
 import { isUUID } from 'class-validator';
+import { DeadLetterService } from '../dead-letters/dead-letter.service.js';
 import { maskEmail } from '../auth/dto/register.dto.js';
 import { EmailProvider, EmailSendError } from '../email/email-provider.js';
 import { messageReleased } from '../email/email-templates.js';
 import { EmailConfig } from '../email/email.module.js';
+import { withTimeout } from '../message-release/message-release-queue.service.js';
 import { errorCode, PrismaService } from '../prisma/prisma.service.js';
+import { GRANTABLE_STATUSES } from '../recipient-auth/recipient-auth.service.js';
 import {
   type NotificationJobData,
   ReleaseNotificationQueue,
@@ -20,29 +24,32 @@ export type NotificationOutcome = 'sent' | 'already_sent' | 'stale';
 
 /**
  * Worker for the `email-delivery` queue. Re-reads PostgreSQL every time: sends
- * only for a RELEASED message and a row not already SENT, then records the
+ * only for a released message (as eligibleGrant) and a row not already SENT, then records the
  * result. Transient provider errors are retried with backoff; permanent ones
  * (invalid address, unverified sender, …) fail at once and stay visible in
  * the admin failed-jobs view. A failed email never touches the release: the
- * Recipient can still sign in and read the message.
+ * Recipient can still sign in and read the message. Worker process only
+ * (Phase 17B), with its reconciler.
  */
 @Injectable()
 export class ReleaseNotificationProcessor
-  implements OnModuleInit, OnModuleDestroy
+  implements OnModuleInit, OnApplicationBootstrap, OnModuleDestroy
 {
   private readonly logger = new Logger(ReleaseNotificationProcessor.name);
   private worker?: Worker<NotificationJobData>;
   private timer?: NodeJS.Timeout;
+  private reconciling?: Promise<unknown>;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly queue: ReleaseNotificationQueue,
     private readonly email: EmailProvider,
     private readonly config: EmailConfig,
+    private readonly deadLetters: DeadLetterService,
   ) {}
 
-  onModuleInit(): void {
-    const { queueName, connection, reconcileIntervalMs } = this.queue.settings;
+  async onModuleInit(): Promise<void> {
+    const { queueName, connection } = this.queue.settings;
     this.worker = new Worker<NotificationJobData>(
       queueName,
       (job) => this.process(job),
@@ -51,25 +58,26 @@ export class ReleaseNotificationProcessor
     this.worker.on('error', (err) =>
       this.logger.error(`Email worker error (code: ${errorCode(err)})`),
     );
-    this.worker.on('failed', (job, err) => {
-      if (
-        job &&
-        (err instanceof UnrecoverableError ||
-          job.attemptsMade >= (job.opts.attempts ?? 1))
-      ) {
-        this.logger.error(
-          `release_notification_failed notification ${job.data.notificationId} job ${job.id} (${err.message})`,
-        );
-      }
-    });
-    void this.reconcile();
-    this.timer = setInterval(() => void this.reconcile(), reconcileIntervalMs);
+    // Exhausted or permanent → dead letter + one direct operator alert
+    // (never through this queue, so a provider outage cannot loop).
+    this.deadLetters.watch(this.worker, 'email-delivery');
+    // Fail fast: a worker process that cannot reach queue Redis is useless.
+    await withTimeout(this.worker.waitUntilReady());
+    this.logger.log('email-delivery worker ready');
+  }
+
+  onApplicationBootstrap(): void {
+    const tick = () => void (this.reconciling = this.reconcile());
+    tick();
+    this.timer = setInterval(tick, this.queue.settings.reconcileIntervalMs);
     this.timer.unref();
   }
 
   async onModuleDestroy(): Promise<void> {
     clearInterval(this.timer);
+    // Waits for an active job and a running reconcile before Prisma closes.
     await this.worker?.close();
+    await this.reconciling;
   }
 
   async reconcile(): Promise<void> {
@@ -103,7 +111,8 @@ export class ReleaseNotificationProcessor
     // Same rule as Recipient sign-in (eligibleGrant): never announce a message
     // the Recipient could not then open.
     const { status, deletedAt } = row?.grant.message ?? {};
-    if (!row || !to || status !== 'RELEASED' || deletedAt) return 'stale';
+    if (!row || !to || !status || deletedAt) return 'stale';
+    if (!GRANTABLE_STATUSES.includes(status)) return 'stale';
     if (row.status === 'SENT') return 'already_sent';
 
     try {
@@ -145,10 +154,12 @@ export class ReleaseNotificationProcessor
           ...(last ? { status: 'FAILED' as const, failedAt: new Date() } : {}),
         },
       });
-      // Safe category only: shown (sanitized) in the admin failed-jobs view.
-      if (!retryable)
-        throw new UnrecoverableError(`email_send_failed: ${code}`);
-      throw new Error(`email_send_failed: ${code}`);
+      // Safe category only: shown (sanitized) in the admin failed-jobs view;
+      // `code` becomes the dead letter's errorCode.
+      const failure = retryable
+        ? new Error(`email_send_failed: ${code}`)
+        : new UnrecoverableError(`email_send_failed: ${code}`);
+      throw Object.assign(failure, { code });
     }
   }
 }

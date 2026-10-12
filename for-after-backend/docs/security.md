@@ -194,7 +194,9 @@ Full design: `docs/admin.md`.
 - **Data minimisation.** Admin user views return account metadata and counts, never vault content, notes, secrets or
   URLs. Detail views of users and death cases are audited.
 - **Queues.** A server-side allowlist maps public names to the app's own queues; failed-job reasons are sanitized (no
-  URLs/credentials/stack traces); a retry only re-queues and the worker re-checks PostgreSQL.
+  URLs/credentials/stack traces); a retry only re-queues and the worker re-checks PostgreSQL. Durable dead letters
+  (Phase 17A) store ids, a safe error code and the sanitized first line only (no payload, content, addresses, secrets
+  or stacks); operator alerts carry ids and the code only and are sent directly, never through a queue.
 - **CSRF.** Same model as Customer routes (`SameSite=Lax` + CORS allowlist + JSON). No token yet; tracked in Phase 05.
 - **Known gaps.** Enrollment is trust-on-first-use (promote only when the owner enrolls immediately); no MFA reset API
   (operator procedure in `docs/admin.md` §3); password-login throttle is in memory per instance.

@@ -1,14 +1,15 @@
 import { defineConfig } from 'vitest/config';
 import tsconfigPaths from 'vite-tsconfig-paths';
 
-// Suites that boot the release workers (MessageReleaseModule via schedules,
-// death verification, admin or the whole app). They share one database, and
+// Suites that boot the release workers (QueueWorkersModule / WorkerModule, Phase
+// 17B) or produce release jobs. They share one database, and
 // each release reconciler queues every due SCHEDULED message it finds at boot:
 // a suite starting mid-test would release another suite's message from its own
 // queues and email it through the 'disabled' provider. One file at a time.
 const RELEASE_WORKER_SUITES = [
   'test/admin.e2e-spec.ts',
   'test/app.e2e-spec.ts',
+  'test/dead-letters.e2e-spec.ts',
   'test/death-verification.e2e-spec.ts',
   'test/email-delivery.e2e-spec.ts',
   'test/error-boundary.e2e-spec.ts',
@@ -20,8 +21,10 @@ const RELEASE_WORKER_SUITES = [
   'test/message-release.e2e-spec.ts',
   'test/message-schedules.e2e-spec.ts',
   'test/recipient-portal.e2e-spec.ts',
+  'test/recurring-schedules.e2e-spec.ts',
   'test/trusted-contact-portal.e2e-spec.ts',
   'test/trusted-contact-invitations.e2e-spec.ts',
+  'test/worker-process.e2e-spec.ts',
 ];
 
 export default defineConfig({

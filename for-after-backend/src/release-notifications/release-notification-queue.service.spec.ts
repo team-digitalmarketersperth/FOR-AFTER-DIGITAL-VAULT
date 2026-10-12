@@ -73,7 +73,12 @@ describe('ReleaseNotificationQueue (Step 24.1)', () => {
         where: {
           status: 'PENDING',
           createdAt: { lte: new Date(NOW.getTime() - 2 * 60_000) },
-          grant: { message: { status: 'RELEASED', deletedAt: null } },
+          grant: {
+            message: {
+              status: { in: ['RELEASED', 'SCHEDULED'] },
+              deletedAt: null,
+            },
+          },
         },
         take: 200,
       }),

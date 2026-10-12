@@ -145,6 +145,11 @@ Every assigned Recipient is told once per released Message, and only after the r
   (the notification id; never an address or content).
 - **Retry** re-runs the job through the normal worker: it re-checks PostgreSQL and sends only if the row is not `SENT`
   (and passes the same idempotency key), so a retry can never release anything.
+- **Dead letters + operator alert (Phase 17A):** a notification job that ends in `FAILED` also gets one
+  `DeadLetterJob` row (ids + error code; never the address or email body) and one alert to `OPS_ALERT_EMAIL`
+  (optional; unset = log line only). The alert goes **directly** through `EmailProvider` (kind `ops-alert`, one
+  attempt), never through `email-delivery`: a provider outage gives one `FAILED` alert, logged, and no loop. Retrying
+  from Admin → Queues → Dead letters reuses the same `ReleaseNotification` row and idempotency key (`SENT` → no-op).
 - **Transient** errors are retried by BullMQ with backoff (the adapter itself never retries); after the last attempt
   the row is `FAILED`. Brevo: HTTP `429` (`rate_limit_exceeded`), any `5xx`, network errors and timeouts.
 - **Permanent** errors fail at once: any other Brevo `4xx`, e.g. `unauthorized` (bad key or **unauthorised IP**),
@@ -152,8 +157,9 @@ Every assigned Recipient is told once per released Message, and only after the r
   `duplicate_request`.
 - **Redis down:** enqueueing after a release fails softly (logged); the reconciler re-queues `PENDING` rows when Redis
   is back. Nothing is ever marked `SENT` without the provider's acceptance.
-- **Several API instances:** one job per row (deterministic job id) and the worker skips `SENT` rows, so a logical
-  email is sent once.
+- **Several worker instances:** one job per row (deterministic job id) and the worker skips `SENT` rows, so a logical
+  email is sent once. The `email-delivery` worker and its reconciler run in the worker process (`npm run worker:dev`,
+  Phase 17B); OTP and safety-notice emails are still sent directly by the API.
 - **Useful query:** `SELECT status, count(*) FROM "ReleaseNotification" GROUP BY status;`
 
 **Diagnosing a missing sign-in code.** First check the API log for `recipient_otp_requested … eligible false` (or the
@@ -188,8 +194,8 @@ A `401` is permanent (`retryable: false`), so nothing retries it: once fixed, re
    Either add the machine's IP at **Security → Authorised IPs** (`app.brevo.com/security/authorised_ips`) or turn IP
    blocking off. **2026-10-05:** turned off for development; a read-only account check and a no-send probe of the send
    endpoint then passed authentication. Turn it back on for production (below).
-5. Set `EMAIL_PROVIDER=brevo`, `EMAIL_FROM_NAME=For After`, `APP_BASE_URL=http://localhost:3000`; restart the API (the
-   workers run in the same process).
+5. Set `EMAIL_PROVIDER=brevo`, `EMAIL_FROM_NAME=For After`, `APP_BASE_URL=http://localhost:3000`; restart the API and the
+   worker process (`npm run worker:dev`; it sends the release emails and ops alerts).
 6. Transport check, independent of Recipient eligibility (sends one plain email, no code, to `BREVO_LIVE_TEST_TO` or
    the sender itself):
 

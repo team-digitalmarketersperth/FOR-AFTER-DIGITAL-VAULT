@@ -7,17 +7,25 @@ import { useForm, useWatch, type UseFormRegisterReturn } from "react-hook-form";
 import { toast } from "sonner";
 import { describeSchedule } from "@/components/messages/message-bits";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
+import { SelectField } from "@/components/shared/list-controls";
 import { FormError, TextField } from "@/components/shared/form-field";
 import { Spinner } from "@/components/shared/states";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useScheduleMutation } from "@/hooks/use-vault";
-import type { Message, Schedule, ScheduleInput } from "@/lib/api/messages";
+import { recipients as people, useScheduleMutation } from "@/hooks/use-vault";
+import {
+  RECURRING_TRIGGERS,
+  type Message,
+  type Schedule,
+  type ScheduleInput,
+} from "@/lib/api/messages";
 import {
   fullName,
   isoToLocalInputs,
   localToOffsetIso,
   timeZoneLabel,
+  timeZoneName,
+  timeZones,
 } from "@/lib/format";
 import { scheduleSchema, type ScheduleValues } from "@/schemas/vault";
 
@@ -27,9 +35,29 @@ const TRIGGERS: {
   description: string;
 }[] = [
   {
+    value: "NOW",
+    label: "Right away",
+    description: "Share as soon as you schedule it.",
+  },
+  {
     value: "FIXED_DATE",
     label: "On a date you choose",
     description: "Share on a specific date and time.",
+  },
+  {
+    value: "BIRTHDAY",
+    label: "On their birthday, every year",
+    description: "Share on each recipient’s own birthday, every year.",
+  },
+  {
+    value: "ANNIVERSARY",
+    label: "Every year on a date",
+    description: "Share every year on a date that matters, like an anniversary.",
+  },
+  {
+    value: "CUSTOM_EVENT",
+    label: "On a special occasion",
+    description: "Share once, on a day you name, like a graduation or a wedding.",
   },
   {
     value: "ON_DEATH",
@@ -41,7 +69,21 @@ const TRIGGERS: {
     label: "Some time after my passing",
     description: "Share a set number of days after the verified date of death.",
   },
+  {
+    value: "ANNUAL_AFTER_DEATH",
+    label: "Every year after my passing",
+    description:
+      "Share each year on the anniversary of the verified date of death.",
+  },
 ];
+
+const LEAP_DAY_NOTE =
+  "If the date is 29 February, it’s shared on 28 February in other years.";
+const MONTHS = Array.from({ length: 12 }, (_, i) =>
+  new Intl.DateTimeFormat("en-AU", { month: "long" }).format(
+    new Date(2028, i, 1),
+  ),
+);
 
 // Death report ≠ verification ≠ release: only For After's verification makes these eligible.
 const VERIFICATION_NOTE =
@@ -94,6 +136,7 @@ export function SchedulePanel({
           <Readiness issues={issues} />
           <ScheduleForm
             mode="create"
+            recipients={message.recipients}
             pending={mutation.isPending}
             error={mutation.error}
             onSubmit={(input) =>
@@ -113,10 +156,17 @@ export function SchedulePanel({
       {message.status === "SCHEDULED" && schedule && (
         <>
           <p className="text-lg">{describeSchedule(schedule)}</p>
-          {changing ? (
+          {RECURRING_TRIGGERS.includes(schedule.triggerType) && (
+            <RecurringStatus
+              shared={schedule.releasedRecipientCount ?? 0}
+              total={message.recipients.length}
+            />
+          )}
+          {(schedule.releasedRecipientCount ?? 0) > 0 ? null : changing ? (
             <ScheduleForm
               mode="update"
               initial={schedule}
+              recipients={message.recipients}
               pending={mutation.isPending}
               error={mutation.error}
               onCancel={() => setChanging(false)}
@@ -239,30 +289,59 @@ function Readiness({ issues }: { issues: string[] }) {
   );
 }
 
+const ZONED: ScheduleValues["triggerType"][] = [
+  "BIRTHDAY",
+  "ANNIVERSARY",
+  "CUSTOM_EVENT",
+  "ANNUAL_AFTER_DEATH",
+];
+
 const toValues = (s?: Schedule): ScheduleValues => {
-  const local = s?.scheduledFor
-    ? isoToLocalInputs(s.scheduledFor)
-    : { date: "", time: "09:00" };
+  const local =
+    s?.triggerType === "FIXED_DATE" && s.scheduledFor
+      ? isoToLocalInputs(s.scheduledFor)
+      : { date: s?.eventDate?.slice(0, 10) ?? "", time: s?.localTime ?? "09:00" };
   return {
     triggerType: s?.triggerType ?? "FIXED_DATE",
     date: local.date,
     time: local.time,
     afterDeathDays: s?.afterDeathDays?.toString() ?? "30",
+    timezone: s?.timezone ?? timeZoneName(),
+    annualMonth: s?.annualMonth?.toString() ?? "1",
+    annualDay: s?.annualDay?.toString() ?? "1",
+    eventLabel: s?.eventLabel ?? "",
   };
 };
 
-// Each trigger sends exactly its own field; the other is null, as the API expects.
-const toInput = (v: ScheduleValues): ScheduleInput => ({
-  triggerType: v.triggerType,
-  scheduledFor:
-    v.triggerType === "FIXED_DATE" ? localToOffsetIso(v.date, v.time) : null,
-  afterDeathDays:
-    v.triggerType === "AFTER_DEATH" ? Number(v.afterDeathDays) : null,
-});
+// Each trigger sends exactly its own fields; scheduledFor/afterDeathDays are
+// null when unused, the others are left out, as the API expects.
+const toInput = (v: ScheduleValues): ScheduleInput => {
+  const input: ScheduleInput = {
+    triggerType: v.triggerType,
+    scheduledFor:
+      v.triggerType === "FIXED_DATE" ? localToOffsetIso(v.date, v.time) : null,
+    afterDeathDays:
+      v.triggerType === "AFTER_DEATH" ? Number(v.afterDeathDays) : null,
+  };
+  if (ZONED.includes(v.triggerType)) {
+    input.timezone = v.timezone;
+    input.localTime = v.time;
+  }
+  if (v.triggerType === "ANNIVERSARY") {
+    input.annualMonth = Number(v.annualMonth);
+    input.annualDay = Number(v.annualDay);
+  }
+  if (v.triggerType === "CUSTOM_EVENT") {
+    input.eventDate = v.date;
+    input.eventLabel = v.eventLabel.trim();
+  }
+  return input;
+};
 
 export function ScheduleForm({
   mode,
   initial,
+  recipients = [],
   pending,
   error,
   onSubmit,
@@ -270,6 +349,8 @@ export function ScheduleForm({
 }: {
   mode: "create" | "update";
   initial?: Schedule;
+  /** The message's recipients (BIRTHDAY needs each one's birthday). */
+  recipients?: Message["recipients"];
   pending: boolean;
   error: Parameters<typeof FormError>[0]["error"];
   onSubmit: (input: ScheduleInput) => void;
@@ -315,6 +396,88 @@ export function ScheduleForm({
             </div>
             <p className="text-[13px] leading-relaxed text-foreground-muted">
               Your time zone: {timeZoneLabel(chosenMoment(date, time))}
+            </p>
+          </div>
+        )}
+
+        {trigger === "NOW" && (
+          <p className="rounded-md bg-surface-muted px-4 py-3 text-[13px] leading-relaxed text-foreground-secondary">
+            Your recipients can open it as soon as it’s scheduled, and
+            we’ll let them know by email.
+          </p>
+        )}
+
+        {trigger === "BIRTHDAY" && (
+          <div className="grid gap-3">
+            <BirthdayCheck recipients={recipients} />
+            <ZonedTime form={form} errors={errors} />
+            <p className="text-[13px] leading-relaxed text-foreground-muted">
+              Each person receives it on their own birthday, so different
+              recipients may receive it on different days. {LEAP_DAY_NOTE}
+            </p>
+          </div>
+        )}
+
+        {trigger === "ANNIVERSARY" && (
+          <div className="grid gap-3">
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
+              <Choice
+                id="annualMonth"
+                label="Month"
+                registration={form.register("annualMonth")}
+                options={MONTHS.map((name, i) => [String(i + 1), name])}
+              />
+              <Choice
+                id="annualDay"
+                label="Day"
+                registration={form.register("annualDay")}
+                options={Array.from({ length: 31 }, (_, i) => [
+                  String(i + 1),
+                  String(i + 1),
+                ])}
+                error={errors.annualDay?.message}
+              />
+            </div>
+            <ZonedTime form={form} errors={errors} />
+            <p className="text-[13px] leading-relaxed text-foreground-muted">
+              Shared every year on this date. If it has already passed this
+              year, the first one is next year. {LEAP_DAY_NOTE}
+            </p>
+          </div>
+        )}
+
+        {trigger === "CUSTOM_EVENT" && (
+          <div className="grid gap-3">
+            <TextField
+              id="eventLabel"
+              label="What’s the occasion?"
+              maxLength={100}
+              hint="For example: Mia’s graduation."
+              error={errors.eventLabel?.message}
+              {...form.register("eventLabel")}
+            />
+            <TextField
+              id="date"
+              label="Date"
+              type="date"
+              error={errors.date?.message}
+              {...form.register("date")}
+            />
+            <ZonedTime form={form} errors={errors} />
+            <p className="text-[13px] leading-relaxed text-foreground-muted">
+              Shared once, on this day. It doesn’t repeat.
+            </p>
+          </div>
+        )}
+
+        {trigger === "ANNUAL_AFTER_DEATH" && (
+          <div className="grid gap-3">
+            <ZonedTime form={form} errors={errors} />
+            <p className="rounded-md bg-surface-muted px-4 py-3 text-[13px] leading-relaxed text-foreground-secondary">
+              Nothing is shared until your passing has been formally verified
+              through For After’s verification process. The first one is
+              shared a year after the verified date of death, then once every
+              year. {VERIFICATION_NOTE}
             </p>
           </div>
         )}
@@ -369,6 +532,123 @@ export function ScheduleForm({
         )}
       </div>
     </form>
+  );
+}
+
+/**
+ * Repeating schedules: shared with some recipients already? Then the message
+ * keeps going every year and its timing is fixed (the API refuses changes).
+ */
+function RecurringStatus({ shared, total }: { shared: number; total: number }) {
+  if (shared === 0) {
+    return (
+      <p className="text-[13px] leading-relaxed text-foreground-muted">
+        Repeats every year. You can change the timing or unschedule it until
+        it has been shared with someone.
+      </p>
+    );
+  }
+  return (
+    <p className="rounded-md bg-surface-muted px-4 py-3 text-[13px] leading-relaxed text-foreground-secondary">
+      Shared with {shared} of {total} {total === 1 ? "recipient" : "recipients"}{" "}
+      so far, and it will keep being shared every year. Because it has already
+      been shared, its timing can no longer change.
+    </p>
+  );
+}
+
+/** Birthdays live in People I Love; never guessed here. */
+function BirthdayCheck({ recipients }: { recipients: Message["recipients"] }) {
+  const all = people.useList();
+  if (!all.data) return null;
+  const missing = recipients.filter(
+    (r) => !all.data.find((p) => p.id === r.id)?.birthday,
+  );
+  if (missing.length === 0) return null;
+  return (
+    <p
+      role="alert"
+      className="flex items-start gap-2 rounded-md bg-surface-muted px-4 py-3 text-[13px] leading-relaxed"
+    >
+      <CircleAlert
+        aria-hidden
+        strokeWidth={1.5}
+        className="mt-0.5 size-4 shrink-0 text-warning"
+      />
+      <span>
+        {missing.map(fullName).join(", ")}{" "}
+        {missing.length === 1 ? "doesn’t" : "don’t"} have a birthday saved yet.
+        Add it in People I Love, or remove them from this message.
+      </span>
+    </p>
+  );
+}
+
+type Form = ReturnType<typeof useForm<ScheduleValues>>;
+
+/** Local time + IANA zone (repeating and occasion schedules). */
+function ZonedTime({
+  form,
+  errors,
+}: {
+  form: Form;
+  errors: Form["formState"]["errors"];
+}) {
+  // The browser's list may use another name for the same zone (Asia/Calcutta
+  // for Asia/Kolkata): keep the current value selectable.
+  const current = useWatch({ control: form.control, name: "timezone" });
+  const listed = timeZones();
+  const zones = listed.includes(current) ? listed : [current, ...listed];
+  return (
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
+      <TextField
+        id="time"
+        label="Time"
+        type="time"
+        error={errors.time?.message}
+        {...form.register("time")}
+      />
+      <Choice
+        id="timezone"
+        label="Time zone"
+        registration={form.register("timezone")}
+        options={zones.map((z) => [z, z.replaceAll("_", " ")])}
+        error={errors.timezone?.message}
+      />
+    </div>
+  );
+}
+
+/** The shared select plus a field error (the select has no error slot). */
+function Choice({
+  id,
+  label,
+  registration,
+  options,
+  error,
+}: {
+  id: string;
+  label: string;
+  registration: UseFormRegisterReturn;
+  options: string[][];
+  error?: string;
+}) {
+  return (
+    <div className="grid min-w-0 gap-2">
+      <SelectField
+        id={id}
+        label={label}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={error ? `${id}-error` : undefined}
+        options={options.map(([value, text]) => ({ value, label: text }))}
+        {...registration}
+      />
+      {error && (
+        <p id={`${id}-error`} className="text-sm text-danger">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }
 

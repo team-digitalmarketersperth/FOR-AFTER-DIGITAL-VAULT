@@ -51,6 +51,7 @@ export default function DashboardPage() {
             alt=""
             fill
             sizes="(min-width: 768px) 45vw, 0px"
+            loading="eager"
             className="object-cover"
           />
         </div>

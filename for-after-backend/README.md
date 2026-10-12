@@ -88,8 +88,12 @@ npm install
 cp .env.example .env       # then fill in the secrets (see below)
 npx prisma migrate dev     # apply migrations
 npx prisma generate        # generate the client into src/generated/prisma
-npm run start:dev          # http://localhost:4000
+npm run start:dev          # API, http://localhost:4000
+npm run worker:dev         # second terminal: BullMQ worker (releases, emails, death safeguards)
 ```
+
+The API only queues background work; the worker process consumes it (Phase 17B, `docs/message-release.md` §3). Without
+it nothing is released or emailed.
 
 Check it is up:
 
@@ -147,8 +151,9 @@ PostgreSQL or Redis is unreachable.
 
 | Command | What it does |
 |---|---|
-| `npm run start:dev` | Run with hot reload |
-| `npm run build` / `npm run start:prod` | Compile to `dist/` and run it |
+| `npm run start:dev` | Run the API with hot reload |
+| `npm run worker:dev` | Run the BullMQ worker with hot reload (own build dir `dist-worker/`) |
+| `npm run build` / `npm run start:prod` / `npm run worker:prod` | Compile to `dist/`, run the API (`dist/main.js`) / the worker (`dist/worker.js`) |
 | `npm run lint` | oxlint (type-aware) |
 | `npm run format` | Prettier |
 | `npm test` | Unit tests (no database needed) |
@@ -245,6 +250,7 @@ requests from the docs origin, which the CSRF Origin check refuses for POST/PATC
 | POST | `/api/v1/admin/users/:userId/suspend`, `…/reactivate` | ADMIN (Customers) / SUPER_ADMIN (also admins); never `PASSED` |
 | GET | `/api/v1/admin/audit-logs`, `/api/v1/admin/audit-logs/:auditLogId` | ADMIN / SUPER_ADMIN (+MFA); read-only |
 | GET/POST | `/api/v1/admin/system/queues`, `…/:queueName/failed`, `…/:queueName/jobs/:jobId/retry` | ADMIN / SUPER_ADMIN (+MFA); allowlisted queues |
+| GET/POST | `/api/v1/admin/system/dead-letters`, `…/:deadLetterId`, `…/:deadLetterId/retry` | ADMIN / SUPER_ADMIN (+MFA); Phase 17A durable dead letters |
 
 There is no admin sign-up (an operator sets `User.role`); an admin enrolls TOTP on first sign-in. Admin sessions end
 after 30 minutes idle. Full guide: [docs/admin.md](docs/admin.md).

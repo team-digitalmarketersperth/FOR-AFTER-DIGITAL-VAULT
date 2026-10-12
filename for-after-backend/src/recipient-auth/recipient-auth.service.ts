@@ -20,13 +20,25 @@ export const OTP_REQUESTED =
 export type RecipientPrincipal = OtpPrincipal;
 
 /**
+ * Message states a grant may authorize. RELEASED: released to everyone at
+ * once. SCHEDULED: a recurring trigger (Phase 16) that already released to
+ * this Recipient and keeps recurring. Grants are only ever written by the
+ * release worker, so a grant on a SCHEDULED message is itself the proof of
+ * this Recipient's release; others have no grant until their own due time.
+ */
+export const GRANTABLE_STATUSES: MessageStatus[] = [
+  MessageStatus.RELEASED,
+  MessageStatus.SCHEDULED,
+];
+
+/**
  * The only grants that authorize anything: snapshot email matches, Message
- * RELEASED and not deleted. MessageRecipient alone never counts.
+ * released (see above) and not deleted. MessageRecipient alone never counts.
  */
 export const eligibleGrant = (emailNormalized: string) =>
   ({
     recipientEmailNormalized: emailNormalized,
-    message: { status: MessageStatus.RELEASED, deletedAt: null },
+    message: { status: { in: GRANTABLE_STATUSES }, deletedAt: null },
   }) satisfies Prisma.RecipientMessageAccessGrantWhereInput;
 
 /**

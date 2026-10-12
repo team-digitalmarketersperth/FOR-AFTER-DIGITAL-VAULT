@@ -50,13 +50,13 @@
 | FE-6 | Shared loading / error / empty states | ✅ | 17 | `components/shared/states.tsx` |
 | FE-7 | `/dev-login`, real 404 in production builds | ✅ | 17 | `app/(auth)/dev-login`, `src/proxy.ts` |
 | FE-8 | Register / login pages | ✅ | 17 | `app/(auth)` |
-| FE-9 | Account settings: name, read-only email, password change; storage meter with 80/90/100 % notices (Phase 12C) | ✅ | 22 | `components/account/account-settings.tsx`, `storage-usage.tsx`, `app/(dashboard)/settings` |
+| FE-9 | Account settings: name, read-only email, password change; storage meter with 80/90/100 % notices (Phase 12C); Storage Manager `/settings/storage` (breakdown, files largest first, type/source filters, delete through each feature, restricted message files) | ✅ | 22 | `components/account/account-settings.tsx`, `storage-usage.tsx`, `storage-manager.tsx`, `app/(dashboard)/settings` |
 | FE-10 | People I Love: list (25 per page, Previous / Next), add, view, edit, remove, private photo (Phase 09) | ✅ | 18 | `components/people/recipients.tsx`, `person-card.tsx` |
 | FE-11 | Trusted Contacts (Customer side): list, add, edit, remove; Phase 10: max 2, invitation status, send/resend | ✅ | 18, Phase 10 | `components/people/trusted-contacts.tsx` |
 | FE-12 | Messages: drafts, content type, recipients | ✅ | 18 | `components/messages/` |
 | FE-13 | Message media: direct upload with progress + cancel, previews, delete (ImageKit + VIDEO since Phase 12) | ✅ | 18 | `components/media/media-manager.tsx` |
 | FE-14 | Browser audio and video recorder (video: Phase 12A) | ✅ | 18 | `components/media/recorder.tsx` (E2E with Chromium's fake camera and microphone) |
-| FE-15 | Schedule picker: FIXED_DATE (+ timezone offset), ON_DEATH, AFTER_DEATH; change; unschedule | ✅ | 18 | `components/messages/schedule-panel.tsx` |
+| FE-15 | Schedule picker: NOW, FIXED_DATE (+ timezone offset), BIRTHDAY, ANNIVERSARY, CUSTOM_EVENT (local time + IANA zone), ON_DEATH, AFTER_DEATH, ANNUAL_AFTER_DEATH; missing-birthday warning; "shared with N of M" for repeating schedules; change; unschedule | ✅ | 18, Phase 16 | `components/messages/schedule-panel.tsx` |
 | FE-16 | Status views + explicit "unschedule to edit" | ✅ | 18 | `message-detail.tsx`, `LockedNotice` |
 | FE-17 | Memory Vault: category filter, CRUD, photo/audio; search, tags, pagination (Phase 13A); create a message from a memory (Phase 13B) | ✅ | 18 | `components/memory-vault/memories.tsx`, `memory-to-message.tsx` |
 | FE-18 | My Story: prompts by category, answer/edit/delete; approved V1 catalogue (from the API), 50,000-char answers, earlier-wording notice (Phase 14A); photo/audio/video answers with recorders, linked memories, create a message (Phase 14B) | ✅ | 18 | `components/prompts/prompts.tsx`, `memory-vault/memory-to-message.tsx` |

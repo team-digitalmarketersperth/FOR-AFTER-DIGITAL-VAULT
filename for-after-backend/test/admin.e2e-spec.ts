@@ -33,6 +33,7 @@ import { TrustedContactAuthModule } from '../src/trusted-contact-auth/trusted-co
 import { TrustedContactOtpDelivery } from '../src/trusted-contact-auth/trusted-contact-auth.service.js';
 import { TrustedContactPortalModule } from '../src/trusted-contact-portal/trusted-contact-portal.module.js';
 import { TrustedContactsModule } from '../src/trusted-contacts/trusted-contacts.module.js';
+import { QueueWorkersModule } from '../src/worker.module.js';
 
 // Step 16 end to end: real HTTP, guards, PostgreSQL, Redis (MFA challenges,
 // sessions via connect-redis, rate limits) and both BullMQ queues. TOTP codes
@@ -142,6 +143,8 @@ describe('Admin backend (e2e)', () => {
     });
     const moduleRef = await Test.createTestingModule({
       imports: [
+        // Phase 17B: the worker process's consumers, started explicitly.
+        QueueWorkersModule,
         ConfigModule.forRoot({ isGlobal: true }),
         PrismaModule,
         RedisModule,

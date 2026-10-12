@@ -141,11 +141,13 @@ describe('Message schedules (e2e, PostgreSQL)', () => {
         afterDeathDays: 30,
         scheduledFor: futureWithOffset,
       },
-      { triggerType: 'NOW' },
+      // Phase 16 triggers without (or with foreign) required fields.
+      { triggerType: 'NOW', afterDeathDays: 1 },
       { triggerType: 'BIRTHDAY' },
       { triggerType: 'ANNIVERSARY' },
       { triggerType: 'CUSTOM_EVENT' },
       { triggerType: 'ANNUAL_AFTER_DEATH' },
+      { triggerType: 'SOMEDAY' },
       { triggerType: 'ON_DEATH', status: 'SCHEDULED' },
     ]) {
       await lisa.post(url).send(body).expect(400);
@@ -197,7 +199,7 @@ describe('Message schedules (e2e, PostgreSQL)', () => {
     });
     await lisa.patch(url).send({ triggerType: 'AFTER_DEATH' }).expect(400);
     await lisa.patch(url).send({ afterDeathDays: 5 }).expect(400);
-    await lisa.patch(url).send({ triggerType: 'NOW' }).expect(400);
+    await lisa.patch(url).send({ triggerType: 'BIRTHDAY' }).expect(400);
 
     const afterDeath = await lisa
       .patch(url)

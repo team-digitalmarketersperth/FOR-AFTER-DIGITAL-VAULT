@@ -4,6 +4,7 @@ import { MediaCleanup } from './media-cleanup.service.js';
 import { MediaController } from './media.controller.js';
 import { MediaService } from './media.service.js';
 import { StorageController } from './storage.controller.js';
+import { StorageItemsService } from './storage-items.service.js';
 import { StorageQuota } from './storage-quota.service.js';
 import { ClamAvMalwareScanner } from './scanner/clamav-malware-scanner.service.js';
 import { MalwareScanner } from './scanner/malware-scanner.service.js';
@@ -21,6 +22,7 @@ import { MediaStorage } from './storage/media-storage.service.js';
     MediaService,
     MediaCleanup,
     StorageQuota,
+    StorageItemsService,
     { provide: MediaStorage, useClass: ImageKitMediaStorage },
     { provide: MalwareScanner, useClass: ClamAvMalwareScanner },
   ],

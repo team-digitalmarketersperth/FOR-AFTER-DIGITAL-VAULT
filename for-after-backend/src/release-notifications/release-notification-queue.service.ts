@@ -4,6 +4,7 @@ import { Queue } from 'bullmq';
 import { positiveInt } from '../media/media.service.js';
 import { withTimeout } from '../message-release/message-release-queue.service.js';
 import { errorCode, PrismaService } from '../prisma/prisma.service.js';
+import { GRANTABLE_STATUSES } from '../recipient-auth/recipient-auth.service.js';
 
 export type NotificationJobData = { notificationId: string };
 
@@ -55,22 +56,35 @@ export class ReleaseNotificationQueue implements OnModuleDestroy {
     await this.queue.close();
   }
 
+  private add(notificationId: string) {
+    return withTimeout(
+      this.queue.add(
+        'message-released',
+        { notificationId },
+        {
+          jobId: notificationJobId(notificationId),
+          attempts: this.settings.attempts,
+          backoff: { type: 'exponential', delay: this.settings.backoffMs },
+          removeOnComplete: { age: 24 * 3600, count: 1000 },
+          removeOnFail: { age: 7 * 24 * 3600, count: 1000 },
+        },
+      ),
+    );
+  }
+
+  /**
+   * Admin dead-letter retry: replace a finished job with a fresh one (a
+   * running one is left alone). Throws on Redis errors.
+   */
+  async requeue(notificationId: string): Promise<void> {
+    await withTimeout(this.queue.remove(notificationJobId(notificationId)));
+    await this.add(notificationId);
+  }
+
   /** Best effort: a failure is logged and repaired by the reconciler. */
   async enqueue(notificationId: string): Promise<boolean> {
     try {
-      await withTimeout(
-        this.queue.add(
-          'message-released',
-          { notificationId },
-          {
-            jobId: notificationJobId(notificationId),
-            attempts: this.settings.attempts,
-            backoff: { type: 'exponential', delay: this.settings.backoffMs },
-            removeOnComplete: { age: 24 * 3600, count: 1000 },
-            removeOnFail: { age: 7 * 24 * 3600, count: 1000 },
-          },
-        ),
-      );
+      await this.add(notificationId);
       return true;
     } catch (err) {
       this.logger.warn(
@@ -97,7 +111,9 @@ export class ReleaseNotificationQueue implements OnModuleDestroy {
         status: 'PENDING',
         createdAt: { lte: new Date(now.getTime() - RECONCILE_GRACE_MS) },
         // Only rows the worker would send; others would be re-queued forever.
-        grant: { message: { status: 'RELEASED', deletedAt: null } },
+        grant: {
+          message: { status: { in: GRANTABLE_STATUSES }, deletedAt: null },
+        },
       },
       orderBy: { createdAt: 'asc' },
       take: 200,

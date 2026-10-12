@@ -48,7 +48,7 @@ const setup = () => {
 // The only authorization filter: this email's grant, RELEASED, not deleted.
 const eligible = {
   recipientEmailNormalized: SOFIA,
-  message: { status: 'RELEASED', deletedAt: null },
+  message: { status: { in: ['RELEASED', 'SCHEDULED'] }, deletedAt: null },
 };
 const visibleMedia = {
   status: 'READY',

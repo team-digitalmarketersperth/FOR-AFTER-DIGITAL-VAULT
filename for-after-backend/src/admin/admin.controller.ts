@@ -21,6 +21,7 @@ import { AdminService } from './admin.service.js';
 import {
   AdminUserListQueryDto,
   AuditLogQueryDto,
+  DeadLetterQueryDto,
   PageQueryDto,
   ReactivateUserDto,
   SuspendUserDto,
@@ -129,5 +130,33 @@ export class AdminQueuesController {
     @Req() req: Request,
   ) {
     return this.queues.retry(name, jobId, adminActor(req));
+  }
+}
+
+/** Phase 17A: durable dead letters. Ids and safe categories only. */
+@ApiTags('Admin')
+@ApiCookieAuth(AUTH.admin)
+@Controller('admin/system/dead-letters')
+@UseGuards(SessionAuthGuard, AdminGuard)
+export class AdminDeadLettersController {
+  constructor(private readonly queues: AdminQueuesService) {}
+
+  @Get()
+  list(@Query() query: DeadLetterQueryDto) {
+    return this.queues.deadLetters(query);
+  }
+
+  @Get(':deadLetterId')
+  get(@Param('deadLetterId', ParseUUIDPipe) id: string) {
+    return this.queues.deadLetter(id);
+  }
+
+  @Post(':deadLetterId/retry')
+  @HttpCode(200)
+  retry(
+    @Param('deadLetterId', ParseUUIDPipe) id: string,
+    @Req() req: Request,
+  ) {
+    return this.queues.retryDeadLetter(id, adminActor(req));
   }
 }

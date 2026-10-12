@@ -14,7 +14,8 @@ export type EmailKind =
   | 'reset-password'
   | 'change-email'
   | 'email-changed'
-  | 'trusted-contact-invitation';
+  | 'trusted-contact-invitation'
+  | 'ops-alert';
 
 export type EmailMessage = {
   kind: EmailKind;

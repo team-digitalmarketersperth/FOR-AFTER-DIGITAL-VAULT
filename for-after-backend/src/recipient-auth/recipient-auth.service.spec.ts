@@ -87,7 +87,7 @@ describe('RecipientAuthService: request OTP', () => {
     expect(count).toHaveBeenCalledWith({
       where: {
         recipientEmailNormalized: SOFIA,
-        message: { status: 'RELEASED', deletedAt: null },
+        message: { status: { in: ['RELEASED', 'SCHEDULED'] }, deletedAt: null },
       },
       take: 1,
     });

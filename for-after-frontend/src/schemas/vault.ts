@@ -1,6 +1,13 @@
 import { z } from 'zod';
 import { MEMORY_CATEGORIES } from '@/lib/api/memory-vault';
-import { AFTER_DEATH_DAYS_MAX, CONTENT_TYPES, TEXT_CONTENT_MAX, TRIGGER_TYPES } from '@/lib/api/messages';
+import {
+  AFTER_DEATH_DAYS_MAX,
+  CONTENT_TYPES,
+  EVENT_LABEL_MAX,
+  TEXT_CONTENT_MAX,
+  TRIGGER_TYPES,
+} from '@/lib/api/messages';
+import { localToday } from '@/lib/format';
 import { ANSWER_MAX, type PromptArea } from '@/lib/api/prompts';
 
 // Early, friendly feedback mirroring the backend DTO limits; the API stays
@@ -76,34 +83,70 @@ export const memorySchema = z.object({
 });
 export type MemoryValues = z.infer<typeof memorySchema>;
 
+const ZONE_TRIGGERS = ['BIRTHDAY', 'ANNIVERSARY', 'CUSTOM_EVENT', 'ANNUAL_AFTER_DEATH'];
+const HH_MM = /^([01]\d|2[0-3]):[0-5]\d$/;
+// Any IANA name Intl can use, aliases included (Asia/Kolkata = Asia/Calcutta);
+// fixed offsets and "UTC" are refused, as on the server.
+const isZone = (zone: string) => {
+  try {
+    new Intl.DateTimeFormat('en', { timeZone: zone });
+    return zone.includes('/');
+  } catch {
+    return false;
+  }
+};
+
 export const scheduleSchema = z
   .object({
     triggerType: z.enum(TRIGGER_TYPES),
     date: z.string(),
     time: z.string(),
     afterDeathDays: z.string(),
+    timezone: z.string(),
+    annualMonth: z.string(),
+    annualDay: z.string(),
+    eventLabel: z.string(),
   })
   .superRefine((v, ctx) => {
+    const issue = (path: string, message: string) => ctx.addIssue({ code: 'custom', path: [path], message });
     if (v.triggerType === 'FIXED_DATE') {
-      if (!v.date) ctx.addIssue({ code: 'custom', path: ['date'], message: 'Choose a date.' });
-      if (!v.time) ctx.addIssue({ code: 'custom', path: ['time'], message: 'Choose a time.' });
+      if (!v.date) issue('date', 'Choose a date.');
+      if (!v.time) issue('time', 'Choose a time.');
       if (v.date && v.time) {
         const [y, m, d] = v.date.split('-').map(Number);
         const [hh, mm] = v.time.split(':').map(Number);
         if (new Date(y, m - 1, d, hh, mm) <= new Date()) {
-          ctx.addIssue({ code: 'custom', path: ['date'], message: 'Choose a date and time in the future.' });
+          issue('date', 'Choose a date and time in the future.');
         }
       }
     }
     if (v.triggerType === 'AFTER_DEATH') {
       const days = Number(v.afterDeathDays);
       if (v.afterDeathDays.trim() === '' || !Number.isInteger(days) || days < 0 || days > AFTER_DEATH_DAYS_MAX) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['afterDeathDays'],
-          message: `Enter a whole number of days from 0 to ${AFTER_DEATH_DAYS_MAX.toLocaleString('en-AU')}.`,
-        });
+        issue('afterDeathDays', `Enter a whole number of days from 0 to ${AFTER_DEATH_DAYS_MAX.toLocaleString('en-AU')}.`);
       }
+    }
+    if (ZONE_TRIGGERS.includes(v.triggerType)) {
+      if (!HH_MM.test(v.time)) issue('time', 'Choose a time.');
+      if (!isZone(v.timezone)) issue('timezone', 'Choose a time zone.');
+    }
+    if (v.triggerType === 'ANNIVERSARY') {
+      const month = Number(v.annualMonth);
+      const day = Number(v.annualDay);
+      // 2028 is a leap year, so 29 February is allowed.
+      const at = new Date(2028, month - 1, day);
+      if (!month || !day || at.getMonth() !== month - 1 || at.getDate() !== day) {
+        issue('annualDay', 'Choose a day that exists in that month.');
+      }
+    }
+    if (v.triggerType === 'CUSTOM_EVENT') {
+      const label = v.eventLabel.trim();
+      if (!label) issue('eventLabel', 'Give the occasion a name.');
+      else if (label.length > EVENT_LABEL_MAX) issue('eventLabel', `Keep it to ${EVENT_LABEL_MAX} characters.`);
+      else if (/[<>]/.test(label)) issue('eventLabel', 'Please leave out < and >.');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(v.date)) issue('date', 'Choose a date.');
+      // The exact moment depends on the chosen zone; the server checks it precisely.
+      else if (v.date < localToday()) issue('date', 'Choose a date in the future.');
     }
   });
 export type ScheduleValues = z.infer<typeof scheduleSchema>;

@@ -10,6 +10,14 @@ import { defineConfig, devices } from '@playwright/test';
 // vault, portals and people specs upload a few tiny synthetic files to the
 // development ImageKit account (the backend's "complete" step checks the real
 // file); e2e/imagekit.ts deletes exactly those files after each test.
+// Never point E2E at a deployed app or API (e.g. the hosted demo): local only.
+const APP = process.env.E2E_BASE_URL ?? 'http://localhost:3000';
+for (const url of [APP, process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000']) {
+  if (!/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/.test(url)) {
+    throw new Error(`E2E targets must be local, got ${new URL(url).origin}`);
+  }
+}
+
 export default defineConfig({
   testDir: './e2e',
   globalSetup: './e2e/global-setup.ts',
@@ -25,13 +33,13 @@ export default defineConfig({
       name: 'development',
       testIgnore: /production\.spec|vault\.|portals\.|admin\.|account\./,
       // E2E_BASE_URL: another app origin, e.g. a build pointed at a second API.
-      use: { ...devices['Desktop Chrome'], baseURL: process.env.E2E_BASE_URL ?? 'http://localhost:3000' },
+      use: { ...devices['Desktop Chrome'], baseURL: APP },
     },
     {
       // Signs in two throwaway Customers once; saved to e2e/.auth (git-ignored).
       name: 'vault-setup',
       testMatch: /vault\.setup\.ts/,
-      use: { ...devices['Desktop Chrome'], baseURL: 'http://localhost:3000' },
+      use: { ...devices['Desktop Chrome'], baseURL: APP },
     },
     {
       name: 'vault',
@@ -40,7 +48,7 @@ export default defineConfig({
       dependencies: ['vault-setup'],
       use: {
         ...devices['Desktop Chrome'],
-        baseURL: 'http://localhost:3000',
+        baseURL: APP,
         // Chromium's fake camera + microphone for the recorder tests; nothing real is captured.
         permissions: ['microphone', 'camera'],
         launchOptions: { args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] },

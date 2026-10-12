@@ -1,8 +1,10 @@
 import { ConflictException } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
+import { Prisma } from '../generated/prisma/client.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
 import {
   NOT_ENOUGH_STORAGE,
+  ownedMedia,
   STORAGE_FULL,
   StorageQuota,
   storageLevel,
@@ -13,9 +15,19 @@ const LIMIT = 1000;
 
 // $queryRaw answers the lock (no rows) and the per-status SUM.
 const setup = (ready: number, pending: number, limit?: number) => {
+  // READY split across two sources to prove the per-source breakdown.
   const sums = [
-    { status: 'READY', bytes: BigInt(ready) },
-    { status: 'PENDING_UPLOAD', bytes: BigInt(pending) },
+    {
+      status: 'READY',
+      source: 'MESSAGE',
+      bytes: BigInt(ready - Math.floor(ready / 4)),
+    },
+    {
+      status: 'READY',
+      source: 'MEMORY_VAULT',
+      bytes: BigInt(Math.floor(ready / 4)),
+    },
+    { status: 'PENDING_UPLOAD', source: 'MESSAGE', bytes: BigInt(pending) },
   ];
   const $queryRaw = vi.fn(async (sql: TemplateStringsArray) =>
     sql.join('').includes('FOR UPDATE') ? [] : sums,
@@ -81,6 +93,14 @@ describe('StorageQuota', () => {
       remainingBytes: 250,
       percentage: 75,
       level: 'NORMAL',
+      // READY only, per source; uploads in progress are not files yet.
+      breakdown: [
+        { source: 'MESSAGE', bytes: 450 },
+        { source: 'MEMORY_VAULT', bytes: 150 },
+        { source: 'MY_STORY', bytes: 0 },
+        { source: 'MY_WISHES', bytes: 0 },
+        { source: 'RECIPIENT_PHOTO', bytes: 0 },
+      ],
     });
   });
 
@@ -96,11 +116,13 @@ describe('StorageQuota', () => {
   it('the SUM is owner-scoped, live only, READY + PENDING_UPLOAD only, over all five media tables', async () => {
     const { quota, $queryRaw } = setup(0, 0, LIMIT);
     await quota.usage('owner-a');
-    const [sql, ...params] = $queryRaw.mock.calls[0] as unknown as [
+    const [sql, owned] = $queryRaw.mock.calls[0] as unknown as [
       TemplateStringsArray,
-      ...unknown[],
+      Prisma.Sql,
     ];
-    const text = sql.join('?');
+    // The shared ownedMedia() row set, also behind the Storage Manager list.
+    expect(owned.sql).toBe(ownedMedia('owner-a').sql);
+    const text = `${sql.join('?')} ${owned.sql}`;
     for (const table of [
       'MediaAsset',
       'MemoryVaultMediaAsset',
@@ -112,7 +134,7 @@ describe('StorageQuota', () => {
     expect(text).toContain(
       `"deletedAt" IS NULL AND status IN ('READY', 'PENDING_UPLOAD')`,
     );
-    expect(params).toEqual(Array(5).fill('owner-a'));
+    expect(owned.values).toEqual(Array(5).fill('owner-a'));
   });
 
   describe('reserve', () => {

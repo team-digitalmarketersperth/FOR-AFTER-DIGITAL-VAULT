@@ -6,11 +6,13 @@ import {
 } from '@nestjs/common';
 import { DelayedError, type Job, Worker } from 'bullmq';
 import { isUUID } from 'class-validator';
+import { DeadLetterService } from '../dead-letters/dead-letter.service.js';
 import { errorCode } from '../prisma/prisma.service.js';
 import { ReleaseNotificationQueue } from '../release-notifications/release-notification-queue.service.js';
 import {
   MessageReleaseQueue,
   type ReleaseJobData,
+  withTimeout,
 } from './message-release-queue.service.js';
 import {
   MessageReleaseService,
@@ -20,7 +22,7 @@ import {
 /**
  * BullMQ worker for release jobs. Thin: the decision is always made by
  * MessageReleaseService against PostgreSQL. Logs ids and outcome categories
- * only, never message content or recipient data.
+ * only, never message content or recipient data. Worker process only (Phase 17B).
  */
 @Injectable()
 export class MessageReleaseProcessor implements OnModuleInit, OnModuleDestroy {
@@ -31,9 +33,10 @@ export class MessageReleaseProcessor implements OnModuleInit, OnModuleDestroy {
     private readonly releases: MessageReleaseService,
     private readonly queue: MessageReleaseQueue,
     private readonly notifications: ReleaseNotificationQueue,
+    private readonly deadLetters: DeadLetterService,
   ) {}
 
-  onModuleInit(): void {
+  async onModuleInit(): Promise<void> {
     const { queueName, connection } = this.queue.settings;
     this.worker = new Worker<ReleaseJobData>(
       queueName,
@@ -43,17 +46,16 @@ export class MessageReleaseProcessor implements OnModuleInit, OnModuleDestroy {
     this.worker.on('error', (err) =>
       this.logger.error(`Release worker error (code: ${errorCode(err)})`),
     );
-    // The message stays SCHEDULED; the reconciler queues it again.
-    this.worker.on('failed', (job, err) => {
-      if (job && job.attemptsMade >= (job.opts.attempts ?? 1)) {
-        this.logger.error(
-          `release_retries_exhausted message ${job.data.messageId} job ${job.id} (code: ${errorCode(err)})`,
-        );
-      }
-    });
+    // Exhausted → dead letter + alert. The message stays SCHEDULED and the
+    // reconciler queues it again; a later success resolves the dead letter.
+    this.deadLetters.watch(this.worker, 'message-release');
+    // Fail fast: a worker process that cannot reach queue Redis is useless.
+    await withTimeout(this.worker.waitUntilReady());
+    this.logger.log('message-release worker ready');
   }
 
   async onModuleDestroy(): Promise<void> {
+    // Waits for an active job to finish.
     await this.worker?.close();
   }
 
@@ -61,16 +63,22 @@ export class MessageReleaseProcessor implements OnModuleInit, OnModuleDestroy {
     job: Job<ReleaseJobData>,
     token?: string,
   ): Promise<ReleaseOutcome['result']> {
-    const messageId = job.data?.messageId;
+    const { messageId, occurrenceId } = job.data ?? {};
     const ctx = `message ${messageId} job ${job.id} attempt ${job.attemptsMade + 1}`;
-    if (typeof messageId !== 'string' || !isUUID(messageId)) {
+    if (
+      typeof messageId !== 'string' ||
+      !isUUID(messageId) ||
+      (occurrenceId !== undefined && !isUUID(occurrenceId))
+    ) {
       this.logger.warn(`release_stale_job job ${job.id}: invalid payload`);
       return 'stale';
     }
 
     let outcome: ReleaseOutcome;
     try {
-      outcome = await this.releases.release(messageId);
+      outcome = occurrenceId
+        ? await this.releases.releaseOccurrence(occurrenceId)
+        : await this.releases.release(messageId);
     } catch (err) {
       // Thrown so BullMQ retries with backoff. Never falls back to Redis data.
       this.logger.warn(
@@ -81,8 +89,9 @@ export class MessageReleaseProcessor implements OnModuleInit, OnModuleDestroy {
 
     switch (outcome.result) {
       case 'released':
+      case 'occurrence_released':
         this.logger.log(
-          `release_success ${ctx} trigger ${outcome.triggerType} scheduledFor ${outcome.scheduledFor.toISOString()}`,
+          `release_success ${ctx} trigger ${outcome.triggerType} scheduledFor ${outcome.scheduledFor.toISOString()}${occurrenceId ? ` occurrence ${occurrenceId}` : ''}`,
         );
         this.logger.log(
           `recipient_release_grants_created ${ctx} count ${outcome.grants}`,

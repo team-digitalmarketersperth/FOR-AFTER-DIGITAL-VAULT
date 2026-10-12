@@ -287,12 +287,47 @@ bytes), until per-plan limits arrive with billing (Phase 21; the Basic/Standard/
 - **Levels** (integer byte math, counted = used + reserved): `NORMAL` < 80 %, `WARNING` ≥ 80 %, `HIGH` ≥ 90 %, `FULL`
   ≥ 100 %. At `FULL` existing files stay fully available (lists, previews, release); only new storage is refused.
 - **API:** `GET /users/me/storage` (Customer session) → `{ usedBytes, reservedBytes, limitBytes, remainingBytes,
-  percentage, level }`, the caller's own data only.
-- **UI:** Account settings → Storage: "x of y used", a progress bar and calm notices at 80/90/100 % (no upgrade offer:
-  plans are not built). Upload forms show the server's 409 message; the server stays authoritative.
+  percentage, level, breakdown }`, the caller's own data only. `breakdown` = READY bytes per source
+  (`MESSAGE`, `MEMORY_VAULT`, `MY_STORY`, `MY_WISHES`, `RECIPIENT_PHOTO`); it sums to `usedBytes`. Uploads in progress
+  are only `reservedBytes`, never a file or a breakdown line.
+- **UI:** Account settings → Storage: "x of y used" (used + reserved), a progress bar and calm notices; the whole card
+  is one stretched link to the Storage Manager (§5a). Notices: ≥ 80 % "You're using N% of your storage." (Manage
+  storage), ≥ 90 % "You're almost out of storage." (Free up space), 100 % "Your storage is full. You can still view and
+  remove existing content, but new uploads are paused until you free up space." (Manage storage). No upgrade offer:
+  plans are not built. Upload forms show the server's 409 message; the server stays authoritative.
 - Tests: unit (levels and edges, policy SQL, reserve order), e2e on PostgreSQL with a 10,000-byte limit (all paths,
   thresholds, FULL, deletes/FAILED/retired, owner isolation, the concurrency race, memory copies), component tests and
   Playwright (API started with a small `STORAGE_LIMIT_BYTES`).
+
+## 5a. Storage Manager
+
+`/settings/storage` (Customer app): what uses storage and the files themselves, so a Customer can free space.
+
+- **Same numbers as Settings:** the header and breakdown come from `GET /users/me/storage`. Totals and the list share
+  one owner-scoped row set (`ownedMedia()` in `storage-quota.service.ts`), so they cannot drift apart.
+- **List:** `GET /users/me/storage/items?page=1&limit=25&type=PHOTO|AUDIO|VIDEO&source=<source>&sort=size_desc|created_desc|created_asc`
+  (Customer session; page/limit the shared convention, max 100; **largest first by default**). Filtering, sorting and
+  paging run in PostgreSQL; ties break on `id`, so pages never repeat or skip a file. Only counted files: READY and not
+  deleted. Response `{ items, pagination }`; each item
+  `{ id, type, sizeBytes, source, sourceId, displayName, createdAt, canDelete, deleteRestriction }`.
+  `sourceId` is what the source's own routes use (message id, memory id, My Story / My Wishes prompt key, Recipient id).
+  `displayName` is safe context only: the message or memory title, the prompt wording, or the Recipient's name; never
+  answer text, file names, storage keys, provider ids, URLs, owner ids or deletion fields. The list fetches no signed
+  previews; **View** opens the file where it lives.
+- **No generic delete endpoint.** The Storage Manager is a read/navigation layer: it deletes through the file's own
+  feature endpoint (`DELETE /messages/:id/media/:mediaId`, `/memory-vault/:id/media/:mediaId`,
+  `/my-story/prompts/:key/response/media/:mediaId`, `/my-wishes/prompts/:key/response/media/:mediaId`,
+  `/recipients/:id/photo/:photoId`), so that feature's ownership and status rules, soft delete and `MediaCleanup` apply
+  unchanged (DB first; a provider failure never restores access, the reconciler retries). Usage drops at once.
+- **Rules per source:** message media only while the message is `DRAFT`. `SCHEDULED` → `canDelete: false`,
+  `deleteRestriction: MESSAGE_SCHEDULED` ("Unschedule the message before changing its content", **Open message**);
+  `RELEASED` → `MESSAGE_RELEASED` (cannot be removed here, **View message**; no released-content deletion policy is
+  introduced). Memory Vault, My Story and My Wishes media and Recipient photos (photo only, the person stays) can be
+  deleted. The API refuses a crafted delete the same way (409 / 404).
+- **Full storage never blocks deletion or viewing:** quota checks run only when an upload is reserved.
+- Tests: unit (breakdown, shared SQL), e2e on PostgreSQL (`test/storage-manager.e2e-spec.ts`: totals and breakdown,
+  sorting/filters/paging, safe fields, owner isolation, crafted deletes, full quota still deletes, usage drops, repeat
+  delete, provider failure), component tests, Playwright (`e2e/storage.vault.spec.ts`, small `STORAGE_LIMIT_BYTES`).
 
 ## 6. Content Types
 - **Accepted now:** photos JPEG, PNG, WebP; audio MP3, M4A, WebM, WAV; video MP4, WebM (messages only). No SVG.

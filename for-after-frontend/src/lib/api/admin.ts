@@ -164,6 +164,7 @@ export const AUDIT_EVENT_TYPES = [
   'DEATH_VERIFICATION_REJECTED',
   'FAILED_JOB_RETRIED',
   'PASSWORD_CHANGED',
+  'DEAD_LETTER_RETRY_REQUESTED',
 ] as const;
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
 // CUSTOMER: a Customer acting on their own account (Step 22, PASSWORD_CHANGED).
@@ -220,6 +221,37 @@ export type FailedJob = {
   payload: { messageId?: string; caseId?: string; notificationId?: string };
 };
 
+// Phase 17A: durable dead letters (PostgreSQL). Ids and safe categories only.
+export const DEAD_LETTER_QUEUES = ['message-release', 'death-verification', 'email-delivery'] as const;
+export const DEAD_LETTER_STATUSES = ['OPEN', 'REQUEUED', 'RESOLVED'] as const;
+export type DeadLetterStatus = (typeof DEAD_LETTER_STATUSES)[number];
+export type OpsAlertStatus = 'PENDING' | 'SENT' | 'FAILED' | 'NOT_CONFIGURED';
+
+export type DeadLetter = {
+  id: string;
+  queueName: string;
+  jobId: string;
+  jobName: string;
+  // Message | MessageRecipientRelease | DeathVerificationCase | ReleaseNotification
+  entityType: string;
+  entityId: string | null;
+  attemptsMade: number;
+  errorCode: string | null;
+  /** Sanitized by the API: first line, no URLs, emails or secrets. */
+  errorMessage: string | null;
+  failedAt: string;
+  failureCount: number;
+  status: DeadLetterStatus;
+  resolution: string | null;
+  requeuedAt: string | null;
+  resolvedAt: string | null;
+  alertStatus: OpsAlertStatus;
+  alertedAt: string | null;
+  createdAt: string;
+};
+
+export type DeadLetterFilters = { queue?: string; status?: DeadLetterStatus; page?: number };
+
 // ─── Requests ───────────────────────────────────────────────────────────────
 
 /** ?a=1&b=x from defined values only. */
@@ -275,4 +307,9 @@ export const adminApi = {
     post<{ queue: string; jobId: string; state: 'waiting' }>(
       `/admin/system/queues/${encodeURIComponent(queue)}/jobs/${encodeURIComponent(jobId)}/retry`,
     ),
+
+  deadLetters: (f: DeadLetterFilters, signal?: AbortSignal) =>
+    apiRequest<Page<DeadLetter>>(`/admin/system/dead-letters${toQuery(f)}`, { signal }),
+  deadLetter: (id: string, signal?: AbortSignal) => apiRequest<DeadLetter>(`/admin/system/dead-letters/${id}`, { signal }),
+  retryDeadLetter: (id: string) => post<DeadLetter>(`/admin/system/dead-letters/${id}/retry`),
 };

@@ -94,6 +94,33 @@ export function isoToLocalInputs(iso: string) {
   };
 }
 
+/** Today's "YYYY-MM-DD" in this browser's timezone. */
+export const localToday = () => isoToLocalInputs(new Date().toISOString()).date;
+
+/** "18:30" → "6:30 pm" (a wall-clock time, no zone applied). */
+export function formatLocalTime(time: string) {
+  const [hh, mm] = time.split(':').map(Number);
+  return new Intl.DateTimeFormat('en-AU', { hour: 'numeric', minute: '2-digit' }).format(
+    new Date(2000, 0, 1, hh, mm),
+  );
+}
+
+/** Annual month/day → "29 February" (no year). */
+export function formatMonthDay(month: number, day: number) {
+  return new Intl.DateTimeFormat('en-AU', { day: 'numeric', month: 'long' }).format(
+    new Date(2028, month - 1, day),
+  );
+}
+
+/** Every IANA zone this browser knows ("Australia/Perth", …), or [] if it can't list them. */
+export function timeZones(): string[] {
+  try {
+    return Intl.supportedValuesOf('timeZone');
+  } catch {
+    return [];
+  }
+}
+
 const GIB = 1024 ** 3;
 export const formatBytes = (bytes: number) =>
   bytes === 0

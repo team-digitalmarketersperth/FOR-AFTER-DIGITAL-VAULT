@@ -69,7 +69,17 @@ flowchart LR
 
 - Multi-stage `Dockerfile` for the NestJS backend to keep images small and secure.
 - Alpine or distroless Node.js base images.
-- The BullMQ release worker currently runs inside the API process; a separate worker container is planned.
+- Two processes from one image/build (Phase 17B): the API (`node dist/main.js`, HTTP, queue producers only) and the
+  worker (`node dist/worker.js`, every BullMQ consumer and reconciler, no HTTP). Both need `DATABASE_URL` and `REDIS_URL`
+  (or `QUEUE_REDIS_URL`); only the API needs session/HTTP settings. Run at least one worker at all times, or nothing is
+  released or emailed. More workers are safe (idempotent jobs, no leader election). See
+  [`message-release.md` §3](message-release.md#3-components).
+- The worker handles SIGTERM/SIGINT gracefully (finishes the active job, then closes Redis and PostgreSQL); give it a
+  stop timeout of at least 30 s.
+- **Planned, not deployed:** Firebase App Hosting (Next.js) + Cloud Run API (NestJS HTTP) + a separate Cloud Run worker
+  with minimum 1 instance and instance-based billing. The worker listens on no port; a Cloud Run *worker pool* fits as is,
+  a Cloud Run *service* would need a tiny `/health` listener on `PORT` added to `src/worker.ts`. The Railway client demo
+  still runs a single API service (its workers are whatever that deployed build contains).
 
 ---
 

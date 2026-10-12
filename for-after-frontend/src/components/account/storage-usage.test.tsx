@@ -15,6 +15,7 @@ const usage = (percentage: number, level: string, over: object = {}) => ({
   remainingBytes: Math.round((5 * GIB * (100 - percentage)) / 100),
   percentage,
   level,
+  breakdown: [],
   ...over,
 });
 
@@ -24,7 +25,19 @@ describe('Storage usage (Phase 12C)', () => {
     renderWithClient(<StorageUsageSection />);
     expect(await screen.findByText(/of 5\.0 GB used/)).toHaveTextContent('3.8 GB of 5.0 GB used');
     expect(screen.getByRole('progressbar', { name: 'Storage used' })).toHaveAttribute('aria-valuenow', '76');
-    expect(screen.queryByText(/storage is|most of your storage/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/storage is|of your storage|out of storage/)).not.toBeInTheDocument();
+    expect(screen.getByText('Photos, recordings and videos saved across your For After account.')).toBeInTheDocument();
+  });
+
+  it('the card opens the Storage Manager through one real, focusable link', async () => {
+    routeFetch({ 'GET /users/me/storage': json(200, usage(10, 'NORMAL')) });
+    renderWithClient(<StorageUsageSection />);
+    const link = await screen.findByRole('link', { name: 'Manage storage' });
+    expect(link).toHaveAttribute('href', '/settings/storage');
+    // Stretched over the whole card, so clicking anywhere on it navigates.
+    expect(link.className).toContain('after:absolute');
+    await userEvent.tab();
+    expect(link).toHaveFocus();
   });
 
   it('counts uploads in progress as used', async () => {
@@ -36,13 +49,19 @@ describe('Storage usage (Phase 12C)', () => {
   });
 
   it.each([
-    ['WARNING', 80, 'You’ve used most of your storage.'],
-    ['HIGH', 90, 'Your storage is almost full.'],
-    ['FULL', 100, 'Everything you’ve saved stays available'],
-  ])('%s at %i %%: a calm notice, never an upgrade offer', async (level, pct, text) => {
+    ['WARNING', 82, 'You’re using 82% of your storage.', 'Manage storage'],
+    ['HIGH', 91, 'You’re almost out of storage.', 'Free up space'],
+    [
+      'FULL',
+      100,
+      'Your storage is full. You can still view and remove existing content, but new uploads are paused until you free up space.',
+      'Manage storage',
+    ],
+  ])('%s at %i %%: a calm notice and a way to free space, never an upgrade offer', async (level, pct, text, cta) => {
     routeFetch({ 'GET /users/me/storage': json(200, usage(pct, level)) });
     renderWithClient(<StorageUsageSection />);
-    expect(await screen.findByText(new RegExp(text))).toHaveAttribute('role', 'status');
+    expect(await screen.findByText(text)).toHaveAttribute('role', 'status');
+    expect(screen.getByRole('link', { name: cta })).toHaveAttribute('href', '/settings/storage');
     expect(screen.queryByText(/upgrade|plan|buy/i)).not.toBeInTheDocument();
   });
 

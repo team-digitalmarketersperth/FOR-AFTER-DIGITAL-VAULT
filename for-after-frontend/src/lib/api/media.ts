@@ -1,3 +1,4 @@
+import { toQuery, type Page } from './admin';
 import { apiRequest } from './client';
 import { ApiError } from './errors';
 
@@ -90,6 +91,8 @@ const base = (scope: MediaScope) =>
 
 /** GET /users/me/storage (Phase 12C): READY bytes used, uploads in progress reserved. */
 export type StorageLevel = 'NORMAL' | 'WARNING' | 'HIGH' | 'FULL';
+export const STORAGE_SOURCES = ['MESSAGE', 'MEMORY_VAULT', 'MY_STORY', 'MY_WISHES', 'RECIPIENT_PHOTO'] as const;
+export type StorageSource = (typeof STORAGE_SOURCES)[number];
 export type StorageUsage = {
   usedBytes: number;
   reservedBytes: number;
@@ -97,9 +100,60 @@ export type StorageUsage = {
   remainingBytes: number;
   percentage: number;
   level: StorageLevel;
+  /** READY bytes per source; sums to usedBytes. */
+  breakdown: { source: StorageSource; bytes: number }[];
 };
+
+/**
+ * Storage Manager (GET /users/me/storage/items): one counted file. `sourceId`
+ * is what the source feature's routes use (message, memory, prompt key or
+ * Recipient id). No URL, storage key or provider id is ever included.
+ */
+export type StorageItem = {
+  id: string;
+  type: MediaKind;
+  sizeBytes: number;
+  source: StorageSource;
+  sourceId: string;
+  displayName: string;
+  createdAt: string;
+  canDelete: boolean;
+  deleteRestriction: 'MESSAGE_SCHEDULED' | 'MESSAGE_RELEASED' | 'MESSAGE_LOCKED' | null;
+};
+export const STORAGE_SORTS = ['size_desc', 'created_desc', 'created_asc'] as const;
+export type StorageSort = (typeof STORAGE_SORTS)[number];
+export type StorageFilters = { type?: MediaKind; source?: StorageSource; sort?: StorageSort; page?: number };
+
+/** The source feature's own media scope: Storage Manager deletes through it, never around it. */
+export const storageItemScope = (item: StorageItem): MediaScope => {
+  switch (item.source) {
+    case 'MESSAGE':
+      return { kind: 'messages', id: item.sourceId };
+    case 'MEMORY_VAULT':
+      return { kind: 'memory-vault', id: item.sourceId };
+    case 'MY_STORY':
+      return { kind: 'my-story', id: item.sourceId };
+    case 'MY_WISHES':
+      return { kind: 'my-wishes', id: item.sourceId };
+    case 'RECIPIENT_PHOTO':
+      return { kind: 'recipients', id: item.sourceId };
+  }
+};
+
+/** Where the file is managed in the app. */
+export const storageItemHref = ({ source, sourceId }: StorageItem) =>
+  ({
+    MESSAGE: `/messages/${sourceId}`,
+    MEMORY_VAULT: `/memory-vault/${sourceId}`,
+    MY_STORY: `/my-story/${encodeURIComponent(sourceId)}`,
+    MY_WISHES: `/my-wishes/${encodeURIComponent(sourceId)}`,
+    RECIPIENT_PHOTO: `/people/${sourceId}`,
+  })[source];
+
 export const storageApi = {
   usage: (signal?: AbortSignal) => apiRequest<StorageUsage>('/users/me/storage', { signal }),
+  items: (filters: StorageFilters, signal?: AbortSignal) =>
+    apiRequest<Page<StorageItem>>(`/users/me/storage/items${toQuery(filters)}`, { signal }),
 };
 
 export const mediaApi = {
