@@ -1,6 +1,6 @@
 import { AudioLines, Image as ImageIcon, Layers, PenLine, Video, type LucideIcon } from 'lucide-react';
 import type { ContentType, Message, MessageStatus, Schedule } from '@/lib/api/messages';
-import { formatDateTime, timeZoneName } from '@/lib/format';
+import { formatCalendarDate, formatDateTime, formatLocalTime, formatMonthDay, timeZoneName } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
 export const CONTENT_TYPE_INFO: Record<ContentType, { label: string; description: string; icon: LucideIcon }> = {
@@ -38,14 +38,30 @@ export function recipientSummary(recipients: Message['recipients']) {
 
 /** Plain-language schedule. Death triggers only ever follow a verified death. */
 export function describeSchedule(s: Schedule) {
+  const at = s.localTime ? ` at ${formatLocalTime(s.localTime)}` : '';
+  const zone = s.timezone ? ` (${s.timezone.replaceAll('_', ' ')} time)` : '';
   switch (s.triggerType) {
+    case 'NOW':
+      return 'As soon as it was scheduled';
     case 'FIXED_DATE':
       return s.scheduledFor
         ? `On ${formatDateTime(s.scheduledFor)} (${timeZoneName()} time)`
         : 'On a date you chose';
+    case 'BIRTHDAY':
+      return `Every year on each recipient’s birthday${at}${zone}`;
+    case 'ANNIVERSARY':
+      return s.annualMonth && s.annualDay
+        ? `Every year on ${formatMonthDay(s.annualMonth, s.annualDay)}${at}${zone}`
+        : 'Every year on a date you chose';
+    case 'CUSTOM_EVENT':
+      return s.eventDate
+        ? `${s.eventLabel ?? 'Your occasion'}: ${formatCalendarDate(s.eventDate.slice(0, 10))}${at}${zone}`
+        : (s.eventLabel ?? 'On an occasion you chose');
     case 'ON_DEATH':
       return 'After your death has been verified by the For After team';
     case 'AFTER_DEATH':
       return `${s.afterDeathDays} ${s.afterDeathDays === 1 ? 'day' : 'days'} after the verified date of death`;
+    case 'ANNUAL_AFTER_DEATH':
+      return `Every year on the anniversary of the verified date of death${at}${zone}`;
   }
 }

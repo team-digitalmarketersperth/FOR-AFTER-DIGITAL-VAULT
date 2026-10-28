@@ -1,20 +1,21 @@
 import Image from 'next/image';
 import Link from 'next/link';
+import { RecentChanges } from '@/components/activity/activity';
+import { NeedsAttention } from '@/components/dashboard/attention';
+import { DashboardJourney } from '@/components/dashboard/journey';
+import { SharePreview } from '@/components/dashboard/share-preview';
+import { ComingUp } from '@/components/delivery/delivery-timeline';
 import { Greeting } from '@/components/layout/greeting';
-import {
-  PEOPLE_I_LOVE,
-  QUICK_ACTIONS,
-  SPACES,
-  TRUSTED_CONTACTS,
-} from '@/components/layout/nav';
+import { StoryChapters } from '@/components/prompts/story-book';
+import { SPACES } from '@/components/layout/nav';
 import { FeatureCard } from '@/components/shared/feature-card';
 import { SectionHeading } from '@/components/shared/section-heading';
 import { Button } from '@/components/ui/button';
 
 export const metadata = { title: 'Dashboard' };
 
-// Only real data: the Customer's name from /auth/me. There are no APIs yet for
-// counts, progress or storage, so the page shows none.
+// Only real data: the Customer's name from /auth/me and, in the journey, the
+// setup progress from /users/me/readiness (derived counts, never content).
 export default function DashboardPage() {
   return (
     <div className="grid gap-16 lg:gap-20">
@@ -51,21 +52,22 @@ export default function DashboardPage() {
             alt=""
             fill
             sizes="(min-width: 768px) 45vw, 0px"
+            loading="eager"
             className="object-cover"
           />
         </div>
       </section>
 
-      <section aria-labelledby="quick-actions">
-        <SectionHeading id="quick-actions" title={<>What would you like <em>to do?</em></>} />
-        <ul className="grid gap-4 lg:grid-cols-3">
-          {QUICK_ACTIONS.map((action) => (
-            <li key={action.label}>
-              <FeatureCard item={action} compact />
-            </li>
-          ))}
-        </ul>
-      </section>
+      {/* Where the "What would you like to do?" shortcuts used to be. */}
+      <SharePreview />
+
+      <StoryChapters />
+
+      <DashboardJourney />
+
+      <NeedsAttention />
+
+      <ComingUp />
 
       <section aria-labelledby="your-spaces-heading" id="your-spaces" className="scroll-mt-24">
         <SectionHeading
@@ -83,20 +85,7 @@ export default function DashboardPage() {
         </ul>
       </section>
 
-      <section aria-labelledby="people">
-        <SectionHeading
-          id="people"
-          eyebrow="People"
-          title={<>The people <em>who matter</em></>}
-        />
-        <ul className="grid gap-4 lg:grid-cols-2">
-          {[PEOPLE_I_LOVE, TRUSTED_CONTACTS].map((item) => (
-            <li key={item.label}>
-              <FeatureCard item={item} className="bg-surface-muted" />
-            </li>
-          ))}
-        </ul>
-      </section>
+      <RecentChanges />
     </div>
   );
 }

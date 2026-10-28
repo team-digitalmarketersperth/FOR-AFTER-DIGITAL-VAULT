@@ -1,6 +1,6 @@
 'use client';
 
-import { Mail, PenLine } from 'lucide-react';
+import { CalendarClock, Mail, PenLine } from 'lucide-react';
 import Link from 'next/link';
 import { CONTENT_TYPE_INFO, StatusBadge, recipientSummary } from '@/components/messages/message-bits';
 import { PageHeader } from '@/components/shared/page-header';
@@ -35,7 +35,19 @@ export function MessageList() {
         eyebrow="Preserve"
         title={<>Your <em>messages</em></>}
         description="Write and prepare messages for the people you love, to be shared when the time is right."
-        action={list.data?.length ? newButton : undefined}
+        action={
+          list.data?.length ? (
+            <div className="flex flex-wrap gap-3">
+              <Button asChild variant="outline">
+                <Link href="/messages/timeline">
+                  <CalendarClock aria-hidden strokeWidth={1.5} />
+                  Delivery Timeline
+                </Link>
+              </Button>
+              {newButton}
+            </div>
+          ) : undefined
+        }
       />
       <QueryView query={list} loadingLabel="Loading your messages">
         {(all) =>

@@ -5,9 +5,7 @@ import {
   House,
   Images,
   Mail,
-  PenLine,
   ShieldCheck,
-  UserPlus,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -78,9 +76,3 @@ export const NAV_GROUPS: NavGroup[] = [
   { label: 'Preserve', items: SPACES },
 ];
 
-/** Dashboard quick actions. */
-export const QUICK_ACTIONS: NavItem[] = [
-  { label: 'Write a message', description: 'Words for someone you love.', icon: PenLine, href: '/messages/new' },
-  { label: 'Add someone you love', description: 'Who your messages are for.', icon: UserPlus, href: '/people/new' },
-  { label: 'Save a memory', description: 'A photo, a recording, a moment.', icon: Images, href: '/memory-vault/new' },
-];

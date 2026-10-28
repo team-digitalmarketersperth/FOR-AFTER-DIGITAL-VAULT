@@ -45,6 +45,7 @@ export const AUDIT_EVENT_LABEL: Record<AuditEventType, string> = {
   DEATH_VERIFICATION_REJECTED: 'Death report rejected',
   FAILED_JOB_RETRIED: 'Failed job retried',
   PASSWORD_CHANGED: 'Customer changed their password',
+  DEAD_LETTER_RETRY_REQUESTED: 'Dead-lettered job retried',
 };
 
 export const AUDIT_ACTOR_LABEL: Record<AuditActorType, string> = {
@@ -63,6 +64,8 @@ export const CASE_EVENT_LABEL: Record<DeathCaseEventType, string> = {
   ADMIN_REJECTED: 'Rejected by an admin',
   DEATH_TRIGGER_ACTIVATION_STARTED: 'Death-triggered messages: activation started',
   DEATH_TRIGGER_ACTIVATION_COMPLETED: 'Death-triggered messages: activation completed',
+  EVIDENCE_UPLOADED: 'Supporting evidence uploaded',
+  EVIDENCE_VIEWED_BY_ADMIN: 'Supporting evidence viewed by an admin',
 };
 
 // Defence in depth, same pattern as the API's audit writer: a key that looks

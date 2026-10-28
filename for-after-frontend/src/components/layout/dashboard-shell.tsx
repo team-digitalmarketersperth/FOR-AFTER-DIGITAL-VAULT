@@ -4,6 +4,7 @@ import { ChevronDown, LogOut, Menu, UserRound } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useState, type ReactNode } from 'react';
+import { CompanionProvider } from '@/components/companion/companion';
 import { BrandLogo } from '@/components/layout/brand-logo';
 import { NAV_GROUPS, type NavItem } from '@/components/layout/nav';
 import { SafetyBanner } from '@/components/layout/safety-banner';
@@ -31,54 +32,57 @@ import { cn } from '@/lib/utils';
 export function DashboardShell({ user, children }: { user: CurrentUser; children: ReactNode }) {
   const [menuOpen, setMenuOpen] = useState(false);
 
+  // One companion for every Customer page, keyed by account: a new account never sees the last one's state.
   return (
-    <div className="flex min-h-dvh">
-      <aside className="sticky top-0 hidden h-dvh w-72 shrink-0 flex-col border-r border-sidebar-border bg-sidebar lg:flex">
-        <div className="px-8 pt-9 pb-10">
-          <BrandLogo className="h-9" />
-        </div>
-        <SideNav />
-      </aside>
-
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-30 border-b border-border bg-background/90 backdrop-blur">
-          <div className="mx-auto flex h-20 max-w-[1200px] items-center gap-3 px-4 sm:px-6 lg:px-12">
-            <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
-              <SheetTrigger asChild>
-                <Button variant="ghost" size="icon" className="-ml-2 lg:hidden" aria-label="Open navigation">
-                  <Menu aria-hidden strokeWidth={1.5} className="size-6" />
-                </Button>
-              </SheetTrigger>
-              <SheetContent side="left" className="w-80 max-w-[85vw] gap-0 bg-sidebar p-0">
-                <SheetHeader className="px-6 pt-7 pb-8">
-                  <SheetTitle asChild>
-                    <div>
-                      <BrandLogo className="h-8" />
-                    </div>
-                  </SheetTitle>
-                  <SheetDescription className="sr-only">Main navigation</SheetDescription>
-                </SheetHeader>
-                <SideNav onNavigate={() => setMenuOpen(false)} />
-              </SheetContent>
-            </Sheet>
-            <BrandLogo className="h-7 lg:hidden" />
-            <Today />
-
-            <div className="ml-auto">
-              <AccountMenu user={user} />
-            </div>
+    <CompanionProvider key={user.id}>
+      <div className="flex min-h-dvh">
+        <aside className="sticky top-0 hidden h-dvh w-72 shrink-0 flex-col border-r border-sidebar-border bg-sidebar lg:flex">
+          <div className="px-8 pt-9 pb-10">
+            <BrandLogo className="h-9" />
           </div>
-        </header>
+          <SideNav />
+        </aside>
 
-        <main
-          id="main"
-          className="mx-auto w-full max-w-[1200px] flex-1 px-4 pt-10 pb-20 sm:px-6 lg:px-12 lg:pt-14"
-        >
-          <SafetyBanner />
-          {children}
-        </main>
+        <div className="flex min-w-0 flex-1 flex-col">
+          <header data-topbar className="sticky top-0 z-30 border-b border-border bg-background/90 backdrop-blur">
+            <div className="mx-auto flex h-20 max-w-[1200px] items-center gap-3 px-4 sm:px-6 lg:px-12">
+              <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
+                <SheetTrigger asChild>
+                  <Button variant="ghost" size="icon" className="-ml-2 lg:hidden" aria-label="Open navigation">
+                    <Menu aria-hidden strokeWidth={1.5} className="size-6" />
+                  </Button>
+                </SheetTrigger>
+                <SheetContent side="left" className="w-80 max-w-[85vw] gap-0 bg-sidebar p-0">
+                  <SheetHeader className="px-6 pt-7 pb-8">
+                    <SheetTitle asChild>
+                      <div>
+                        <BrandLogo className="h-8" />
+                      </div>
+                    </SheetTitle>
+                    <SheetDescription className="sr-only">Main navigation</SheetDescription>
+                  </SheetHeader>
+                  <SideNav onNavigate={() => setMenuOpen(false)} />
+                </SheetContent>
+              </Sheet>
+              <BrandLogo className="h-7 lg:hidden" />
+              <Today />
+
+              <div className="ml-auto">
+                <AccountMenu user={user} />
+              </div>
+            </div>
+          </header>
+
+          <main
+            id="main"
+            className="mx-auto w-full max-w-[1200px] flex-1 px-4 pt-10 pb-20 sm:px-6 lg:px-12 lg:pt-14"
+          >
+            <SafetyBanner />
+            {children}
+          </main>
+        </div>
       </div>
-    </div>
+    </CompanionProvider>
   );
 }
 

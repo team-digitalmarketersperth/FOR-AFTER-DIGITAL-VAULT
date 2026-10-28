@@ -1,18 +1,20 @@
 'use client';
 
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Images, Pencil, Plus, Send, Trash2, X } from 'lucide-react';
+import { Images, Info, Pencil, Plus, Send, Tag, Trash2, X } from 'lucide-react';
+import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useForm, useWatch } from 'react-hook-form';
 import { toast } from 'sonner';
 import { MediaManager } from '@/components/media/media-manager';
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
-import { Pager, SearchBox, SelectField, useFilterNav } from '@/components/shared/list-controls';
+import { Pager, SearchBox, useFilterNav } from '@/components/shared/list-controls';
 import { ChoiceGroup, FilterChips, FormError, TextAreaField, TextField } from '@/components/shared/form-field';
 import { PageHeader } from '@/components/shared/page-header';
-import { EmptyState, QueryView, Spinner } from '@/components/shared/states';
+import { PrivateNoteField, PrivateNoteView } from '@/components/shared/private-note';
+import { QueryView, Spinner } from '@/components/shared/states';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -35,7 +37,7 @@ import { formatDate, humanize } from '@/lib/format';
 import { memorySchema, type MemoryValues } from '@/schemas/vault';
 
 const newButton = (
-  <Button asChild>
+  <Button asChild className="h-11 w-full rounded-md px-5 sm:w-auto">
     <Link href="/memory-vault/new">
       <Plus aria-hidden strokeWidth={1.5} />
       Save a memory
@@ -76,34 +78,49 @@ export function MemoryList({ filters }: { filters: MemoryFilters }) {
   const tagValue = tagNames.find((n) => n.toLowerCase() === filters.tag?.toLowerCase()) ?? '';
   return (
     <>
-      <PageHeader
-        eyebrow="Preserve"
-        title={<>Memory <em>Vault</em></>}
-        description="Moments, stories and recipes worth keeping, in one private place."
-        action={newButton}
-      />
-      <div className="mb-6 grid gap-4 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] sm:items-end">
-        <SearchBox
-          value={filters.search}
-          onSearch={(search) => nav.set({ search })}
-          placeholder="Search memories…"
-          maxLength={SEARCH_MAX}
-        />
-        <SelectField
-          id="tag"
-          label="Tag"
-          value={tagValue}
-          onChange={(e) => nav.set({ tag: e.target.value || undefined })}
-          options={[{ value: '', label: 'All tags' }, ...tagNames.map((n) => ({ value: n, label: n }))]}
-        />
+      <VaultIntro />
+      {/* One row from lg; on tablets search gets its own row, tag + Save share the next. */}
+      <div className="mb-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] lg:grid-cols-[minmax(0,1fr)_14rem_auto]">
+        <div className="sm:col-span-2 lg:col-span-1">
+          <SearchBox
+            value={filters.search}
+            onSearch={(search) => nav.set({ search })}
+            placeholder="Search memories…"
+            label="Search memories"
+            hideLabel
+            maxLength={SEARCH_MAX}
+          />
+        </div>
+        <div className="relative">
+          <Label htmlFor="tag" className="sr-only">
+            Filter memories by tag
+          </Label>
+          <Tag aria-hidden strokeWidth={1.5} className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-foreground-muted" />
+          <select
+            id="tag"
+            value={tagValue}
+            onChange={(e) => nav.set({ tag: e.target.value || undefined })}
+            className="h-11 w-full rounded-sm border border-input bg-surface pr-3 pl-9 text-sm outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-1 focus-visible:outline-ring"
+          >
+            {[{ value: '', label: 'All tags' }, ...tagNames.map((n) => ({ value: n, label: n }))].map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        {newButton}
       </div>
-      <FilterChips label="Filter by category" chips={chips} />
+      <FilterChips
+        label="Filter by category"
+        chips={chips}
+        className="mb-6 flex-nowrap overflow-x-auto pt-1 pb-2 sm:flex-wrap sm:overflow-visible"
+      />
       <QueryView query={list} loadingLabel="Loading your memories">
         {({ items, pagination }) =>
           items.length === 0 ? (
             filtered ? (
-              <EmptyState
-                icon={Images}
+              <VaultEmpty
                 title="No memories match your filters"
                 description="Try a different search, category or tag."
                 action={
@@ -113,8 +130,7 @@ export function MemoryList({ filters }: { filters: MemoryFilters }) {
                 }
               />
             ) : (
-              <EmptyState
-                icon={Images}
+              <VaultEmpty
                 title="Your Memory Vault is ready when you are"
                 description="Write down a story, a recipe or a moment, and add photos or a recording if you like."
                 action={newButton}
@@ -127,7 +143,7 @@ export function MemoryList({ filters }: { filters: MemoryFilters }) {
                   <li key={m.id}>
                     <Link
                       href={`/memory-vault/${m.id}`}
-                      className="flex h-full flex-col gap-3 rounded-lg border border-border bg-surface p-6 outline-none transition-colors hover:border-border-strong focus-visible:outline-2 focus-visible:outline-ring"
+                      className="flex h-full flex-col gap-3 rounded-lg border border-border bg-surface p-6 outline-none transition-colors hover:border-border-strong focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring"
                     >
                       <span className="eyebrow">{humanize(m.category)}</span>
                       <span className="font-heading text-[26px] leading-tight break-words">{m.title}</span>
@@ -146,6 +162,85 @@ export function MemoryList({ filters }: { filters: MemoryFilters }) {
         }
       </QueryView>
     </>
+  );
+}
+
+/**
+ * Latest approved copy (2026-10-19): heading and one description, word for
+ * word; the audience guidance stays as secondary text. The photos are
+ * decorative (existing brand images, empty alt) and only shown from lg up, so
+ * no copy depends on them.
+ */
+function VaultIntro() {
+  return (
+    <section className="mb-6 grid overflow-hidden rounded-xl border border-border bg-brand-ivory lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+      <div className="grid content-center gap-4 p-6 sm:p-10">
+        <h1 className="text-[40px] leading-[1.05] break-words sm:text-5xl">
+          Memory <em>Vault</em>
+        </h1>
+        <p className="max-w-xl text-base leading-relaxed text-foreground-secondary sm:text-[17px]">
+          Gather the photos, videos and stories that celebrate your life. After you pass away, your Memory Vault will
+          become a memorial page to share with loved ones and funeral guests.
+        </p>
+        <p className="mt-2 flex max-w-xl gap-3 rounded-sm border-l-2 border-primary bg-surface/80 px-4 py-3 text-sm leading-relaxed text-foreground-secondary">
+          <Info aria-hidden strokeWidth={1.5} className="mt-0.5 size-4 shrink-0 text-primary" />
+          <span>
+            Choose what you share with that future audience in mind. Only add content you’re comfortable having seen by
+            everyone who may receive the memorial page link.
+          </span>
+        </p>
+      </div>
+      <div aria-hidden className="relative hidden min-h-72 lg:block">
+        <Print src="/brand/writing.webp" className="top-8 right-[44%] w-[40%] -rotate-6" />
+        <Print src="/brand/together.webp" crop className="top-14 right-[12%] w-[42%] rotate-3" />
+        <Sprig className="absolute bottom-4 left-[8%] h-24 w-auto -rotate-12 text-brand-bronze" />
+      </div>
+    </section>
+  );
+}
+
+/** A printed photo: white border, deeper at the bottom, a soft lift. */
+function Print({ src, crop, className }: { src: string; crop?: boolean; className: string }) {
+  return (
+    <div className={`absolute bg-surface p-2 pb-8 shadow-soft ${className}`}>
+      <div className="relative aspect-square overflow-hidden">
+        {/* crop: the hands and the photo they hold, not faces. */}
+        <Image
+          src={src}
+          alt=""
+          fill
+          sizes="220px"
+          className={crop ? 'origin-[48%_70%] scale-[2.2] object-cover' : 'object-cover'}
+        />
+      </div>
+    </div>
+  );
+}
+
+/** A single quiet botanical line. */
+function Sprig({ className }: { className: string }) {
+  return (
+    <svg viewBox="0 0 60 120" fill="none" stroke="currentColor" strokeWidth={1.25} strokeLinecap="round" className={className}>
+      <path d="M30 118C30 80 28 45 34 4" />
+      <path d="M30 92c-10-4-16-12-18-22 10 2 17 9 18 22Z" />
+      <path d="M31 70c9-4 15-11 17-21-10 2-16 9-17 21Z" />
+      <path d="M31 48c-8-4-13-10-14-19 8 2 13 8 14 19Z" />
+      <path d="M33 27c7-3 11-9 12-16-7 2-11 7-12 16Z" />
+    </svg>
+  );
+}
+
+/** Compact empty state: icon in a soft circle, serif heading, one action. */
+function VaultEmpty({ title, description, action }: { title: string; description: string; action: ReactNode }) {
+  return (
+    <section className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-border-strong bg-surface px-6 py-12 text-center">
+      <span className="mb-1 grid size-12 place-items-center rounded-full bg-brand-ivory">
+        <Images aria-hidden strokeWidth={1.5} className="size-5 text-primary" />
+      </span>
+      <h2 className="text-[28px] leading-tight">{title}</h2>
+      <p className="max-w-sm text-sm text-foreground-muted">{description}</p>
+      <div className="mt-2">{action}</div>
+    </section>
   );
 }
 
@@ -225,6 +320,7 @@ export function MemoryDetail({ id }: { id: string }) {
             )}
             <TagList tags={m.tags} />
             <MediaManager scope={{ kind: 'memory-vault', id: m.id }} kinds={['PHOTO', 'AUDIO']} editable />
+            <PrivateNoteView note={m.privateNote} />
           </div>
         </>
       )}
@@ -310,12 +406,14 @@ function MemoryForm({
       title: initial?.title ?? '',
       category: initial?.category ?? initialCategory,
       textContent: initial?.textContent ?? '',
+      privateNote: initial?.privateNote ?? '',
       tags: initial?.tags.map((t) => t.name) ?? [],
     },
   });
   const { errors, isDirty, isSubmitSuccessful } = form.formState;
   const text = useWatch({ control: form.control, name: 'textContent' });
   const tags = useWatch({ control: form.control, name: 'tags' });
+  const note = useWatch({ control: form.control, name: 'privateNote' });
   useUnsavedChanges(isDirty && !isSubmitSuccessful);
   return (
     <form
@@ -327,6 +425,7 @@ function MemoryForm({
             title: v.title.trim(),
             category: v.category,
             textContent: v.textContent.trim() ? v.textContent : null,
+            privateNote: v.privateNote.trim() || null,
             tags: v.tags,
           }),
       )}
@@ -353,6 +452,13 @@ function MemoryForm({
           {...form.register('textContent')}
         />
         <TagInput value={tags} onChange={(next) => form.setValue('tags', next, { shouldDirty: true })} />
+        <PrivateNoteField
+          id="privateNote"
+          placeholder="Add a reminder or context for yourself."
+          length={note.length}
+          error={errors.privateNote?.message}
+          {...form.register('privateNote')}
+        />
       </fieldset>
       <div>
         <Button type="submit" size="lg" disabled={pending}>

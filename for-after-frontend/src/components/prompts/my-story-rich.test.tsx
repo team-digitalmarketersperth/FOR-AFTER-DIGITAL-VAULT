@@ -38,6 +38,7 @@ const answered = (over: Partial<NonNullable<Prompt['response']>> = {}) =>
       promptTextSnapshot: 'Tell us about a journey that stayed with you.',
       promptVersion: 1,
       textContent: 'By train to Kalgoorlie.',
+      privateNote: null,
       memories: [],
       mediaCount: 0,
       createdAt: '2026-09-01T00:00:00Z',
@@ -143,7 +144,7 @@ describe('My Story editor: rich answers (Phase 14B)', () => {
     const api = routeFetch(routes(answered({ textContent: null, mediaCount: 1 }), { [`PUT ${base}/response`]: json(200, {}) }));
     renderWithClient(<PromptEditor area="my-story" promptKey={KEY} />);
     await userEvent.click(await screen.findByRole('button', { name: 'Save answer' }));
-    await waitFor(() => expect(api.called('PUT', `${base}/response`)[0]?.body).toEqual({ textContent: null }));
+    await waitFor(() => expect(api.called('PUT', `${base}/response`)[0]?.body).toEqual({ textContent: null, privateNote: null }));
   });
 
   it('links and unlinks own memories by replacing the set; the server’s refusal is shown', async () => {

@@ -2,6 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { fakeStorage, json, renderWithClient, routeFetch, router } from '@/test/utils';
+import { MEMORY_CATEGORIES } from '@/lib/api/memory-vault';
 import { EditMemory, MemoryDetail, MemoryList, NewMemory } from './memories';
 
 vi.mock('next/navigation', () => ({ useRouter: () => router, usePathname: () => '/memory-vault' }));
@@ -36,6 +37,60 @@ describe('Memory Vault', () => {
     expect(screen.getByText('1 result')).toBeInTheDocument();
   });
 
+  it('opens with the client-approved introduction, before the action and the list', async () => {
+    routeFetch({ 'GET /memory-vault': json(200, page([memory])), 'GET /memory-vault/tags': json(200, []) });
+    const { container } = renderWithClient(<MemoryList filters={{}} />);
+    const h1 = screen.getByRole('heading', { level: 1 });
+    expect(h1).toHaveTextContent(/^Memory Vault$/);
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    const lines = [
+      'Gather the photos, videos and stories that celebrate your life. After you pass away, your Memory Vault will become a memorial page to share with loved ones and funeral guests.',
+      // Kept as secondary guidance.
+      'Choose what you share with that future audience in mind. Only add content you’re comfortable having seen by everyone who may receive the memorial page link.',
+    ];
+    for (const line of lines) expect(screen.getByText(line)).toBeInTheDocument();
+    const intro = screen.getByText(lines[1]);
+    const add = screen.getByRole('link', { name: 'Save a memory' });
+    expect(add).toHaveAttribute('href', '/memory-vault/new');
+    expect(intro.compareDocumentPosition(add) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const card = await screen.findByRole('link', { name: /Nana’s roast/ });
+    expect(intro.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(container).not.toHaveTextContent('—');
+    // Superseded introduction is gone.
+    expect(container).not.toHaveTextContent(/Your Memory Vault|Your life, ready to be remembered|Bring together the photos|funeral - a place/);
+  });
+
+  it('redesign: one toolbar (search → tag → Save), decorative photos hidden, one Save when memories exist', async () => {
+    routeFetch({ 'GET /memory-vault': json(200, page([memory])), 'GET /memory-vault/tags': json(200, tagList) });
+    const { container } = renderWithClient(<MemoryList filters={{}} />);
+    await screen.findByRole('link', { name: /Nana’s roast/ });
+    const search = screen.getByRole('searchbox', { name: 'Search memories' });
+    const tag = screen.getByRole('combobox', { name: 'Filter memories by tag' });
+    const add = screen.getByRole('link', { name: 'Save a memory' });
+    expect(search).toHaveAttribute('placeholder', 'Search memories…');
+    expect(within(tag).getAllByRole('option').map((o) => o.textContent)).toEqual(['All tags', 'Family', 'Road trips']);
+    expect(search.compareDocumentPosition(tag) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(tag.compareDocumentPosition(add) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Decorative prints: empty alt inside an aria-hidden block; no copy depends on them.
+    const imgs = container.querySelectorAll('img');
+    expect(imgs.length).toBe(2);
+    for (const img of imgs) {
+      expect(img).toHaveAttribute('alt', '');
+      expect(img.closest('[aria-hidden="true"]')).not.toBeNull();
+    }
+    expect(screen.getByRole('link', { name: 'All' })).toHaveAttribute('aria-current', 'true');
+    expect(within(screen.getByRole('navigation', { name: 'Filter by category' })).getAllByRole('link')).toHaveLength(MEMORY_CATEGORIES.length + 1);
+  });
+
+  it('empty vault: the empty state repeats Save a memory as the next step', async () => {
+    routeFetch({ 'GET /memory-vault': json(200, page([])), 'GET /memory-vault/tags': json(200, []) });
+    renderWithClient(<MemoryList filters={{}} />);
+    expect(await screen.findByRole('heading', { level: 2, name: 'Your Memory Vault is ready when you are' })).toBeInTheDocument();
+    const adds = screen.getAllByRole('link', { name: 'Save a memory' });
+    expect(adds).toHaveLength(2);
+    for (const a of adds) expect(a).toHaveAttribute('href', '/memory-vault/new');
+  });
+
   it('no memories at all: the first-time empty state', async () => {
     routeFetch({ 'GET /memory-vault': json(200, page([])), 'GET /memory-vault/tags': json(200, []) });
     renderWithClient(<MemoryList filters={{}} />);
@@ -57,17 +112,17 @@ describe('Memory Vault', () => {
       'href',
       '/memory-vault?category=RECIPES&tag=Family&search=italy',
     );
-    expect(screen.getByLabelText('Tag')).toHaveValue('Family');
-    expect(screen.getByLabelText('Search')).toHaveValue('italy');
+    expect(screen.getByLabelText('Filter memories by tag')).toHaveValue('Family');
+    expect(screen.getByLabelText('Search memories')).toHaveValue('italy');
   });
 
   it('typing a search or choosing a tag updates the URL and resets to page 1', async () => {
     routeFetch({ 'GET /memory-vault': json(200, page([memory], { page: 2, total: 30, pages: 2 })), 'GET /memory-vault/tags': json(200, tagList) });
     renderWithClient(<MemoryList filters={{ category: 'RECIPES', page: 2 }} />);
     await screen.findByRole('link', { name: /Nana’s roast/ });
-    await userEvent.type(screen.getByLabelText('Search'), 'roast');
+    await userEvent.type(screen.getByLabelText('Search memories'), 'roast');
     await waitFor(() => expect(router.replace).toHaveBeenCalledWith('/memory-vault?category=RECIPES&search=roast', { scroll: false }));
-    await userEvent.selectOptions(screen.getByLabelText('Tag'), 'Road trips');
+    await userEvent.selectOptions(screen.getByLabelText('Filter memories by tag'), 'Road trips');
     expect(router.replace).toHaveBeenLastCalledWith('/memory-vault?category=RECIPES&tag=Road+trips', { scroll: false });
   });
 
@@ -114,6 +169,7 @@ describe('Memory Vault', () => {
       title: 'Nana’s roast',
       category: 'RECIPES',
       textContent: null,
+      privateNote: null,
       tags: ['Family', 'Sunday lunch'],
     });
   });
@@ -132,6 +188,21 @@ describe('Memory Vault', () => {
     await waitFor(() =>
       expect(api.called('PATCH', '/memory-vault/v1')[0]?.body).toMatchObject({ category: 'FAMILY', tags: ['Childhood'] }),
     );
+  });
+
+  it('a cleared private note is sent as null; the detail shows a saved one', async () => {
+    const api = routeFetch({
+      'GET /memory-vault/v1': json(200, { ...memory, privateNote: 'Find the better photo.' }),
+      'PATCH /memory-vault/v1': json(200, memory),
+      'GET /memory-vault/tags': json(200, tagList),
+    });
+    renderWithClient(<EditMemory id="v1" />);
+    const note = await screen.findByLabelText(/^Private note to yourself/);
+    expect(note).toHaveValue('Find the better photo.');
+    expect(note).toHaveAccessibleDescription('Only you can see this.');
+    await userEvent.clear(note);
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(api.called('PATCH', '/memory-vault/v1')[0]?.body).toMatchObject({ privateNote: null }));
   });
 
   it('adds a photo through the Memory Vault media endpoints, and deletes after confirming', async () => {

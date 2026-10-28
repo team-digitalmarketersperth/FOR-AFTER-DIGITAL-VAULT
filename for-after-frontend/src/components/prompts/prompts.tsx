@@ -9,23 +9,27 @@ import { useForm, useWatch } from 'react-hook-form';
 import { toast } from 'sonner';
 import { MediaManager } from '@/components/media/media-manager';
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
+import { AutosaveStatus, RecoveryNotice } from '@/components/shared/draft-recovery';
 import { FilterChips, FormError, TextAreaField } from '@/components/shared/form-field';
 import { PageHeader } from '@/components/shared/page-header';
+import { PrivateNoteField } from '@/components/shared/private-note';
 import { EmptyState, QueryView, Spinner } from '@/components/shared/states';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { useDraftEditor } from '@/hooks/use-draft-editor';
 import { useUnsavedChanges } from '@/hooks/use-unsaved-changes';
 import {
   memories,
-  useAcknowledgeNotice,
   useAnswerMutation,
   usePrompt,
   usePrompts,
   useWishesNotice,
 } from '@/hooks/use-vault';
+import { textRevision } from '@/lib/api/drafts';
 import { ANSWER_MAX, type Prompt, type PromptArea } from '@/lib/api/prompts';
 import { formatDate, humanize } from '@/lib/format';
+import { cn } from '@/lib/utils';
 import { answerSchema, type AnswerValues } from '@/schemas/vault';
 
 const AREAS: Record<
@@ -35,7 +39,8 @@ const AREAS: Record<
   'my-story': {
     label: 'My Story',
     title: <>My <em>Story</em></>,
-    description: 'Your life in your own words. Answer the prompts in any order, and come back whenever you like.',
+    // The /my-story page itself is StoryWorkspace; this config serves the full answer page.
+    description: 'Follow thoughtful prompts to capture your memories, experiences and the moments that shaped you.',
     icon: BookOpen,
   },
   'my-wishes': {
@@ -49,15 +54,13 @@ const AREAS: Record<
 };
 
 /**
- * Phase 15A (approved 2026-10-08): the My Wishes notice exactly as the API
- * serves it, and, until this version is acknowledged, an unticked checkbox
- * and Continue. An acknowledgement that the notice was read, nothing more.
- * If it cannot load, a retry is shown and no stale wording is guessed.
+ * Phase 15A: the My Wishes notice exactly as the API serves it. Informational
+ * only (2026-10-14): it never gates reading or writing wishes, and loads
+ * alongside them. If it cannot load, a retry is shown and no stale wording is
+ * guessed.
  */
 function WishesNotice() {
   const notice = useWishesNotice();
-  const ack = useAcknowledgeNotice();
-  const [read, setRead] = useState(false);
   if (notice.isPending) {
     return (
       <p className="mb-10 flex items-center gap-2 text-sm text-foreground-muted" role="status">
@@ -68,47 +71,36 @@ function WishesNotice() {
   if (notice.isError) {
     return (
       <div role="alert" className="mb-10 flex flex-wrap items-center gap-3 rounded-xl bg-danger/8 p-6 text-[15px] text-danger">
-        We couldn’t load the My Wishes notice, so wishes can’t be saved right now.
+        We couldn’t load the My Wishes notice.
         <Button type="button" size="sm" variant="outline" onClick={() => void notice.refetch()}>
           Try again
         </Button>
       </div>
     );
   }
-  const n = notice.data;
   return (
-    <aside aria-label="Important" className="mb-10 grid gap-4 rounded-xl bg-primary-soft p-6">
-      <div className="flex gap-4">
-        <Info aria-hidden strokeWidth={1.5} className="mt-0.5 size-5 shrink-0 text-primary" />
-        <p className="text-[15px] leading-relaxed font-medium text-foreground-secondary">{n.text}</p>
-      </div>
-      {n.requiresAcknowledgement && !n.acknowledged && (
-        <form
-          className="grid gap-3 border-t border-primary/15 pt-4"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (read && !ack.isPending) ack.mutate(n.version);
-          }}
-        >
-          <FormError error={ack.error} />
-          <label className="flex items-start gap-3 text-[15px]">
-            <input
-              type="checkbox"
-              className="mt-1 size-4 accent-primary"
-              checked={read}
-              onChange={(e) => setRead(e.target.checked)}
-            />
-            I have read this notice.
-          </label>
-          <div>
-            <Button type="submit" size="sm" disabled={!read || ack.isPending}>
-              {ack.isPending && <Spinner />}
-              Continue
-            </Button>
-          </div>
-        </form>
-      )}
+    <aside aria-label="Important" className="mb-10 flex gap-4 rounded-xl bg-primary-soft p-6">
+      <Info aria-hidden strokeWidth={1.5} className="mt-0.5 size-5 shrink-0 text-primary" />
+      <p className="text-[15px] leading-relaxed font-medium text-foreground-secondary">{notice.data.text}</p>
     </aside>
+  );
+}
+
+/** Same count as before, plus a thin bar; the text is what screen readers get. */
+export function StoryProgress({ answered, total, className = 'mb-5' }: { answered: number; total: number; className?: string }) {
+  const pct = total ? Math.round((answered / total) * 100) : 0;
+  return (
+    <div className={cn('flex items-center gap-4 text-sm text-foreground-muted', className)}>
+      <p aria-live="polite" className="shrink-0">
+        {answered} of {total} answered
+      </p>
+      <div aria-hidden className="h-px flex-1 bg-brand-lilac-grey">
+        <div className="-mt-px h-[3px] bg-primary" style={{ width: `${pct}%` }} />
+      </div>
+      <span aria-hidden className="w-10 shrink-0 text-right tabular-nums">
+        {pct}%
+      </span>
+    </div>
   );
 }
 
@@ -211,7 +203,7 @@ export function PromptEditor({ area, promptKey }: { area: PromptArea; promptKey:
  * My Story keeps the wording an answer was written for (Phase 14A). When the
  * question has been reworded since, say so, so the answer keeps its context.
  */
-function EarlierWording({ prompt: p }: { prompt: Prompt }) {
+export function EarlierWording({ prompt: p }: { prompt: Prompt }) {
   const answered = p.response?.promptTextSnapshot;
   if (!answered || answered === p.prompt) return null;
   return (
@@ -224,27 +216,40 @@ function EarlierWording({ prompt: p }: { prompt: Prompt }) {
 function AnswerForm({ area, prompt: p }: { area: PromptArea; prompt: Prompt }) {
   const router = useRouter();
   const mutation = useAnswerMutation(area, p.key);
-  const notice = useWishesNotice();
-  // Phase 15A: My Wishes can be written only once the current notice is
-  // acknowledged (the server enforces it too); reading and deleting always work.
-  const locked = AREAS[area].notice ? !notice.data?.acknowledged : false;
   const form = useForm<AnswerValues>({
     resolver: zodResolver(answerSchema(area)),
-    defaultValues: { textContent: p.response?.textContent ?? '' },
+    defaultValues: { textContent: p.response?.textContent ?? '', privateNote: p.response?.privateNote ?? '' },
   });
   const { errors, isDirty, isSubmitSuccessful } = form.formState;
   const answer = useWatch({ control: form.control, name: 'textContent' });
+  const note = useWatch({ control: form.control, name: 'privateNote' });
   useUnsavedChanges(isDirty && !isSubmitSuccessful);
   const back = () => router.push(`/${area}`);
+  // Unsaved text is autosaved server-side; it becomes the answer only on Save.
+  const saved = p.response?.textContent ?? '';
+  const editor = useDraftEditor({
+    type: area === 'my-story' ? 'MY_STORY' : 'MY_WISHES',
+    draftKey: p.key,
+    baseRevision: textRevision(saved),
+    saved: { textContent: saved },
+    current: { textContent: answer },
+    active: !mutation.isPending && !isSubmitSuccessful,
+  });
 
   return (
+    <>
+    <RecoveryNotice
+      editor={editor}
+      describe={(d) => ({ text: d.textContent })}
+      onRestore={(v) => form.setValue('textContent', v.textContent, { shouldDirty: true })}
+    />
     <form
       noValidate
       onSubmit={form.handleSubmit(
         (v) =>
           !mutation.isPending &&
           // Sent exactly as written: answers are not trimmed.
-          mutation.mutate(!v.textContent.trim() ? { textContent: null } : v, {
+          mutation.mutate({ textContent: v.textContent.trim() ? v.textContent : null, privateNote: v.privateNote.trim() || null }, {
             onSuccess: () => {
               toast.success('Your answer is saved');
               back();
@@ -254,10 +259,7 @@ function AnswerForm({ area, prompt: p }: { area: PromptArea; prompt: Prompt }) {
       className="grid max-w-3xl gap-6 rounded-xl border border-border bg-surface p-6 sm:p-10"
     >
       <FormError error={mutation.error} />
-      {locked && notice.data && (
-        <p className="text-sm text-foreground-muted">Please acknowledge the notice above to write or change your wishes.</p>
-      )}
-      <fieldset disabled={mutation.isPending || locked}>
+      <fieldset disabled={mutation.isPending} className="grid gap-6">
         <TextAreaField
           id="answer"
           label="Your answer"
@@ -268,12 +270,25 @@ function AnswerForm({ area, prompt: p }: { area: PromptArea; prompt: Prompt }) {
           error={errors.textContent?.message}
           {...form.register('textContent')}
         />
+        {/* Not part of the answer: never shared or autosaved. */}
+        <PrivateNoteField
+          id="privateNote"
+          placeholder={
+            area === 'my-story'
+              ? 'Anything you’d like to remember about this answer?'
+              : 'Add a reminder for yourself. This won’t be shared.'
+          }
+          length={note.length}
+          error={errors.privateNote?.message}
+          {...form.register('privateNote')}
+        />
       </fieldset>
       <div className="flex flex-wrap items-center gap-3">
-        <Button type="submit" size="lg" disabled={mutation.isPending || locked}>
+        <Button type="submit" size="lg" disabled={mutation.isPending}>
           {mutation.isPending && <Spinner />}
           Save answer
         </Button>
+        <AutosaveStatus editor={editor} />
         {p.answered && (
           <ConfirmDialog
             trigger={
@@ -301,6 +316,7 @@ function AnswerForm({ area, prompt: p }: { area: PromptArea; prompt: Prompt }) {
         )}
       </div>
     </form>
+    </>
   );
 }
 
@@ -312,7 +328,7 @@ function extrasSummary(r: NonNullable<Prompt['response']>) {
   return parts.join(' · ');
 }
 
-const EXTRAS: Record<PromptArea, { add: string; share: string; shareText: string; cta: string }> = {
+export const EXTRAS: Record<PromptArea, { add: string; share: string; shareText: string; cta: string }> = {
   'my-story': {
     add: 'Add to your story',
     share: 'Share it as a message',
@@ -333,13 +349,10 @@ const EXTRAS: Record<PromptArea, { add: string; share: string; shareText: string
  * Photos, recordings and videos (the shared uploader and recorders) and
  * sharing as a separate message: My Story (Phase 14B, plus private links to
  * memories) and My Wishes (Phase 15B). All private: nothing here is visible to
- * anyone else. Adding a wish file needs the current notice acknowledged
- * (Phase 15A); viewing and deleting do not.
+ * anyone else.
  */
 function AnswerExtras({ area, prompt: p }: { area: PromptArea; prompt: Prompt }) {
-  const notice = useWishesNotice();
   const text = EXTRAS[area];
-  const locked = AREAS[area].notice ? !notice.data?.acknowledged : false;
   return (
     <div className="mt-10 grid max-w-3xl gap-10">
       <section aria-labelledby="answer-media" className="grid gap-4">
@@ -353,7 +366,7 @@ function AnswerExtras({ area, prompt: p }: { area: PromptArea; prompt: Prompt })
           scope={{ kind: area, id: p.key }}
           kinds={['PHOTO', 'AUDIO', 'VIDEO']}
           title="Photos, voice and video"
-          editable={!locked}
+          editable
         />
       </section>
       {area === 'my-story' && <MemoryLinks prompt={p} />}
@@ -379,13 +392,7 @@ function AnswerExtras({ area, prompt: p }: { area: PromptArea; prompt: Prompt })
 
 /** Link and unlink the Customer's own memories (private context, never shared). */
 function MemoryLinks({ prompt: p }: { prompt: Prompt }) {
-  const linked = p.response?.memories ?? [];
   const save = useAnswerMutation('my-story', p.key);
-  const [search, setSearch] = useState('');
-  const term = useDeferredValue(search.trim());
-  const found = memories.useList({ search: term || undefined });
-  const setLinks = (ids: string[]) => save.mutate({ memoryVaultItemIds: ids });
-  const candidates = (found.data?.items ?? []).filter((m) => !linked.some((l) => l.id === m.id)).slice(0, 5);
   return (
     <section aria-labelledby="story-memories" className="grid gap-4">
       <div className="grid gap-1">
@@ -397,27 +404,69 @@ function MemoryLinks({ prompt: p }: { prompt: Prompt }) {
         </p>
       </div>
       <FormError error={save.error} />
-      {linked.length > 0 && (
-        <ul aria-label="Linked memories" className="flex flex-wrap gap-2">
-          {linked.map((m) => (
-            <li key={m.id} className="inline-flex items-center gap-1 rounded-full bg-surface-muted py-1 pr-1 pl-3 text-sm">
-              <Link href={`/memory-vault/${m.id}`} className="hover:underline">
-                {m.title}
-              </Link>
-              <span className="text-foreground-muted">· {humanize(m.category)}</span>
-              <button
-                type="button"
-                aria-label={`Unlink ${m.title}`}
-                disabled={save.isPending}
-                onClick={() => setLinks(linked.filter((x) => x.id !== m.id).map((x) => x.id))}
-                className="inline-flex size-6 items-center justify-center rounded-full outline-none hover:bg-border focus-visible:outline-2 focus-visible:outline-ring"
-              >
-                <X aria-hidden className="size-3.5" />
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+      <LinkedMemories prompt={p} save={save} />
+      <MemorySearch
+        exclude={(p.response?.memories ?? []).map((m) => m.id)}
+        disabled={save.isPending}
+        onLink={({ id }) => save.mutate({ memoryVaultItemIds: [...(p.response?.memories ?? []).map((m) => m.id), id] })}
+      />
+    </section>
+  );
+}
+
+type LinkSave = ReturnType<typeof useAnswerMutation>;
+
+/**
+ * The answer's linked memories. Unlinking replaces the set (the API's
+ * contract): the memory itself, and its files, are never touched.
+ */
+export function LinkedMemories({ prompt: p, save }: { prompt: Prompt; save: LinkSave }) {
+  const linked = p.response?.memories ?? [];
+  if (linked.length === 0) return null;
+  return (
+    <ul aria-label="Linked memories" className="flex flex-wrap gap-2">
+      {linked.map((m) => (
+        <li key={m.id} className="inline-flex max-w-full items-center gap-1 rounded-full bg-surface-muted py-1 pr-1 pl-3 text-sm">
+          <Link href={`/memory-vault/${m.id}`} className="min-w-0 truncate hover:underline">
+            {m.title}
+          </Link>
+          <span className="shrink-0 text-foreground-muted">· {humanize(m.category)}</span>
+          <button
+            type="button"
+            aria-label={`Unlink ${m.title}`}
+            disabled={save.isPending}
+            onClick={() => save.mutate({ memoryVaultItemIds: linked.filter((x) => x.id !== m.id).map((x) => x.id) })}
+            className="inline-flex size-6 shrink-0 items-center justify-center rounded-full outline-none hover:bg-border focus-visible:outline-2 focus-visible:outline-ring"
+          >
+            <X aria-hidden className="size-3.5" />
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * Search the Customer's own memories (the API scopes the list to them) and
+ * pick one; `exclude` keeps linked or already chosen ones out (no duplicates).
+ */
+export function MemorySearch({
+  exclude,
+  disabled,
+  onLink,
+  label = 'Link',
+}: {
+  exclude: string[];
+  disabled?: boolean;
+  onLink: (memory: { id: string; title: string; category: string }) => void;
+  label?: string;
+}) {
+  const [search, setSearch] = useState('');
+  const term = useDeferredValue(search.trim());
+  const found = memories.useList({ search: term || undefined });
+  const candidates = (found.data?.items ?? []).filter((m) => !exclude.includes(m.id)).slice(0, 5);
+  return (
+    <>
       <div className="grid gap-2">
         <Label htmlFor="memory-search">Find a memory to link</Label>
         <Input
@@ -442,16 +491,15 @@ function MemoryLinks({ prompt: p }: { prompt: Prompt }) {
                 type="button"
                 size="sm"
                 variant="outline"
-                disabled={save.isPending}
-                onClick={() => setLinks([...linked.map((x) => x.id), m.id])}
+                disabled={disabled}
+                onClick={() => onLink(m)}
               >
-                Link
+                {label}
               </Button>
             </li>
           ))}
         </ul>
       )}
-    </section>
+    </>
   );
 }
-

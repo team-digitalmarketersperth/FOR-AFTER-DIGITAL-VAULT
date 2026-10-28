@@ -499,6 +499,10 @@ const deathCase = (over: Partial<DeathCaseDetail> = {}): DeathCaseDetail => ({
     { eventType: 'SAFETY_NOTICE_SENT', actorType: 'SYSTEM', actorUserId: null, actorTrustedContactId: null, createdAt: '2026-09-10T00:01:00.000Z' },
   ],
   activations: [],
+  evidence: [],
+  requiredConfirmations: 1,
+  receivedConfirmations: 1,
+  confirmationRequirementMet: true,
   ...over,
 });
 
@@ -514,6 +518,144 @@ describe('Death verification list', () => {
       'href',
       '/admin/death-verifications?status=CANCELLED',
     );
+  });
+});
+
+describe('Death verification confirmations (Phase 19B)', () => {
+  const PENDING = 'Another independent Trusted Contact confirmation is required before this case can be verified.';
+  const show = (over: Partial<DeathCaseDetail>) => {
+    routeFetch({ [`GET /admin/death-verifications/${CASE_ID}`]: json(200, deathCase(over)) });
+    renderAdmin(<CaseDetail id={CASE_ID} />);
+  };
+
+  it('1 of 2: shows the count, explains, disables Verify and keeps Reject', async () => {
+    show({ requiredConfirmations: 2, receivedConfirmations: 1, confirmationRequirementMet: false });
+    expect(await screen.findByText('1 of 2')).toBeInTheDocument();
+    expect(screen.getByText('Confirmation requirement pending')).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(PENDING))).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Verify death…' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Reject/ })).toBeEnabled();
+  });
+
+  it('2 of 2: satisfied, Verify available (the API still decides)', async () => {
+    show({ requiredConfirmations: 2, receivedConfirmations: 2, confirmationRequirementMet: true });
+    expect(await screen.findByText('2 of 2')).toBeInTheDocument();
+    expect(screen.getByText('Confirmation requirement satisfied')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Verify death…' })).toBeEnabled();
+    expect(screen.queryByText(new RegExp(PENDING))).not.toBeInTheDocument();
+  });
+
+  it('an older case without a recorded requirement cannot be verified', async () => {
+    show({ requiredConfirmations: null, receivedConfirmations: 1, confirmationRequirementMet: false });
+    expect(await screen.findByText('Not recorded (older case)')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Verify death…' })).toBeDisabled();
+  });
+
+  it('a forged/raced verify refused by the API (409) shows the case-changed notice and refetches', async () => {
+    const api = routeFetch({
+      [`GET /admin/death-verifications/${CASE_ID}`]: json(200, deathCase()),
+      [`POST /admin/death-verifications/${CASE_ID}/verify`]: json(409, { statusCode: 409, message: PENDING }),
+    });
+    renderAdmin(<CaseDetail id={CASE_ID} />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Verify death…' }));
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.type(within(dialog).getByLabelText('Date'), '2026-09-01');
+    await userEvent.type(within(dialog).getByLabelText('Time'), '10:00');
+    await userEvent.click(within(dialog).getByLabelText(/confirm the death of/));
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Verify death' }));
+    expect(await screen.findByText('This case changed while you were reviewing it')).toBeInTheDocument();
+    await waitFor(() => expect(api.called('GET', `/admin/death-verifications/${CASE_ID}`).length).toBeGreaterThan(1));
+  });
+});
+
+describe('Death verification evidence (Phase 19A)', () => {
+  const EV_URL = `/admin/death-verifications/${CASE_ID}/evidence/ev1/access-url`;
+  const evidence = (over: Partial<DeathCaseDetail['evidence'][number]> = {}): DeathCaseDetail['evidence'][number] => ({
+    id: 'ev1',
+    deathReportId: deathCase().reports[0].id,
+    originalFileName: 'Death certificate.pdf',
+    mimeType: 'application/pdf',
+    sizeBytes: 1_887_437,
+    status: 'READY',
+    uploadedAt: '2026-10-12T00:00:00.000Z',
+    createdAt: '2026-10-12T00:00:00.000Z',
+    ...over,
+  });
+
+  it('shows an empty state when there is no evidence', async () => {
+    routeFetch({ [`GET /admin/death-verifications/${CASE_ID}`]: json(200, deathCase()) });
+    renderAdmin(<CaseDetail id={CASE_ID} />);
+    expect(await screen.findByText('No evidence has been uploaded for this case.')).toBeInTheDocument();
+  });
+
+  it('lists READY evidence with a secure view action; unfinished files cannot be opened', async () => {
+    routeFetch({
+      [`GET /admin/death-verifications/${CASE_ID}`]: json(
+        200,
+        deathCase({
+          evidence: [
+            evidence(),
+            evidence({ id: 'ev2', originalFileName: 'scan.png', mimeType: 'image/png', status: 'FAILED', uploadedAt: null }),
+            evidence({ id: 'ev3', originalFileName: 'late.jpg', mimeType: 'image/jpeg', status: 'PENDING_UPLOAD', uploadedAt: null }),
+          ],
+        }),
+      ),
+    });
+    renderAdmin(<CaseDetail id={CASE_ID} />);
+    expect(await screen.findByText('Death certificate.pdf')).toBeInTheDocument();
+    expect(screen.getByText(/PDF · 1\.8 MB · Report 1/)).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'View securely' })).toHaveLength(1);
+    expect(screen.getAllByText('Upload failed checks').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Upload not finished').length).toBeGreaterThan(0);
+    expect(screen.getByText(/It doesn't verify the case/)).toBeInTheDocument();
+    // Evidence never offers a decision of its own.
+    expect(screen.queryByRole('button', { name: /verify from evidence|approve evidence/i })).not.toBeInTheDocument();
+  });
+
+  it('opens the file through a short-lived URL fetched on click, then refreshes the timeline', async () => {
+    const tab = { opener: {}, location: { href: '' }, close: vi.fn() };
+    vi.spyOn(window, 'open').mockReturnValue(tab as unknown as Window);
+    const api = routeFetch({
+      [`GET /admin/death-verifications/${CASE_ID}`]: json(200, deathCase({ evidence: [evidence()] })),
+      [`GET ${EV_URL}`]: json(200, { url: 'https://media.test/signed', expiresAt: '2026-10-13T00:05:00Z' }),
+    });
+    renderAdmin(<CaseDetail id={CASE_ID} />);
+    expect(api.called('GET', EV_URL)).toHaveLength(0); // never prefetched
+    await userEvent.click(await screen.findByRole('button', { name: 'View securely' }));
+    await waitFor(() => expect(tab.location.href).toBe('https://media.test/signed'));
+    expect(tab.opener).toBeNull();
+    await waitFor(() => expect(api.called('GET', `/admin/death-verifications/${CASE_ID}`).length).toBeGreaterThan(1));
+    expect(screen.queryByText('https://media.test/signed')).not.toBeInTheDocument();
+  });
+
+  it('a refused access closes the blank tab and explains', async () => {
+    const tab = { opener: {}, location: { href: '' }, close: vi.fn() };
+    vi.spyOn(window, 'open').mockReturnValue(tab as unknown as Window);
+    routeFetch({
+      [`GET /admin/death-verifications/${CASE_ID}`]: json(200, deathCase({ evidence: [evidence()] })),
+      [`GET ${EV_URL}`]: json(503, { statusCode: 503, message: 'Media storage is temporarily unavailable.' }),
+    });
+    renderAdmin(<CaseDetail id={CASE_ID} />);
+    await userEvent.click(await screen.findByRole('button', { name: 'View securely' }));
+    expect(await screen.findByText("We couldn't open this file")).toBeInTheDocument();
+    expect(tab.close).toHaveBeenCalled();
+  });
+
+  it('labels the evidence timeline events', async () => {
+    routeFetch({
+      [`GET /admin/death-verifications/${CASE_ID}`]: json(
+        200,
+        deathCase({
+          auditEvents: [
+            { eventType: 'EVIDENCE_UPLOADED', actorType: 'TRUSTED_CONTACT', actorUserId: null, actorTrustedContactId: 't1', createdAt: '2026-10-12T00:00:00.000Z' },
+            { eventType: 'EVIDENCE_VIEWED_BY_ADMIN', actorType: 'ADMIN', actorUserId: 'a1', actorTrustedContactId: null, createdAt: '2026-10-12T01:00:00.000Z' },
+          ],
+        }),
+      ),
+    });
+    renderAdmin(<CaseDetail id={CASE_ID} />);
+    expect(await screen.findByText('Supporting evidence uploaded')).toBeInTheDocument();
+    expect(screen.getByText('Supporting evidence viewed by an admin')).toBeInTheDocument();
   });
 });
 

@@ -19,6 +19,9 @@
   --brand-bronze: #9a8067; /* --Antique-Bronze */
   --brand-gold: #b0803c; /* palette colour 1: logo dot, social icons */
   --brand-off-white: #fafbfc; /* body background */
+  --brand-ivory: #f5f1eb; /* Soft Ivory, client brand direction (2026-10-19): warm panels */
+  --brand-maroon: #632f3b; /* Deep Maroon, client brand direction: Story preview accents */
+  --brand-stone: #d8d0c7; /* Warm Stone, client brand direction: Story preview dividers */
   --brand-hairline: rgb(90 92 84 / 0.14); /* --Line-ThinDark, input/card lines */
 
   /* Semantic tokens: components use these, never the brand values directly */
@@ -78,6 +81,9 @@
   --color-sidebar-border: var(--sidebar-border);
   --color-brand-gold: var(--brand-gold);
   --color-brand-bronze: var(--brand-bronze);
+  --color-brand-ivory: var(--brand-ivory);
+  --color-brand-maroon: var(--brand-maroon);
+  --color-brand-stone: var(--brand-stone);
   --color-brand-lilac-grey: var(--brand-lilac-grey);
 
   --color-card: var(--card);

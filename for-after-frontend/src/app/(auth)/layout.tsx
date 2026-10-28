@@ -10,12 +10,12 @@ export default function AuthLayout({ children }: { children: ReactNode }) {
     <div className="grid min-h-dvh lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
       <aside className="relative hidden overflow-hidden lg:block">
         <Image
-          src="/brand/together.webp"
+          src="/brand/for-after-login-image.jpeg"
           alt=""
           fill
           priority
           sizes="50vw"
-          className="object-cover"
+          className="object-cover object-[50%_35%]"
         />
         <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/25 to-black/10" />
         <div className="relative flex h-full flex-col justify-between p-12 text-white">

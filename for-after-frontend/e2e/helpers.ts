@@ -39,6 +39,40 @@ export async function emailFromLog(log: string, kind: string, email: string, fro
   throw new Error(`No ${kind} email for ${email.replace(/^(.)[^@]*@/, '$1***@')} in ${log}`);
 }
 
+/**
+ * With SMS_VERIFY_PROVIDER=console the API prints "[DEV ONLY] SMS to +61******678 |
+ * Your For After code is 123456" instead of texting. Waits for the next one to
+ * this (masked) mobile after `from` bytes of `log`. Never used with real Twilio.
+ */
+export async function smsCodeFromLog(log: string, mobile: string, from: number) {
+  const masked = `\\+${mobile.slice(1, 3)}\\*{6}${mobile.slice(-3)}`;
+  const pattern = new RegExp(`\\[DEV ONLY\\] SMS to ${masked} \\| Your For After code is (\\d{6})`);
+  for (let i = 0; i < 40; i++) {
+    const match = fs.readFileSync(log, 'utf8').slice(from).match(pattern);
+    if (match) return match[1];
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  throw new Error('No dev SMS code in the API log');
+}
+
+/**
+ * With SMS_MESSAGING_PROVIDER=console the API prints "[DEV ONLY] SMS to
+ * +61******222 | For After: ... token=..." instead of texting a Trusted
+ * Contact invitation. Returns the invitation link. Never used with real Twilio.
+ */
+export async function smsInvitationLinkFromLog(log: string, mobile: string, from: number) {
+  const masked = `\\+${mobile.slice(1, 3)}\\*{6}${mobile.slice(-3)}`;
+  const pattern = new RegExp(
+    `\\[DEV ONLY\\] SMS to ${masked} \\| For After: [^\\n]*?(https?://\\S+/trusted-contact/invitation\\?token=[A-Za-z0-9_-]{43})`,
+  );
+  for (let i = 0; i < 40; i++) {
+    const match = fs.readFileSync(log, 'utf8').slice(from).match(pattern);
+    if (match) return match[1];
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  throw new Error('No dev SMS invitation in the API log');
+}
+
 export async function signIn(page: Page, { email, password }: Account) {
   await page.getByLabel('Email').fill(email);
   await page.getByLabel('Password', { exact: true }).fill(password);

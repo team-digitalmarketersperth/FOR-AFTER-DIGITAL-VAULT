@@ -1,6 +1,6 @@
 'use client';
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, isApiError } from '@/lib/api/errors';
 import {
@@ -8,13 +8,17 @@ import {
   mediaApi,
   RECIPIENT_PHOTO_MAX_BYTES,
   storageApi,
+  storageItemScope,
   uploadToProvider,
   type AccessUrl,
   type MediaAsset,
   type MediaKind,
   type MediaScope,
+  type StorageFilters,
+  type StorageItem,
   type StorageUsage,
 } from '@/lib/api/media';
+import type { Page } from '@/lib/api/admin';
 import { queryKeys } from '@/lib/query/query-client';
 
 // A file change can change its owner too (e.g. a My Story answer becomes
@@ -49,6 +53,32 @@ export function useStorageUsage() {
   return useQuery<StorageUsage, ApiError>({
     queryKey: queryKeys.storage,
     queryFn: ({ signal }) => storageApi.usage(signal),
+  });
+}
+
+/** Storage Manager list: filtered, sorted and paged by the API. */
+export function useStorageItems(filters: StorageFilters) {
+  return useQuery<Page<StorageItem>, ApiError>({
+    queryKey: queryKeys.storageItems(filters),
+    queryFn: ({ signal }) => storageApi.items(filters, signal),
+    placeholderData: keepPreviousData,
+  });
+}
+
+/**
+ * Deletes a Storage Manager file through its own feature's endpoint, so that
+ * feature's rules (ownership, DRAFT-only messages…) still decide. Refreshes
+ * totals, the list and the owner even on failure (e.g. already deleted).
+ */
+export function useRemoveStorageItem() {
+  const qc = useQueryClient();
+  return useMutation<void, ApiError, StorageItem>({
+    mutationFn: (item) => mediaApi.remove(storageItemScope(item), item.id),
+    onSettled: (_, __, item) =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: queryKeys.storage }),
+        qc.invalidateQueries({ queryKey: ownerKey(storageItemScope(item)) }),
+      ]),
   });
 }
 

@@ -6,7 +6,7 @@ import { API, emailFromLog, newAccount, signIn } from './helpers';
 // The links exist only in emails, so this needs an API whose EMAIL_PROVIDER is
 // `console` and whose output is teed into E2E_BACKEND_LOG. E2E_EMAIL_API points
 // at it (e.g. a second instance on :4001, same database and Redis); every API
-// call of this spec goes there, so a Brevo-configured API on :4000 never sends
+// call of this spec goes there, so an API on :4000 with a real email provider never sends
 // to these fictional addresses.
 const LOG = process.env.E2E_BACKEND_LOG;
 const EMAIL_API = process.env.E2E_EMAIL_API;

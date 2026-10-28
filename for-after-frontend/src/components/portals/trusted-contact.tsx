@@ -1,13 +1,21 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { ChevronRight, FileText, Info, ShieldCheck, Users } from "lucide-react";
+import {
+  ChevronRight,
+  FileText,
+  Info,
+  ShieldCheck,
+  Upload,
+  Users,
+} from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
+import { UploadProgress } from "@/components/media/media-manager";
 import { OtpSignIn, WrongPlaceNote } from "@/components/portals/otp-sign-in";
 import {
   FormError,
@@ -26,18 +34,25 @@ import {
   useAnswerInvitation,
   useCaseStatus,
   useDeathReport,
+  useEvidence,
+  useEvidenceUpload,
   useInvitation,
+  useOpenSignedFile,
   useTrustedAccounts,
 } from "@/hooks/use-portals";
 import { useUnsavedChanges } from "@/hooks/use-unsaved-changes";
 import {
+  EVIDENCE_MAX_BYTES,
+  EVIDENCE_MAX_FILES,
+  EVIDENCE_TYPES,
   REPORT_NOTE_MAX,
+  trustedContactApi,
   type CaseStatus,
   type InvitationView,
   type TrustedAccount,
 } from "@/lib/api/portals";
 import { reporterStatus } from "@/lib/death-verification";
-import { formatCalendarDate, formatDate } from "@/lib/format";
+import { formatBytes, formatCalendarDate, formatDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 export function TrustedContactSignIn() {
@@ -45,19 +60,20 @@ export function TrustedContactSignIn() {
     <div className="grid gap-8">
       <OtpSignIn
         portal="trusted-contact"
-        intro={
+        sms
+        intro={(channel) => (
           <div className="grid gap-3">
             <p className="eyebrow">Trusted contact access</p>
             <h1 className="text-[40px] leading-[1.05]">
               For <em>trusted contacts</em>
             </h1>
             <p className="text-foreground-muted">
-              Someone named you as a trusted contact on For After. Enter your
-              email address and we&apos;ll email you a 6-digit code, with no
-              password or account needed.
+              {channel === 'sms'
+                ? 'Someone named you as a trusted contact on For After. Enter your mobile number and we’ll send a private 6-digit verification code by SMS, with no password or account needed.'
+                : 'Someone named you as a trusted contact on For After. Enter your email address and we’ll email you a 6-digit code, with no password or account needed.'}
             </p>
           </div>
-        }
+        )}
       />
       <WrongPlaceNote />
     </div>
@@ -257,12 +273,147 @@ export function AccountStatus({ id }: { id: string }) {
                   )
                 )}
               </section>
+              {s.reportedByYou && (
+                <EvidenceSection id={id} canUpload={s.canUploadEvidence} />
+              )}
               <RoleNote name={account.accountHolder.displayName} />
             </div>
           </>
         )
       }
     </QueryView>
+  );
+}
+
+const EVIDENCE_ACCEPT = [
+  ...Object.keys(EVIDENCE_TYPES),
+  ".pdf",
+  ".jpg",
+  ".jpeg",
+  ".png",
+].join(",");
+
+/**
+ * Phase 19A: the reporter's own supporting files. Evidence ≠ verification ≠
+ * release: a READY file is "ready for review", never "verified". The picker's
+ * accept list is a convenience; the server checks the real file.
+ */
+export function EvidenceSection({
+  id,
+  canUpload,
+}: {
+  id: string;
+  canUpload: boolean;
+}) {
+  const list = useEvidence(id);
+  const { state, upload, cancel } = useEvidenceUpload(id);
+  const open = useOpenSignedFile((evidenceId) =>
+    trustedContactApi.evidenceAccessUrl(id, evidenceId),
+  );
+  const input = useRef<HTMLInputElement>(null);
+  const busy = state.phase === "uploading" || state.phase === "confirming";
+  const full = (list.data?.length ?? 0) >= EVIDENCE_MAX_FILES;
+  return (
+    <section
+      aria-labelledby="evidence-heading"
+      className="grid gap-4 rounded-xl border border-border bg-surface p-6 sm:p-10"
+    >
+      <p className="eyebrow">Supporting evidence</p>
+      <h2 id="evidence-heading" className="text-2xl">
+        Documents for the review
+      </h2>
+      <p className="text-foreground-secondary">
+        You can add documents that support your report, such as a death
+        certificate (PDF, JPEG or PNG, up to{" "}
+        {EVIDENCE_MAX_BYTES / 1024 / 1024} MB each). Adding evidence
+        doesn&apos;t verify the account or release any messages. The For After
+        team reviews every case through the normal verification process.
+      </p>
+      <QueryView query={list} loadingLabel="Loading evidence">
+        {(files) =>
+          files.length > 0 && (
+            <ul className="grid gap-2">
+              {files.map((f) => (
+                <li
+                  key={f.id}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border p-4"
+                >
+                  <span className="grid gap-0.5 text-sm">
+                    <span className="font-medium">
+                      {EVIDENCE_TYPES[f.mimeType] ?? "File"} ·{" "}
+                      {formatBytes(f.sizeBytes)}
+                    </span>
+                    <span className="text-foreground-muted">
+                      {f.uploadedAt
+                        ? `Uploaded ${formatDate(f.uploadedAt)}`
+                        : "Uploaded"}{" "}
+                      · Ready for review
+                    </span>
+                  </span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={open.isPending}
+                    onClick={() => open.mutate(f.id)}
+                  >
+                    View
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )
+        }
+      </QueryView>
+      <FormError error={open.error} title="We couldn’t open this file" />
+      {busy && <UploadProgress state={state} onCancel={cancel} />}
+      {state.phase === "done" && (
+        <p className="text-sm text-success" aria-live="polite">
+          Evidence uploaded. It&apos;s ready for review.
+        </p>
+      )}
+      {state.phase === "failed" && (
+        <p role="alert" className="text-sm text-danger">
+          Upload failed: {state.message}
+        </p>
+      )}
+      {canUpload ? (
+        <div className="flex flex-wrap items-center gap-3">
+          <input
+            ref={input}
+            type="file"
+            accept={EVIDENCE_ACCEPT}
+            className="sr-only"
+            tabIndex={-1}
+            aria-hidden
+            data-testid="evidence-file"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (file) void upload(file);
+            }}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            disabled={busy || full}
+            onClick={() => input.current?.click()}
+          >
+            <Upload aria-hidden strokeWidth={1.5} />
+            Upload evidence
+          </Button>
+          {full && (
+            <span className="text-sm text-foreground-muted">
+              You&apos;ve added the maximum of {EVIDENCE_MAX_FILES} files.
+            </span>
+          )}
+        </div>
+      ) : (
+        <p className="text-sm text-foreground-muted">
+          This case is closed, so no more evidence can be added.
+        </p>
+      )}
+    </section>
   );
 }
 

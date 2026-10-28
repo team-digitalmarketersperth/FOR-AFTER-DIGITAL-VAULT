@@ -13,6 +13,8 @@ import {
   type CaseFilters,
   type DeathCaseDetail,
   type DeathCaseSummary,
+  type DeadLetter,
+  type DeadLetterFilters,
   type FailedJob,
   type Page,
   type QueueSummary,
@@ -224,6 +226,20 @@ export const useFailedJobs = (queue: string | undefined, page: number) =>
     placeholderData: keepPreviousData,
   });
 
+export const useDeadLetters = (f: DeadLetterFilters) =>
+  useQuery<Page<DeadLetter>, ApiError>({
+    queryKey: adminKeys.deadLetters(f),
+    queryFn: ({ signal }) => adminApi.deadLetters(f, signal),
+    placeholderData: keepPreviousData,
+  });
+
+export const useDeadLetter = (id: string, enabled = true) =>
+  useQuery<DeadLetter, ApiError>({
+    queryKey: adminKeys.deadLetter(id),
+    queryFn: ({ signal }) => adminApi.deadLetter(id, signal),
+    enabled,
+  });
+
 // ─── Actions ────────────────────────────────────────────────────────────────
 
 /**
@@ -278,6 +294,16 @@ export function useRetryJob() {
   return useMutation<unknown, ApiError, { queue: string; jobId: string }>({
     mutationKey: ['admin', 'queues', 'retry'],
     mutationFn: ({ queue, jobId }) => adminApi.retry(queue, jobId),
+    onSettled: () => refresh(qc, adminKeys.queues),
+  });
+}
+
+/** Re-queues an OPEN dead letter; the worker still decides everything. */
+export function useRetryDeadLetter() {
+  const qc = useQueryClient();
+  return useMutation<DeadLetter, ApiError, string>({
+    mutationKey: ['admin', 'dead-letters', 'retry'],
+    mutationFn: (id) => adminApi.retryDeadLetter(id),
     onSettled: () => refresh(qc, adminKeys.queues),
   });
 }

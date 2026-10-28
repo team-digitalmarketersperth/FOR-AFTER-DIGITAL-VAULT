@@ -1,8 +1,8 @@
 import { MutationCache, QueryCache, QueryClient } from '@tanstack/react-query';
 import type { PromptArea } from '@/lib/api/prompts';
-import type { MediaScope } from '@/lib/api/media';
+import type { MediaScope, StorageFilters } from '@/lib/api/media';
 import type { MemoryFilters } from '@/lib/api/memory-vault';
-import type { AuditFilters, CaseFilters, UserFilters } from '@/lib/api/admin';
+import type { AuditFilters, CaseFilters, DeadLetterFilters, UserFilters } from '@/lib/api/admin';
 import { isApiError } from '@/lib/api/errors';
 
 /**
@@ -23,7 +23,13 @@ export const queryKeys = {
   messages: ['messages'] as const,
   message: (id: string) => ['messages', id] as const,
   schedule: (messageId: string) => ['messages', messageId, 'schedule'] as const,
+  versions: (messageId: string) => ['messages', messageId, 'versions'] as const,
+  version: (messageId: string, versionId: string) => ['messages', messageId, 'versions', versionId] as const,
+  // Unsaved autosaves; key 'latest' = the newest never-saved new message.
+  draft: (type: string, key: string | null) => ['drafts', type, key ?? 'latest'] as const,
   storage: ['storage'] as const,
+  // Under 'storage', so one invalidation refreshes totals and the file list.
+  storageItems: (filters: StorageFilters) => ['storage', 'items', filters] as const,
   wishesNotice: ['my-wishes', 'notice'] as const,
   memories: ['memory-vault'] as const,
   memoryList: (filters: MemoryFilters) => ['memory-vault', 'list', filters] as const,
@@ -35,8 +41,18 @@ export const queryKeys = {
   mediaAccess: (scope: MediaScope, assetId: string) => [...scope.kind.split('/'), scope.id, 'media', assetId, 'access'],
   prompts: (area: PromptArea) => [area] as const,
   prompt: (area: PromptArea, key: string) => [area, key] as const,
+  // Under the My Story root, so saving or deleting an answer refreshes the book.
+  storyBook: ['my-story', 'book'] as const,
   // The signed-in Customer's own death-verification case (Step 15 safety UI).
   deathVerification: ['death-verification', 'me'] as const,
+  // Dashboard setup progress (GET /users/me/readiness).
+  readiness: ['readiness'] as const,
+  // Dashboard "Needs your attention" (GET /users/me/attention).
+  attention: ['attention'] as const,
+  // Read-only delivery plan (GET /users/me/delivery-timeline).
+  deliveryTimeline: ['delivery-timeline'] as const,
+  // The Customer's own Recent changes (GET /users/me/activity).
+  activity: (page: number, limit: number) => ['activity', page, limit] as const,
 };
 
 /**
@@ -52,6 +68,8 @@ export const portalKeys = {
   accounts: ['trusted-contact', 'accounts'] as const,
   caseStatus: (trustedContactId: string) =>
     ['trusted-contact', 'accounts', trustedContactId, 'death-verification'] as const,
+  evidence: (trustedContactId: string) =>
+    ['trusted-contact', 'accounts', trustedContactId, 'death-verification', 'evidence'] as const,
 };
 const isPortal = (value: unknown): value is Portal => value === 'recipient' || value === 'trusted-contact';
 
@@ -83,6 +101,9 @@ export const adminKeys = {
   auditLog: (id: string) => ['admin', 'audit-logs', id] as const,
   queues: ['admin', 'queues'] as const,
   failedJobs: (queue: string, page: number) => ['admin', 'queues', queue, 'failed', page] as const,
+  // Under queues: every queue refresh also re-reads dead letters.
+  deadLetters: (f: DeadLetterFilters) => ['admin', 'queues', 'dead-letters', f] as const,
+  deadLetter: (id: string) => ['admin', 'queues', 'dead-letters', id] as const,
 };
 
 const isMe = (key: readonly unknown[]) => key[0] === 'auth' && key[1] === 'me';

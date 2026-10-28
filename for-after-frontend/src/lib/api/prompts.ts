@@ -19,6 +19,8 @@ export type PromptResponse = {
   memories?: { id: string; title: string; category: MemoryCategory }[];
   /** READY photos/recordings/videos (My Story 14B, My Wishes 15B). */
   mediaCount?: number;
+  /** Owner-only reminder; never copied into a message. */
+  privateNote: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -39,25 +41,34 @@ const base = (area: PromptArea) => `/${area}/prompts`;
 
 /**
  * Phase 15A: the My Wishes notice, served by the API (its only source: the
- * frontend keeps no copy) with the session user's acknowledgement of the
- * current version. Writing wishes needs it; reading and deleting do not.
+ * frontend keeps no copy). Informational only since 2026-10-14: nothing waits
+ * for an acknowledgement.
  */
-export type WishesNotice = {
-  version: number;
-  text: string;
-  requiresAcknowledgement: boolean;
-  acknowledged: boolean;
-  acknowledgedAt: string | null;
-};
+export type WishesNotice = { version: number; text: string };
 
 export const wishesNoticeApi = {
   get: (signal?: AbortSignal) => apiRequest<WishesNotice>('/my-wishes/disclaimer', { signal }),
-  acknowledge: (version: number) =>
-    apiRequest<WishesNotice>('/my-wishes/disclaimer/acknowledgement', { method: 'POST', body: { version } }),
 };
 
 /** textContent null = cleared; memoryVaultItemIds (My Story only) replaces the linked memories. */
-export type AnswerInput = { textContent?: string | null; memoryVaultItemIds?: string[] };
+export type AnswerInput = { textContent?: string | null; memoryVaultItemIds?: string[]; privateNote?: string | null };
+
+/**
+ * GET /my-story/book: the owner's saved answers as chapters (catalogue order,
+ * only categories with content), never rewritten. No private notes. Answers to
+ * prompts no longer in the catalogue come back in `unsorted`.
+ */
+export type BookEntry = Pick<PromptResponse, 'promptKey' | 'textContent' | 'updatedAt'> & {
+  /** The wording the answer was written for. */
+  prompt: string;
+  mediaCount: number;
+  memories: NonNullable<PromptResponse['memories']>;
+};
+export type StoryBook = { chapters: { category: string; entries: BookEntry[] }[]; unsorted: BookEntry[] };
+
+export const storyBookApi = {
+  get: (signal?: AbortSignal) => apiRequest<StoryBook>('/my-story/book', { signal }),
+};
 
 export const promptsApi = {
   list: (area: PromptArea, signal?: AbortSignal) => apiRequest<Prompt[]>(base(area), { signal }),

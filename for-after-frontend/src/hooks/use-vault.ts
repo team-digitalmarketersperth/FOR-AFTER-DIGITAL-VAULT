@@ -14,15 +14,19 @@ import {
 import {
   messagesApi,
   scheduleApi,
+  versionsApi,
   type Message,
   type MessageInput,
   type MessageSummary,
+  type MessageVersion,
+  type MessageVersionSummary,
   type Schedule,
   type ScheduleInput,
 } from '@/lib/api/messages';
 import {
   recipientsApi,
   trustedContactsApi,
+  type InvitationChannel,
   type Page,
   type Recipient,
   type RecipientInput,
@@ -31,6 +35,8 @@ import {
 } from '@/lib/api/people';
 import {
   promptsApi,
+  storyBookApi,
+  type StoryBook,
   wishesNoticeApi,
   type AnswerInput,
   type Prompt,
@@ -118,20 +124,25 @@ export const recipients = {
       placeholderData: keepPreviousData,
     }),
 };
+// Adding, editing (email) or removing a contact changes the dashboard's readiness step.
 const trustedContactHooks = resourceHooks<TrustedContact, TrustedContactInput>(
   queryKeys.trustedContacts,
   trustedContactsApi,
+  [queryKeys.trustedContacts, queryKeys.readiness],
 );
 export const trustedContacts = {
   ...trustedContactHooks,
-  /** Phase 10: send or resend the email invitation. */
+  /** Phase 10: send or resend the invitation, by the channel the Customer chose. */
   useInvite: (id: string) => {
     const qc = useQueryClient();
-    return useMutation<TrustedContact, ApiError, void>({
-      mutationFn: () => trustedContactsApi.invite(id),
+    return useMutation<TrustedContact, ApiError, InvitationChannel>({
+      mutationFn: (channel) => trustedContactsApi.invite(id, channel),
       onSuccess: (item) => {
         qc.setQueryData(queryKeys.trustedContact(id), item);
-        return qc.invalidateQueries({ queryKey: queryKeys.trustedContacts, exact: true });
+        return Promise.all([
+          qc.invalidateQueries({ queryKey: queryKeys.trustedContacts, exact: true }),
+          qc.invalidateQueries({ queryKey: queryKeys.readiness }),
+        ]);
       },
     });
   },
@@ -209,6 +220,36 @@ export function useScheduleMutation(messageId: string) {
   });
 }
 
+// Version history. Under the message's key, so any message change refreshes it.
+export const useVersions = (messageId: string, enabled: boolean) =>
+  useQuery<MessageVersionSummary[], ApiError>({
+    queryKey: queryKeys.versions(messageId),
+    queryFn: ({ signal }) => versionsApi.list(messageId, signal),
+    enabled,
+  });
+
+export const useVersion = (messageId: string, versionId: string | null) =>
+  useQuery<MessageVersion, ApiError>({
+    queryKey: queryKeys.version(messageId, versionId ?? ''),
+    queryFn: ({ signal }) => versionsApi.get(messageId, versionId!, signal),
+    enabled: !!versionId,
+  });
+
+/** DRAFT only; the restored message replaces the cached one. */
+export function useRestoreVersion(messageId: string) {
+  const qc = useQueryClient();
+  return useMutation<Message, ApiError, string>({
+    mutationFn: (versionId) => versionsApi.restore(messageId, versionId),
+    onSuccess: (message) => {
+      qc.setQueryData(queryKeys.message(messageId), message);
+      return Promise.all([
+        qc.invalidateQueries({ queryKey: queryKeys.versions(messageId) }),
+        qc.invalidateQueries({ queryKey: queryKeys.messages, exact: true }),
+      ]);
+    },
+  });
+}
+
 export function usePrompts(area: PromptArea) {
   return useQuery<Prompt[], ApiError>({
     queryKey: queryKeys.prompts(area),
@@ -223,6 +264,15 @@ export function usePrompt(area: PromptArea, key: string) {
   });
 }
 
+/** The owner's My Story book (chapters from saved answers); refetched on every visit. */
+export function useStoryBook() {
+  return useQuery<StoryBook, ApiError>({
+    queryKey: queryKeys.storyBook,
+    queryFn: ({ signal }) => storyBookApi.get(signal),
+    staleTime: 0,
+  });
+}
+
 /** Save (create/update/restore) or delete one answer. */
 export function useAnswerMutation(area: PromptArea, key: string) {
   const qc = useQueryClient();
@@ -233,19 +283,11 @@ export function useAnswerMutation(area: PromptArea, key: string) {
   });
 }
 
-/** Phase 15A: the My Wishes notice and this Customer's acknowledgement of its current version. */
+/** Phase 15A: the My Wishes notice (informational; never gates My Wishes). */
 export function useWishesNotice() {
   return useQuery<WishesNotice, ApiError>({
     queryKey: queryKeys.wishesNotice,
     queryFn: ({ signal }) => wishesNoticeApi.get(signal),
-  });
-}
-
-export function useAcknowledgeNotice() {
-  const qc = useQueryClient();
-  return useMutation<WishesNotice, ApiError, number>({
-    mutationFn: (version) => wishesNoticeApi.acknowledge(version),
-    onSuccess: (notice) => qc.setQueryData(queryKeys.wishesNotice, notice),
   });
 }
 

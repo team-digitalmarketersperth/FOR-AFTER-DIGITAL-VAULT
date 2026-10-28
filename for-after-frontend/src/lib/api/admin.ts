@@ -1,5 +1,6 @@
 import { apiRequest } from './client';
 import type { UserRole, UserStatus } from './auth';
+import type { AccessUrl } from './media';
 import type { CaseStatus } from './portals';
 
 // Admin portal (Step 16 backend: for-after-backend/docs/admin.md). Admins sign
@@ -95,7 +96,22 @@ export type DeathCaseEventType =
   | 'ADMIN_VERIFIED'
   | 'ADMIN_REJECTED'
   | 'DEATH_TRIGGER_ACTIVATION_STARTED'
-  | 'DEATH_TRIGGER_ACTIVATION_COMPLETED';
+  | 'DEATH_TRIGGER_ACTIVATION_COMPLETED'
+  | 'EVIDENCE_UPLOADED'
+  | 'EVIDENCE_VIEWED_BY_ADMIN';
+
+/** Phase 19A: supporting file metadata; opened only through the audited access-url call. */
+export type DeathCaseEvidence = {
+  id: string;
+  deathReportId: string;
+  /** Cleaned display name (no path or control characters). */
+  originalFileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  status: 'PENDING_UPLOAD' | 'READY' | 'FAILED';
+  uploadedAt: string | null;
+  createdAt: string;
+};
 
 export type DeathCaseDetail = {
   caseId: string;
@@ -137,6 +153,13 @@ export type DeathCaseDetail = {
     createdAt: string;
   }[];
   activations: { messageId: string; triggerType: string; dueAt: string; messageStatus: string }[];
+  evidence: DeathCaseEvidence[];
+  /** Phase 19B: snapshotted when the case opened (1 or 2); null on older closed cases. */
+  requiredConfirmations: number | null;
+  /** Distinct Trusted Contacts (by email) who reported. Admin-only. */
+  receivedConfirmations: number;
+  /** A prerequisite for verify (the API enforces it); never a verification. */
+  confirmationRequirementMet: boolean;
 };
 
 export type CaseFilters = { page: number; status?: CaseStatus };
@@ -164,6 +187,7 @@ export const AUDIT_EVENT_TYPES = [
   'DEATH_VERIFICATION_REJECTED',
   'FAILED_JOB_RETRIED',
   'PASSWORD_CHANGED',
+  'DEAD_LETTER_RETRY_REQUESTED',
 ] as const;
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
 // CUSTOMER: a Customer acting on their own account (Step 22, PASSWORD_CHANGED).
@@ -220,6 +244,37 @@ export type FailedJob = {
   payload: { messageId?: string; caseId?: string; notificationId?: string };
 };
 
+// Phase 17A: durable dead letters (PostgreSQL). Ids and safe categories only.
+export const DEAD_LETTER_QUEUES = ['message-release', 'death-verification', 'email-delivery'] as const;
+export const DEAD_LETTER_STATUSES = ['OPEN', 'REQUEUED', 'RESOLVED'] as const;
+export type DeadLetterStatus = (typeof DEAD_LETTER_STATUSES)[number];
+export type OpsAlertStatus = 'PENDING' | 'SENT' | 'FAILED' | 'NOT_CONFIGURED';
+
+export type DeadLetter = {
+  id: string;
+  queueName: string;
+  jobId: string;
+  jobName: string;
+  // Message | MessageRecipientRelease | DeathVerificationCase | ReleaseNotification
+  entityType: string;
+  entityId: string | null;
+  attemptsMade: number;
+  errorCode: string | null;
+  /** Sanitized by the API: first line, no URLs, emails or secrets. */
+  errorMessage: string | null;
+  failedAt: string;
+  failureCount: number;
+  status: DeadLetterStatus;
+  resolution: string | null;
+  requeuedAt: string | null;
+  resolvedAt: string | null;
+  alertStatus: OpsAlertStatus;
+  alertedAt: string | null;
+  createdAt: string;
+};
+
+export type DeadLetterFilters = { queue?: string; status?: DeadLetterStatus; page?: number };
+
 // ─── Requests ───────────────────────────────────────────────────────────────
 
 /** ?a=1&b=x from defined values only. */
@@ -261,6 +316,9 @@ export const adminApi = {
     apiRequest<DeathCaseDetail>(`/admin/death-verifications/${id}`, { signal }),
   verify: (id: string, input: VerifyInput) => post<DeathCaseDetail>(`/admin/death-verifications/${id}/verify`, input),
   reject: (id: string, input: RejectInput) => post<DeathCaseDetail>(`/admin/death-verifications/${id}/reject`, input),
+  /** Short-lived signed URL for one READY file; the view is recorded on the case timeline. */
+  evidenceAccessUrl: (caseId: string, evidenceId: string) =>
+    apiRequest<AccessUrl>(`/admin/death-verifications/${caseId}/evidence/${evidenceId}/access-url`),
 
   auditLogs: (f: AuditFilters, signal?: AbortSignal) =>
     apiRequest<Page<AuditLog>>(`/admin/audit-logs${toQuery(f)}`, { signal }),
@@ -275,4 +333,9 @@ export const adminApi = {
     post<{ queue: string; jobId: string; state: 'waiting' }>(
       `/admin/system/queues/${encodeURIComponent(queue)}/jobs/${encodeURIComponent(jobId)}/retry`,
     ),
+
+  deadLetters: (f: DeadLetterFilters, signal?: AbortSignal) =>
+    apiRequest<Page<DeadLetter>>(`/admin/system/dead-letters${toQuery(f)}`, { signal }),
+  deadLetter: (id: string, signal?: AbortSignal) => apiRequest<DeadLetter>(`/admin/system/dead-letters/${id}`, { signal }),
+  retryDeadLetter: (id: string) => post<DeadLetter>(`/admin/system/dead-letters/${id}/retry`),
 };

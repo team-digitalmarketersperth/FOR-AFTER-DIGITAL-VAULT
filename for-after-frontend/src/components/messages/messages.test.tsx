@@ -27,10 +27,12 @@ const message = (over: Partial<Message> = {}): Message => ({
   title: 'For your 18th',
   contentType: 'TEXT',
   textContent: 'Dear Sofia,',
+  privateNote: null,
   status: 'DRAFT',
   createdAt: '2026-09-01T00:00:00Z',
   updatedAt: '2026-09-02T00:00:00Z',
   recipients: [{ id: 'r1', firstName: 'Sofia', lastName: null, relationship: 'Daughter' }],
+  version: 1,
   ...over,
 });
 
@@ -91,6 +93,7 @@ describe('Messages', () => {
       title: 'For your 18th',
       contentType: 'MIXED',
       textContent: 'Dear Tom,',
+      privateNote: null,
       recipientIds: ['r2'],
     });
   });
@@ -244,6 +247,27 @@ describe('Creating a draft, then going to scheduling', () => {
     await userEvent.type(screen.getByLabelText('Title'), 'For your 18th');
     await userEvent.type(screen.getByLabelText(/^Message/), 'Dear Sofia,');
   }
+
+  it('a private note is labelled owner-only, saved with the draft, and shown only on the detail', async () => {
+    const api = routeFetch({ ...people, 'POST /messages': json(201, message()) });
+    renderWithClient(<NewMessage />);
+    await fillTextDraft();
+    const note = screen.getByLabelText(/^Private note to yourself/);
+    expect(note).toHaveAccessibleDescription('Only you can see this.');
+    await userEvent.type(note, 'Rewrite after Sarah graduates.');
+    await userEvent.click(screen.getByRole('button', { name: 'Save draft' }));
+    await waitFor(() =>
+      expect(api.called('POST', '/messages')[0]?.body).toMatchObject({ textContent: 'Dear Sofia,', privateNote: 'Rewrite after Sarah graduates.' }),
+    );
+  });
+
+  it('the detail shows the owner their note', async () => {
+    routeFetch({ 'GET /messages/m1': json(200, message({ privateNote: 'Rewrite later.' })), 'GET /messages/m1/media': json(200, []) });
+    renderWithClient(<MessageDetail id="m1" />);
+    const note = await screen.findByRole('region', { name: 'Private note to yourself' });
+    expect(note).toHaveTextContent('Rewrite later.');
+    expect(note).toHaveTextContent('Only you can see this.');
+  });
 
   it('Save draft creates once and opens the draft as before', async () => {
     const api = routeFetch({ ...people, 'POST /messages': json(201, message()) });

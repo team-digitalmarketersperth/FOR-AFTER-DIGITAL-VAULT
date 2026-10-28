@@ -7,9 +7,11 @@ import { toast } from 'sonner';
 import { MediaManager } from '@/components/media/media-manager';
 import { CONTENT_TYPE_INFO, StatusBadge, recipientSummary } from '@/components/messages/message-bits';
 import { SchedulePanel } from '@/components/messages/schedule-panel';
+import { VersionHistory } from '@/components/messages/version-history';
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import { PageHeader } from '@/components/shared/page-header';
 import { QueryView } from '@/components/shared/states';
+import { PrivateNoteView } from '@/components/shared/private-note';
 import { Button } from '@/components/ui/button';
 import { useMediaList } from '@/hooks/use-media';
 import { messages, useSchedule } from '@/hooks/use-vault';
@@ -72,6 +74,7 @@ function MessageView({ message: m }: { message: Message }) {
                   Edit
                 </Link>
               </Button>
+              <VersionHistory message={m} />
               <ConfirmDialog
                 trigger={
                   <Button variant="ghost">
@@ -93,10 +96,13 @@ function MessageView({ message: m }: { message: Message }) {
               />
             </div>
           ) : (
-            <span className="inline-flex items-center gap-2 text-sm text-foreground-muted">
-              <Lock aria-hidden strokeWidth={1.5} className="size-4" />
-              {m.status === 'SCHEDULED' ? 'Locked while scheduled' : 'Can no longer be changed'}
-            </span>
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="inline-flex items-center gap-2 text-sm text-foreground-muted">
+                <Lock aria-hidden strokeWidth={1.5} className="size-4" />
+                {m.status === 'SCHEDULED' ? 'Locked while scheduled' : 'Can no longer be changed'}
+              </span>
+              <VersionHistory message={m} />
+            </div>
           )
         }
       />
@@ -116,6 +122,7 @@ function MessageView({ message: m }: { message: Message }) {
             )}
           </section>
           {showMedia && <MediaManager scope={scope} kinds={draft ? KINDS[m.contentType] : []} editable={draft} />}
+          <PrivateNoteView note={m.privateNote} />
         </div>
 
         <div className="grid gap-6">

@@ -49,7 +49,9 @@ export function MediaManager({
 
   const items = list.data ?? [];
   return (
-    <section aria-labelledby="media-heading" className="grid gap-5 rounded-xl border border-border bg-surface p-6 sm:p-8">
+    // A size container: the tile columns follow this section's own width (beside
+    // the schedule panel or not), and its contents can't widen the page.
+    <section aria-labelledby="media-heading" className="@container grid gap-5 rounded-xl border border-border bg-surface p-6 sm:p-8">
       <h2 id="media-heading" className="text-2xl">
         {title}
       </h2>
@@ -66,7 +68,7 @@ export function MediaManager({
       ) : items.length === 0 ? (
         <p className="text-foreground-muted">{editable ? 'Nothing added yet.' : 'No photos, audio or video.'}</p>
       ) : (
-        <ul className="grid gap-4 sm:grid-cols-2">
+        <ul className="grid grid-cols-1 gap-4 @lg:grid-cols-2">
           {items.map((asset) => (
             <li key={asset.id}>
               <MediaTile scope={scope} asset={asset} editable={editable} />
@@ -93,20 +95,7 @@ export function MediaManager({
             </div>
           )}
           {state.phase === 'failed' && (
-            <div role="alert" className="flex flex-wrap items-center gap-3 rounded-md bg-danger/8 px-4 py-3 text-sm text-danger">
-              <AlertCircle aria-hidden className="size-4" />
-              <span className="flex-1">
-                Upload failed: {state.message}
-              </span>
-              {lastFile && (
-                <Button type="button" size="sm" variant="outline" onClick={() => start(lastFile.kind, lastFile.file)}>
-                  Try again
-                </Button>
-              )}
-              <Button type="button" size="sm" variant="ghost" onClick={reset}>
-                Dismiss
-              </Button>
-            </div>
+            <UploadFailed message={state.message} onRetry={lastFile ? () => start(lastFile.kind, lastFile.file) : undefined} onDismiss={reset} />
           )}
           {(['AUDIO', 'VIDEO'] as const).map(
             (kind) =>
@@ -155,6 +144,24 @@ export function FilePick({
   );
 }
 
+/** A failed upload (refused locally or by the server's checks), with Try again for the same file. */
+export function UploadFailed({ message, onRetry, onDismiss }: { message: string; onRetry?: () => void; onDismiss: () => void }) {
+  return (
+    <div role="alert" className="flex flex-wrap items-center gap-3 rounded-md bg-danger/8 px-4 py-3 text-sm text-danger">
+      <AlertCircle aria-hidden className="size-4" />
+      <span className="min-w-0 flex-1">Upload failed: {message}</span>
+      {onRetry && (
+        <Button type="button" size="sm" variant="outline" onClick={onRetry}>
+          Try again
+        </Button>
+      )}
+      <Button type="button" size="sm" variant="ghost" onClick={onDismiss}>
+        Dismiss
+      </Button>
+    </div>
+  );
+}
+
 export function UploadProgress({
   state,
   onCancel,
@@ -192,11 +199,13 @@ export function UploadProgress({
   );
 }
 
-function MediaTile({ scope, asset, editable }: { scope: MediaScope; asset: MediaAsset; editable: boolean }) {
+export function MediaTile({ scope, asset, editable }: { scope: MediaScope; asset: MediaAsset; editable: boolean }) {
   const remove = useRemoveMedia(scope);
   const ready = asset.status === 'READY';
   return (
-    <div className="grid h-full gap-3 rounded-lg border border-border bg-surface p-3">
+    // grid-cols-1 (minmax(0, 1fr)), not the implicit auto column, which grows
+    // to the full width of a long file name and pushes everything out of the card.
+    <div className="grid h-full grid-cols-1 content-start gap-3 rounded-lg border border-border bg-surface p-3">
       {ready ? (
         asset.kind === 'PHOTO' ? (
           <PhotoPreview scope={scope} asset={asset} />
@@ -220,14 +229,16 @@ function MediaTile({ scope, asset, editable }: { scope: MediaScope; asset: Media
           )}
         </div>
       )}
-      <div className="flex items-center justify-between gap-2 px-1">
-        <span className="min-w-0 truncate text-xs text-foreground-muted">
-          {asset.originalFileName} · {formatBytes(asset.sizeBytes)}
+      <div className="flex items-center gap-2 px-1 text-xs text-foreground-muted">
+        <span className="shrink-0 font-semibold text-foreground-secondary">{KIND_LABEL[asset.kind]}</span>
+        <span className="min-w-0 flex-1 truncate" title={asset.originalFileName}>
+          {asset.originalFileName}
         </span>
+        <span className="shrink-0">· {formatBytes(asset.sizeBytes)}</span>
         {editable && (
           <ConfirmDialog
             trigger={
-              <Button type="button" size="icon-sm" variant="ghost" aria-label={`Remove ${asset.originalFileName}`}>
+              <Button type="button" size="icon-sm" variant="ghost" className="shrink-0" aria-label={`Remove ${asset.originalFileName}`}>
                 <Trash2 aria-hidden strokeWidth={1.5} className="size-4" />
               </Button>
             }
@@ -244,10 +255,10 @@ function MediaTile({ scope, asset, editable }: { scope: MediaScope; asset: Media
   );
 }
 
-const KIND_LABEL: Record<MediaKind, string> = { PHOTO: 'Photo', AUDIO: 'Audio', VIDEO: 'Video' };
+export const KIND_LABEL: Record<MediaKind, string> = { PHOTO: 'Photo', AUDIO: 'Audio', VIDEO: 'Video' };
 
 /** One item's failure stays local to that item, with a way to try again. */
-function MediaError({ onRetry }: { onRetry: () => void }) {
+export function MediaError({ onRetry }: { onRetry: () => void }) {
   return (
     <div role="alert" className="flex min-h-24 flex-wrap items-center gap-3 rounded-md bg-surface-muted p-4 text-sm">
       <AlertCircle aria-hidden className="size-4 text-foreground-muted" />
@@ -259,13 +270,17 @@ function MediaError({ onRetry }: { onRetry: () => void }) {
   );
 }
 
-function PhotoPreview({ scope, asset }: { scope: MediaScope; asset: MediaAsset }) {
+// Photos and videos share one responsive frame, so tiles side by side line up.
+const PREVIEW_FRAME = 'block aspect-[4/3] w-full rounded-md';
+
+/** `alt`: the Recipient Portal passes a generic one; the Customer sees the file name. */
+export function PhotoPreview({ scope, asset, alt = asset.originalFileName }: { scope: MediaScope; asset: MediaAsset; alt?: string }) {
   const access = useAccessUrl(scope, asset.id);
   if (!access.data) {
     return access.error ? (
       <MediaError onRetry={() => void access.refetch()} />
     ) : (
-      <Skeleton className="aspect-[4/3] rounded-md" />
+      <Skeleton className={PREVIEW_FRAME} />
     );
   }
   // Signed, short-lived URL from private storage: plain <img>, not next/image
@@ -273,28 +288,28 @@ function PhotoPreview({ scope, asset }: { scope: MediaScope; asset: MediaAsset }
   // fails to load and asks for a fresh one.
   const image = (className: string) => (
     // eslint-disable-next-line @next/next/no-img-element
-    <img src={access.data.url} alt={asset.originalFileName} loading="lazy" className={className} onError={() => void access.refetch()} />
+    <img src={access.data.url} alt={alt} loading="lazy" className={className} onError={() => void access.refetch()} />
   );
   return (
     <Dialog>
       <DialogTrigger asChild>
         <button
           type="button"
-          aria-label={`Enlarge ${asset.originalFileName}`}
+          aria-label={`Enlarge ${alt}`}
           className="block w-full cursor-zoom-in rounded-md outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
         >
-          {image('aspect-[4/3] w-full rounded-md bg-surface-muted object-cover')}
+          {image(`${PREVIEW_FRAME} bg-surface-muted object-contain`)}
         </button>
       </DialogTrigger>
       <DialogContent className="max-w-[calc(100%-2rem)] bg-surface p-3 sm:max-w-4xl">
-        <DialogTitle className="sr-only">{asset.originalFileName}</DialogTitle>
+        <DialogTitle className="sr-only">{alt}</DialogTitle>
         {image('max-h-[80vh] w-full rounded-md object-contain')}
       </DialogContent>
     </Dialog>
   );
 }
 
-function AudioPreview({ scope, asset }: { scope: MediaScope; asset: MediaAsset }) {
+export function AudioPreview({ scope, asset }: { scope: MediaScope; asset: MediaAsset }) {
   const [wanted, setWanted] = useState(false);
   const access = useAccessUrl(scope, asset.id, wanted);
   if (!wanted) {
@@ -315,7 +330,7 @@ function AudioPreview({ scope, asset }: { scope: MediaScope; asset: MediaAsset }
           controls
           autoPlay
           src={access.data.url}
-          className="w-full"
+          className="w-full min-w-0"
           aria-label={`Play ${asset.originalFileName}`}
           onError={() => void access.refetch()}
         />
@@ -335,12 +350,12 @@ function AudioPreview({ scope, asset }: { scope: MediaScope; asset: MediaAsset }
  * when the person chooses to watch (no autoload of large files, no download
  * control). An expired link fails and asks for a fresh one.
  */
-function VideoPreview({ scope, asset }: { scope: MediaScope; asset: MediaAsset }) {
+export function VideoPreview({ scope, asset }: { scope: MediaScope; asset: MediaAsset }) {
   const [wanted, setWanted] = useState(false);
   const access = useAccessUrl(scope, asset.id, wanted);
   if (!wanted) {
     return (
-      <div className="flex min-h-24 items-center gap-3 rounded-md bg-primary-soft p-4">
+      <div className={`${PREVIEW_FRAME} flex flex-col items-center justify-center gap-3 bg-primary-soft p-4`}>
         <Film aria-hidden strokeWidth={1.5} className="size-5 text-primary" />
         <Button type="button" size="sm" variant="secondary" className="bg-surface" onClick={() => setWanted(true)}>
           <Play aria-hidden strokeWidth={1.5} className="size-4" />
@@ -356,14 +371,14 @@ function VideoPreview({ scope, asset }: { scope: MediaScope; asset: MediaAsset }
       playsInline
       controlsList="nodownload"
       src={access.data.url}
-      className="aspect-video w-full rounded-md bg-black"
+      className={`${PREVIEW_FRAME} bg-black object-contain`}
       aria-label={`Play ${asset.originalFileName}`}
       onError={() => void access.refetch()}
     />
   ) : access.error ? (
     <MediaError onRetry={() => void access.refetch()} />
   ) : (
-    <div className="flex min-h-24 items-center rounded-md bg-primary-soft p-4">
+    <div className={`${PREVIEW_FRAME} flex items-center justify-center bg-primary-soft p-4`}>
       <span className="inline-flex items-center gap-2 text-sm text-foreground-secondary">
         <Spinner /> Loading…
       </span>

@@ -32,13 +32,15 @@ export type Memory = {
   title: string;
   category: MemoryCategory;
   textContent: string | null;
+  /** Owner-only reminder; detail only (the list omits it), never copied into a message. */
+  privateNote?: string | null;
   tags: MemoryTag[];
   createdAt: string;
   updatedAt: string;
 };
 
 /** tags = the whole set (on update, it replaces the memory's tags). */
-export type MemoryInput = Pick<Memory, 'title' | 'category' | 'textContent'> & { tags: string[] };
+export type MemoryInput = Pick<Memory, 'title' | 'category' | 'textContent' | 'privateNote'> & { tags: string[] };
 
 /** What to copy into the new message; contentType is always chosen, never inferred. */
 export type MemoryMessageInput = {

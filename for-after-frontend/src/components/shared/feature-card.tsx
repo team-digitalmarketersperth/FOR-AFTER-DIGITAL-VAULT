@@ -6,15 +6,12 @@ import { cn } from '@/lib/utils';
 /**
  * Icon + title + one-line description. With an href it is a link with an
  * arrow; without one it is inert and says "Coming next" (never a fake button).
- * `compact` is a single row (icon beside text) for quick actions and lists.
  */
 export function FeatureCard({
   item: { label, description, icon: Icon, href },
-  compact = false,
   className,
 }: {
   item: NavItem;
-  compact?: boolean;
   className?: string;
 }) {
   const status = href ? (
@@ -25,8 +22,7 @@ export function FeatureCard({
     <span className="text-foreground-muted">Coming next</span>
   );
   const cls = cn(
-    'flex h-full rounded-lg border border-border bg-surface',
-    compact ? 'items-start gap-4 p-5' : 'flex-col gap-4 p-6 sm:p-7',
+    'flex h-full flex-col gap-4 rounded-lg border border-border bg-surface p-6 sm:p-7',
     className,
   );
   const body = (
@@ -34,12 +30,12 @@ export function FeatureCard({
       <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-primary-soft text-primary">
         <Icon aria-hidden strokeWidth={1.5} className="size-5" />
       </span>
-      <div className={cn('grid gap-1.5', !compact && 'flex-1')}>
-        <h3 className={cn('font-medium', compact ? 'text-xl' : 'text-[26px] leading-tight')}>
+      <div className="grid flex-1 gap-1.5">
+        <h3 className="text-[26px] leading-tight font-medium">
           {label}
         </h3>
         <p className="text-[15px] text-foreground-muted">{description}</p>
-        <p className={cn('text-sm', compact ? 'mt-1' : 'mt-3')}>{status}</p>
+        <p className="mt-3 text-sm">{status}</p>
       </div>
     </>
   );

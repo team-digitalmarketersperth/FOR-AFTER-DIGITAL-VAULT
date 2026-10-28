@@ -26,9 +26,18 @@ const david = {
   firstName: 'David',
   lastName: 'Smith',
   relationship: 'Brother',
-  invitation: { status: 'PENDING', sentAt: '2026-10-01T00:00:00Z' },
+  invitation: { status: 'PENDING', sentAt: '2026-10-01T00:00:00Z', channel: 'EMAIL' },
+  readiness: { status: 'INVITATION_PENDING', reason: null, invitationSentAt: '2026-10-01T00:00:00Z', invitationAcceptedAt: null },
 };
-const sarah = { ...david, id: 't2', firstName: 'Sarah', lastName: 'Lee', invitation: { status: 'ACCEPTED', sentAt: '2026-10-01T00:00:00Z' } };
+const readyState = { status: 'READY', reason: null, invitationSentAt: '2026-10-01T00:00:00Z', invitationAcceptedAt: '2026-10-12T00:00:00Z' };
+const sarah = {
+  ...david,
+  id: 't2',
+  firstName: 'Sarah',
+  lastName: 'Lee',
+  invitation: { status: 'ACCEPTED', sentAt: '2026-10-01T00:00:00Z' },
+  readiness: readyState,
+};
 
 describe('People I Love', () => {
   it('lists people with relationship, birthday (date-only) and contact cues', async () => {
@@ -100,6 +109,21 @@ describe('People I Love', () => {
     await userEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
     await waitFor(() => expect(router.replace).toHaveBeenCalledWith('/people'));
     expect(api.called('DELETE', '/recipients/r1')).toHaveLength(1);
+  });
+
+  it('a Recipient mobile needs its country code (SMS sign-in)', async () => {
+    const api = routeFetch({ 'POST /recipients': json(201, { id: 'r9' }) });
+    renderWithClient(<NewRecipient />);
+    await userEvent.type(screen.getByLabelText('First name'), 'Max');
+    await userEvent.type(screen.getByLabelText(/^Mobile/), '0412 345 678');
+    await userEvent.click(screen.getByRole('button', { name: 'Add person' }));
+    expect(await screen.findByText('Include the country code, e.g. +61 400 000 000.')).toBeInTheDocument();
+    expect(api.called('POST', '/recipients')).toHaveLength(0);
+    await userEvent.clear(screen.getByLabelText(/^Mobile/));
+    await userEvent.type(screen.getByLabelText(/^Mobile/), '+61 412 345 678');
+    await userEvent.click(screen.getByRole('button', { name: 'Add person' }));
+    await waitFor(() => expect(api.called('POST', '/recipients')).toHaveLength(1));
+    expect(api.called('POST', '/recipients')[0].body).toMatchObject({ mobile: '+61 412 345 678' });
   });
 
   it('shows the safe API error and a not-found state', async () => {
@@ -287,6 +311,19 @@ describe('Trusted Contacts', () => {
     expect(screen.getByText(/our team verifies every report/)).toBeInTheDocument();
   });
 
+  it('a mobile-only contact needs the country code (SMS sign-in)', async () => {
+    const api = routeFetch({ 'GET /trusted-contacts': json(200, []), 'POST /trusted-contacts': json(201, { ...david, id: 't9' }) });
+    renderWithClient(<NewTrustedContact />);
+    await fill({ 'First name': 'Maya', Mobile: '0412 345 678' });
+    expect(await screen.findByText('Include the country code, e.g. +61 400 000 000.')).toBeInTheDocument();
+    expect(api.called('POST', '/trusted-contacts')).toHaveLength(0);
+    await userEvent.clear(screen.getByLabelText(/^Mobile/));
+    await userEvent.type(screen.getByLabelText(/^Mobile/), '+91 98765 43210');
+    await userEvent.click(screen.getByRole('button', { name: 'Add trusted contact' }));
+    await waitFor(() => expect(api.called('POST', '/trusted-contacts')).toHaveLength(1));
+    expect(api.called('POST', '/trusted-contacts')[0].body).toMatchObject({ mobile: '+91 98765 43210', email: null });
+  });
+
   it('requires an email or a mobile', async () => {
     const api = routeFetch({ 'GET /trusted-contacts': json(200, []) });
     renderWithClient(<NewTrustedContact />);
@@ -295,20 +332,73 @@ describe('Trusted Contacts', () => {
     expect(api.called('POST', '/trusted-contacts')).toHaveLength(0);
   });
 
-  it('shows the invitation state on each card', async () => {
+  it('shows each card’s readiness: pending, with the sent date and a resend', async () => {
     routeFetch({ 'GET /trusted-contacts': json(200, [david]) });
     renderWithClient(<TrustedContactList />);
     expect(await screen.findByRole('link', { name: /David Smith/ })).toHaveTextContent('Invitation pending');
+    const item = screen.getByRole('listitem', { name: 'David Smith' });
+    expect(item).toHaveTextContent('Waiting for them to accept your invitation, sent by email on 1 Oct 2026.');
+    expect(within(item).getByRole('button', { name: 'Resend invitation' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Trusted Contact readiness' })).toHaveTextContent('Your trusted contact isn’t ready yet.');
     // One contact: adding another is still offered.
     expect(screen.getByRole('link', { name: 'Add a trusted contact' })).toBeInTheDocument();
   });
 
-  it('at two contacts the add action is gone and the limit is explained', async () => {
+  it('at two contacts the add action is gone and the limit is explained; 1 of 2 ready', async () => {
     routeFetch({ 'GET /trusted-contacts': json(200, [david, sarah]) });
     renderWithClient(<TrustedContactList />);
-    expect(await screen.findByRole('link', { name: /Sarah Lee/ })).toHaveTextContent('Invitation accepted');
+    expect(await screen.findByRole('link', { name: /Sarah Lee/ })).toHaveTextContent('Ready');
+    const item = screen.getByRole('listitem', { name: 'Sarah Lee' });
+    expect(item).toHaveTextContent('Setup complete. Invitation accepted 12 Oct 2026.');
+    // Ready: nothing to resend, and no "mark as ready" anywhere.
+    expect(within(item).queryByRole('button')).toBeNull();
+    expect(screen.getByRole('region', { name: 'Trusted Contact readiness' })).toHaveTextContent('1 of 2 trusted contacts ready.');
     expect(screen.queryByRole('link', { name: 'Add a trusted contact' })).not.toBeInTheDocument();
     expect(screen.getByRole('note')).toHaveTextContent('You can nominate up to 2 trusted contacts.');
+  });
+
+  it('both ready / one ready summaries', async () => {
+    routeFetch({ 'GET /trusted-contacts': json(200, [sarah, { ...sarah, id: 't3', firstName: 'Tom' }]) });
+    const { unmount } = renderWithClient(<TrustedContactList />);
+    expect(await screen.findByText(/Both trusted contacts are ready\./)).toBeInTheDocument();
+    unmount();
+    routeFetch({ 'GET /trusted-contacts': json(200, [sarah]) });
+    renderWithClient(<TrustedContactList />);
+    expect(await screen.findByText(/Your trusted contact is ready\./)).toBeInTheDocument();
+  });
+
+  it('zero contacts: an invitation to add someone, no readiness summary', async () => {
+    routeFetch({ 'GET /trusted-contacts': json(200, []) });
+    renderWithClient(<TrustedContactList />);
+    expect(await screen.findByRole('heading', { name: 'No trusted contacts yet' })).toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: 'Add a trusted contact' }).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('region', { name: 'Trusted Contact readiness' })).toBeNull();
+  });
+
+  it('resend from the list: disabled while sending, success refreshes the card; a refusal is shown', async () => {
+    let state = { ...david, readiness: { ...david.readiness, status: 'INVITATION_EXPIRED' } };
+    let refuse = false;
+    const api = routeFetch({
+      'GET /trusted-contacts': () => json(200, [state]),
+      'POST /trusted-contacts/t1/invitation': () => {
+        if (refuse) return json(429, { statusCode: 429, message: 'Too many invitations. Please try again later.' });
+        state = david;
+        return json(200, david);
+      },
+    });
+    renderWithClient(<TrustedContactList />);
+    expect(await screen.findByRole('link', { name: /David Smith/ })).toHaveTextContent('Invitation expired');
+    await userEvent.click(screen.getByRole('button', { name: 'Send a new invitation' }));
+    expect(await screen.findByRole('button', { name: 'Resend invitation' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /David Smith/ })).toHaveTextContent('Invitation pending');
+    expect(api.called('POST', '/trusted-contacts/t1/invitation')).toHaveLength(1);
+    refuse = true;
+    // Stays disabled until the first send's list refresh has finished.
+    const again = screen.getByRole('button', { name: 'Resend invitation' });
+    await waitFor(() => expect(again).toBeEnabled());
+    await userEvent.click(again);
+    // A 429 is shown as the client's own safe wording.
+    expect(await screen.findByText(/try again/i)).toHaveAttribute('role', 'alert');
   });
 
   it('the add page at the limit explains instead of showing a form', async () => {
@@ -334,15 +424,15 @@ describe('Trusted Contacts', () => {
   });
 
   it.each([
-    ['PENDING', 'Resend invitation'],
-    ['DECLINED', 'Resend invitation'],
-    ['EXPIRED', 'Resend invitation'],
-    ['NOT_SENT', 'Send invitation'],
-  ])('%s: offers "%s", which posts to the invitation route', async (status, label) => {
-    const contact = { ...david, invitation: { status, sentAt: status === 'NOT_SENT' ? null : '2026-10-01T00:00:00Z' } };
+    ['INVITATION_PENDING', null, 'Resend invitation'],
+    ['ACTION_NEEDED', 'DECLINED', 'Send a new invitation'],
+    ['INVITATION_EXPIRED', null, 'Send a new invitation'],
+    ['ACTION_NEEDED', 'NOT_SENT', 'Send invitation'],
+  ])('%s %s: offers "%s", which posts to the invitation route', async (status, reason, label) => {
+    const contact = { ...david, readiness: { ...david.readiness, status, reason } };
     const api = routeFetch({
       'GET /trusted-contacts/t1': json(200, contact),
-      'POST /trusted-contacts/t1/invitation': json(200, { ...david, invitation: { status: 'PENDING', sentAt: '2026-10-06T00:00:00Z' } }),
+      'POST /trusted-contacts/t1/invitation': json(200, david),
     });
     renderWithClient(<EditTrustedContact id="t1" />);
     await userEvent.click(await screen.findByRole('button', { name: label }));
@@ -350,19 +440,119 @@ describe('Trusted Contacts', () => {
     expect(await screen.findByText('Invitation pending')).toBeInTheDocument();
   });
 
-  it('ACCEPTED offers no resend; mobile-only explains that SMS invitations are not available', async () => {
-    routeFetch({ 'GET /trusted-contacts/t1': json(200, { ...david, invitation: { status: 'ACCEPTED', sentAt: '2026-10-01T00:00:00Z' } }) });
-    const { unmount } = renderWithClient(<EditTrustedContact id="t1" />);
-    expect(await screen.findByText('They’ve accepted the invitation.')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /invitation/ })).not.toBeInTheDocument();
-    unmount();
-
-    routeFetch({
-      'GET /trusted-contacts/t1': json(200, { ...david, email: null, mobile: '+61400000000', invitation: { status: 'UNAVAILABLE', sentAt: null } }),
-    });
+  it('READY offers no resend on either channel', async () => {
+    routeFetch({ 'GET /trusted-contacts/t1': json(200, { ...sarah, mobile: '+61400000000' }) });
     renderWithClient(<EditTrustedContact id="t1" />);
-    expect(await screen.findByText(/Text-message invitations aren’t available yet/)).toBeInTheDocument();
+    expect(await screen.findByText('Setup complete. Invitation accepted 12 Oct 2026.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /invitation/ })).not.toBeInTheDocument();
+  });
+
+  // 2026-10-17: invitations by email or SMS, the Customer's choice per send.
+  describe('invitation channel', () => {
+    const notSent = { status: 'ACTION_NEEDED', reason: 'NOT_SENT', invitationSentAt: null, invitationAcceptedAt: null };
+    const moOnly = {
+      ...david,
+      email: null,
+      mobile: '+61400000000',
+      invitation: { status: 'NOT_SENT', sentAt: null, channel: null },
+      readiness: notSent,
+    };
+    const smsSent = {
+      ...moOnly,
+      invitation: { status: 'PENDING', sentAt: '2026-10-01T00:00:00Z', channel: 'SMS' },
+      readiness: david.readiness,
+    };
+    const both = { ...david, mobile: '+61400000000' };
+
+    it('email only: one plain "Resend invitation" button that sends by email', async () => {
+      const api = routeFetch({ 'GET /trusted-contacts': json(200, [david]), 'POST /trusted-contacts/t1/invitation': json(200, david) });
+      renderWithClient(<TrustedContactList />);
+      const button = await screen.findByRole('button', { name: 'Resend invitation' });
+      expect(button).not.toHaveAttribute('aria-haspopup');
+      await userEvent.click(button);
+      await waitFor(() => expect(api.called('POST', '/trusted-contacts/t1/invitation')).toHaveLength(1));
+      expect(api.called('POST', '/trusted-contacts/t1/invitation')[0].body).toEqual({ channel: 'EMAIL' });
+      expect(screen.queryByRole('menu')).toBeNull();
+    });
+
+    it('mobile only: "Send invitation by SMS" → SMS sent, then pending "sent by SMS"', async () => {
+      let state: object = moOnly;
+      const api = routeFetch({
+        'GET /trusted-contacts': () => json(200, [state]),
+        'POST /trusted-contacts/t1/invitation': () => {
+          state = smsSent;
+          return json(200, smsSent);
+        },
+      });
+      renderWithClient(<TrustedContactList />);
+      const item = await screen.findByRole('listitem', { name: 'David Smith' });
+      expect(item).toHaveTextContent('Invitation not sent');
+      expect(item).not.toHaveTextContent(/Email needed|Add an email/);
+      await userEvent.click(within(item).getByRole('button', { name: 'Send invitation by SMS' }));
+      await waitFor(() => expect(api.called('POST', '/trusted-contacts/t1/invitation')).toHaveLength(1));
+      expect(api.called('POST', '/trusted-contacts/t1/invitation')[0].body).toEqual({ channel: 'SMS' });
+      expect(await within(item).findByText('Waiting for them to accept your invitation, sent by SMS on 1 Oct 2026.')).toBeInTheDocument();
+      expect(within(item).getByText('Invitation pending')).toBeInTheDocument();
+      expect(within(item).getByRole('button', { name: 'Resend invitation by SMS' })).toBeInTheDocument();
+    });
+
+    it('SMS provider failure: the safe message is shown, the card is not marked pending', async () => {
+      routeFetch({
+        'GET /trusted-contacts': json(200, [moOnly]),
+        'POST /trusted-contacts/t1/invitation': json(503, {
+          statusCode: 503,
+          message: "We couldn't send the invitation just now. Please try again.",
+        }),
+      });
+      renderWithClient(<TrustedContactList />);
+      await userEvent.click(await screen.findByRole('button', { name: 'Send invitation by SMS' }));
+      expect(await screen.findByRole('alert')).toHaveTextContent(/try again/i);
+      expect(screen.getByRole('listitem', { name: 'David Smith' })).not.toHaveTextContent('Invitation pending');
+    });
+
+    it('both channels: a quiet menu with "Send by email" and "Send by SMS"; picking SMS sends SMS only', async () => {
+      const api = routeFetch({ 'GET /trusted-contacts': json(200, [both]), 'POST /trusted-contacts/t1/invitation': json(200, both) });
+      renderWithClient(<TrustedContactList />);
+      const trigger = await screen.findByRole('button', { name: 'Resend invitation' });
+      expect(trigger).toHaveAttribute('aria-haspopup', 'menu');
+      await userEvent.click(trigger);
+      const menu = await screen.findByRole('menu');
+      expect(within(menu).getAllByRole('menuitem').map((i) => i.textContent)).toEqual(['Send by email', 'Send by SMS']);
+      // Opening the menu sends nothing.
+      expect(api.called('POST', '/trusted-contacts/t1/invitation')).toHaveLength(0);
+      await userEvent.click(within(menu).getByRole('menuitem', { name: 'Send by SMS' }));
+      await waitFor(() => expect(api.called('POST', '/trusted-contacts/t1/invitation')).toHaveLength(1));
+      expect(api.called('POST', '/trusted-contacts/t1/invitation')[0].body).toEqual({ channel: 'SMS' });
+    });
+
+    it('both channels: fully keyboard operable (Enter opens, arrows move, Enter sends)', async () => {
+      const api = routeFetch({ 'GET /trusted-contacts/t1': json(200, both), 'POST /trusted-contacts/t1/invitation': json(200, both) });
+      renderWithClient(<EditTrustedContact id="t1" />);
+      const trigger = await screen.findByRole('button', { name: 'Resend invitation' });
+      trigger.focus();
+      await userEvent.keyboard('{Enter}');
+      const menu = await screen.findByRole('menu');
+      await waitFor(() => expect(within(menu).getByRole('menuitem', { name: 'Send by email' })).toHaveFocus());
+      await userEvent.keyboard('{ArrowDown}');
+      expect(within(menu).getByRole('menuitem', { name: 'Send by SMS' })).toHaveFocus();
+      await userEvent.keyboard('{Escape}');
+      await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+      expect(api.called('POST', '/trusted-contacts/t1/invitation')).toHaveLength(0);
+      trigger.focus();
+      await userEvent.keyboard('{Enter}');
+      await screen.findByRole('menu');
+      await userEvent.keyboard('{Enter}');
+      await waitFor(() => expect(api.called('POST', '/trusted-contacts/t1/invitation')).toHaveLength(1));
+      expect(api.called('POST', '/trusted-contacts/t1/invitation')[0].body).toEqual({ channel: 'EMAIL' });
+    });
+
+    it('adding a mobile-only contact sends nothing automatically and says SMS is available', async () => {
+      const api = routeFetch({ 'GET /trusted-contacts': json(200, []), 'POST /trusted-contacts': json(201, moOnly) });
+      renderWithClient(<NewTrustedContact />);
+      await fill({ 'First name': 'David', Mobile: '+61 400 000 000' });
+      await waitFor(() => expect(api.called('POST', '/trusted-contacts')).toHaveLength(1));
+      expect(api.called('POST', '/trusted-contacts/t1/invitation')).toHaveLength(0);
+    });
   });
 
   it.each([
