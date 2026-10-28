@@ -50,19 +50,19 @@
 | FE-6 | Shared loading / error / empty states | ✅ | 17 | `components/shared/states.tsx` |
 | FE-7 | `/dev-login`, real 404 in production builds | ✅ | 17 | `app/(auth)/dev-login`, `src/proxy.ts` |
 | FE-8 | Register / login pages | ✅ | 17 | `app/(auth)` |
-| FE-9 | Account settings: name, read-only email, password change; storage meter with 80/90/100 % notices (Phase 12C) | ✅ | 22 | `components/account/account-settings.tsx`, `storage-usage.tsx`, `app/(dashboard)/settings` |
+| FE-9 | Account settings: name, read-only email, password change; storage meter with 80/90/100 % notices (Phase 12C); Storage Manager `/settings/storage` (breakdown, files largest first, type/source filters, delete through each feature, restricted message files) | ✅ | 22 | `components/account/account-settings.tsx`, `storage-usage.tsx`, `storage-manager.tsx`, `app/(dashboard)/settings` |
 | FE-10 | People I Love: list (25 per page, Previous / Next), add, view, edit, remove, private photo (Phase 09) | ✅ | 18 | `components/people/recipients.tsx`, `person-card.tsx` |
 | FE-11 | Trusted Contacts (Customer side): list, add, edit, remove; Phase 10: max 2, invitation status, send/resend | ✅ | 18, Phase 10 | `components/people/trusted-contacts.tsx` |
 | FE-12 | Messages: drafts, content type, recipients | ✅ | 18 | `components/messages/` |
 | FE-13 | Message media: direct upload with progress + cancel, previews, delete (ImageKit + VIDEO since Phase 12) | ✅ | 18 | `components/media/media-manager.tsx` |
 | FE-14 | Browser audio and video recorder (video: Phase 12A) | ✅ | 18 | `components/media/recorder.tsx` (E2E with Chromium's fake camera and microphone) |
-| FE-15 | Schedule picker: FIXED_DATE (+ timezone offset), ON_DEATH, AFTER_DEATH; change; unschedule | ✅ | 18 | `components/messages/schedule-panel.tsx` |
+| FE-15 | Schedule picker: NOW, FIXED_DATE (+ timezone offset), BIRTHDAY, ANNIVERSARY, CUSTOM_EVENT (local time + IANA zone), ON_DEATH, AFTER_DEATH, ANNUAL_AFTER_DEATH; missing-birthday warning; "shared with N of M" for repeating schedules; change; unschedule | ✅ | 18, Phase 16 | `components/messages/schedule-panel.tsx` |
 | FE-16 | Status views + explicit "unschedule to edit" | ✅ | 18 | `message-detail.tsx`, `LockedNotice` |
 | FE-17 | Memory Vault: category filter, CRUD, photo/audio; search, tags, pagination (Phase 13A); create a message from a memory (Phase 13B) | ✅ | 18 | `components/memory-vault/memories.tsx`, `memory-to-message.tsx` |
 | FE-18 | My Story: prompts by category, answer/edit/delete; approved V1 catalogue (from the API), 50,000-char answers, earlier-wording notice (Phase 14A); photo/audio/video answers with recorders, linked memories, create a message (Phase 14B) | ✅ | 18 | `components/prompts/prompts.tsx`, `memory-vault/memory-to-message.tsx` |
-| FE-19 | My Wishes: same, with the non-legal notice served by the API and an explicit per-version acknowledgement before writing (Phase 15A); photo/audio/video with the shared uploader and recorders, files-only wishes, "Create message for loved ones" → existing message page for people and After-my-passing timing (Phase 15B); no AI (deferred post-MVP) | ✅ | 18 | `components/prompts/prompts.tsx`, `components/memory-vault/memory-to-message.tsx` |
+| FE-19 | My Wishes: same, with the non-legal notice served by the API, informational only (Phase 15A; no checkbox or Continue since 2026-10-14); photo/audio/video with the shared uploader and recorders, files-only wishes, "Create message for loved ones" → existing message page for people and After-my-passing timing (Phase 15B); no AI (deferred post-MVP) | ✅ | 18 | `components/prompts/prompts.tsx`, `components/memory-vault/memory-to-message.tsx` |
 | FE-20 | Plan / billing pages (Stripe) | ⬜ | — | Backend not built (phase 21) |
-| FE-21 | Recipient sign-in: email → 6-digit code | ✅ | 19 | `components/portals/otp-sign-in.tsx`, `recipient.tsx` |
+| FE-21 | Recipient sign-in: email → 6-digit code (2026-10-16: or mobile → SMS code) | ✅ | 19 | `components/portals/otp-sign-in.tsx`, `recipient.tsx` |
 | FE-22 | Released messages list + message page | ✅ | 19 | `components/portals/recipient.tsx` |
 | FE-23 | Photo/audio via short-lived signed URLs | ✅ | 19 | `MediaManager` (view-only scope) |
 | FE-24 | Trusted Contact sign-in: email → 6-digit code | ✅ | 19 | `components/portals/trusted-contact.tsx` |
@@ -70,6 +70,10 @@
 | FE-26 | Death report form (date, note, summary, explicit confirmation, 409 states) | ✅ | 19 | `ReportForm` |
 | FE-27 | Case status page (all six statuses); Phase 10: "Submit a new death report" after a closed case (API `canReport`) | ✅ | 19, Phase 10 | `AccountStatus`, `lib/death-verification.ts` |
 | — | Phase 10: invitation page `/trusted-contact/invitation?token=…` (view, accept, decline; no session) | ✅ | Phase 10 | `TrustedContactInvitation` |
+| — | Delivery Timeline (2026-10-13): `/messages/timeline`, a read-only connected timeline (Coming up · When the time comes · Recently delivered), dates in each schedule’s own zone, per-Recipient birthdays, no dates for death-triggered items; dashboard “Coming up” (max 4) and “Recent changes”; `/settings/activity` | ✅ | — | `components/delivery/`, `components/activity/`; `e2e/delivery-timeline.spec.ts`, `e2e/activity.spec.ts` |
+| — | Dashboard "Needs your attention" (2026-10-14): up to 4 calm rows from `GET /users/me/attention` (messages needing timing, Trusted Contact invitations, a missing birthday a scheduled birthday message needs, storage ≥ 80 %), "+N more", all-clear / loading / error states; refetched on each dashboard visit | ✅ | — | `components/dashboard/attention.tsx`; `e2e/attention.spec.ts` |
+| — | Phase 19B: admin case page shows "Confirmations N of M" (pending/satisfied); Verify disabled with the reason when the requirement isn't met (the API also refuses, 409), Reject unchanged. Trusted Contact portal unchanged: the second contact uses the existing report action and sees no counts | ✅ | Phase 19B | `Confirmations`, `Decision` in `components/admin/death-verifications.tsx`; `e2e/death-confirmations.spec.ts` |
+| — | Phase 19A: supporting evidence on the case page (reporter of an open case only): PDF/JPEG/PNG picker, client checks, upload progress → "checking" → "ready for review" (never "verified"), own-file list + short-lived re-view; admin "Supporting evidence" panel with secure view and timeline labels | ✅ | Phase 19A | `EvidenceSection`, `useEvidenceUpload`, `useOpenSignedFile`; admin `EvidenceList`; `e2e/death-evidence.spec.ts` |
 | FE-28 | Admin portal: password + mandatory TOTP sign-in/enrolment (+ recovery codes), users, death-verification review, audit log, queues | ✅ | 20 | `components/admin/`, `app/admin/` |
 | FE-29 | WordPress login/signup forms | ⬜ | — | WordPress side |
 | FE-30 | Shared `.forafter.com.au` cookie + redirect to the app | ⬜ | — | Deployment config |
@@ -214,7 +218,7 @@ password?". Tests: `account-links.test.tsx` (10) and `e2e/account-recovery.spec.
 - Admin queues: the new `email-delivery` queue appears with its failed jobs shown as "Email <id>" (never an address).
 - Playwright: `portals.spec` reads codes (and checks the release email) from the console provider's
   `[DEV ONLY] Email (<kind>) to …` lines in `E2E_BACKEND_LOG`; run the API with `EMAIL_PROVIDER=console`.
-- Real email from a For After domain waits on authenticating it in Brevo (manual). The frontend never knows the provider.
+- Real email from a For After domain waits on live verification of the backend's Microsoft Graph setup (manual; Brevo was removed 2026-10-21). The frontend never knows the provider.
 
 ---
 
@@ -238,7 +242,8 @@ password?". Tests: `account-links.test.tsx` (10) and `e2e/account-recovery.spec.
 
 **Product decisions the frontend follows but does not make**
 - Trusted Contacts: at most 2 (Phase 10); invitations by email only (no SMS), shown as pending / accepted / declined / expired / not sent / no invitation.
-- No recipient downloads, no SMS codes, no evidence upload, no second-contact confirmation.
+- No recipient downloads, no evidence upload, no second-contact confirmation. SMS codes: Recipients only
+  (2026-10-16); Trusted Contacts stay email-only (SMS deferred, post-MVP).
 - After a case is closed without a death (CANCELLED / REJECTED), a new report starts a new case (Phase 10); after VERIFIED no report is accepted. The portal follows the API's `canReport`.
 
 ---
@@ -281,6 +286,52 @@ npx playwright test --project=account --no-deps                   # Step 22 alon
    audit logs; queues. Sign out and confirm `/admin` returns to `/admin/login`.
 
 ---
+
+## Trusted Contact readiness (2026-10-14, local)
+
+- `/trusted-contacts`: each card shows ✓ Ready / ○ Invitation pending / ! Invitation expired / ! Needs attention
+  (icon + words), a one-line detail ("Invitation accepted 12 Oct 2026", "sent …") and Send / Resend through the
+  existing invitation route; a readiness summary above the cards. The contact's page shows the same in "Setup".
+- Dashboard journey step: "N contacts ready" / "Waiting for your contact to accept". Trusted Contact mutations now
+  invalidate the readiness query.
+- Tests: `people.test.tsx`, `journey.test.tsx`.
+
+## Draft autosave & version history (2026-10-14, local)
+
+- Message, My Story and My Wishes editors autosave unsaved text to the API 2.5 s after typing stops
+  (`useDraftEditor`), show a quiet "Autosaved …" status beside Save, and offer *Unsaved changes found*
+  (Restore / Discard / preview) when reopened. Nothing private is kept in browser storage.
+- Message detail: **Version history** sheet (list, preview, DRAFT-only restore with confirmation).
+- Tests: `shared/draft-recovery.test.tsx`, `messages/version-history.test.tsx`, `e2e/history.vault.spec.ts`.
+- Backend reference: `for-after-backend/docs/draft-recovery.md`.
+
+## Recipient Portal redesign (2026-10-15, local)
+
+- `/recipient/messages`: "A space shared with you" intro, released count, newest message featured (content-type art,
+  no media fetched), earlier ones as a divided list; calm empty and error states.
+- Message detail: serif title, "Shared with you on …", text as a letter sheet, photos then recordings/video
+  (signed only when shown/played), "A private message, preserved for you."
+- Tests: `portals/portals.test.tsx`. Backend reference: `for-after-backend/docs/recipient-portal.md`.
+
+## Private notes to self (2026-10-15, local)
+
+- Message, Memory, My Story and My Wishes editors: an optional, visually quiet *Private note to
+  yourself* field (`shared/private-note.tsx`, 2,000 max, hint "Only you can see this."), saved with
+  the normal Save; not autosaved. Message and Memory detail show the note to the owner.
+- Recipient-facing views never receive it (the API omits it). Tests: `messages.test.tsx`,
+  `memories.test.tsx`, `my-wishes-rich.test.tsx`. Backend reference: `for-after-backend/docs/private-notes.md`.
+
+## Recipient SMS sign-in (2026-10-16, local)
+
+- `/recipient/sign-in`: **Email | Mobile** switch (email stays the default and unchanged). Mobile: country select
+  (AU, NZ, IN, UK, US/CA) + number → E.164, SMS consent line, **Text me a code** → "Check your phone", masked number
+  (`+61 ••• ••• 678`), the shared 6-digit `CodeField`, 30 s resend countdown (UX only; the API limits), "Use a
+  different mobile number". Success goes to `/recipient/messages` like email. No Twilio code or secrets in the frontend.
+- People form: a Recipient mobile needs its country code (the API requires E.164).
+- Tests: `portals/portals.test.tsx`, `people/people.test.tsx`; Playwright `e2e/recipient-sms.spec.ts` against an API
+  with `SMS_VERIFY_PROVIDER=console` (never real SMS).
+- **Real SMS verified 2026-10-16** (one OTP to an Indian mobile, approved, Recipient session created). Procedure:
+  `for-after-backend/docs/recipient-portal.md` §3b.
 
 ## ⏭️ Next: Step 23 (proposal, not started)
 
