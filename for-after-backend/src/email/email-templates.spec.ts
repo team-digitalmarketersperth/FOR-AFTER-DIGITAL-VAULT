@@ -5,6 +5,7 @@ import {
   messageReleased,
   recipientSignInCode,
   resetPassword,
+  trustedContactInvitation,
   trustedContactSignInCode,
   verifyEmail,
 } from './email-templates.js';
@@ -125,5 +126,94 @@ describe('Email templates (Step 24)', () => {
     expect(notice.text).toContain('Hi Lisa,');
     expect(notice.html).not.toContain('href=');
     expect(notice.text).not.toMatch(/token|password is|@/);
+  });
+});
+
+describe('Trusted Contact invitation email (client copy, 2026-10-19)', () => {
+  const TOKEN = 'I'.repeat(43);
+  const LINK = `${APP}/trusted-contact/invitation?token=${TOKEN}`;
+  const ABOUT = 'https://forafter.com.au/about/';
+  const e = trustedContactInvitation(APP, TOKEN, ' Jane   Holder ', 604_800, 'Sam');
+  const parts = [e.text, e.html];
+
+  it('greets the Trusted Contact by name; "Hello," without a usable name', () => {
+    expect(e.text).toContain('Dear Sam,');
+    expect(e.html).toContain('Dear Sam,');
+    for (const missing of [null, undefined, '', '   ']) {
+      const f = trustedContactInvitation(APP, TOKEN, 'Jane Holder', 604_800, missing);
+      expect(f.text).toContain('\n\nHello,\n\n');
+      for (const p of [f.text, f.html]) {
+        expect(p).not.toMatch(/Dear (undefined|null|\s*,)/);
+      }
+    }
+  });
+
+  it('uses the account holder name in the subject, intro, role explanation and closing', () => {
+    expect(e.subject).toBe("You've been invited to be a Trusted Contact for Jane Holder");
+    for (const p of parts) {
+      expect(p).toContain('Jane Holder has invited you to be one of their Trusted Contacts on For After.');
+      expect(p).toContain('Jane Holder has chosen you as someone they trust to help confirm important account events.');
+      expect(p).toContain('Thank you for considering being part of Jane Holder’s circle of trusted support.');
+    }
+    const other = trustedContactInvitation(APP, TOKEN, 'Someone Else', 604_800, 'Sam');
+    expect(other.text).toContain('Someone Else has invited you');
+    expect(other.text).not.toContain('Jane Holder');
+  });
+
+  it('carries the full client-approved copy in both parts', () => {
+    for (const p of parts) {
+      for (const line of [
+        'For After is a private platform where people can create and preserve videos, voice recordings, photos and written messages for their loved ones.',
+        'What does being a Trusted Contact involve?',
+        'This may include notifying For After if they pass away or helping verify that information',
+        'You will not have access to their private messages or memories through this role, and you will not be responsible for managing their account.',
+        'Being a Trusted Contact is entirely your choice.',
+        'The For After Team',
+      ]) {
+        expect(p).toContain(line);
+      }
+    }
+  });
+
+  it('Review invitation is the only button, with the dynamic token link; fallback link in the footer', () => {
+    expect(e.html.match(/border-radius:999px;background/g)).toHaveLength(1);
+    expect(e.html).toContain(`href="${LINK}"`);
+    expect(e.html).toContain(`>Review invitation</a>`);
+    expect(e.html).toContain(`copy this link into your browser: ${LINK}`);
+    expect(e.text).toContain(`Review invitation:\n${LINK}`);
+    const other = trustedContactInvitation('http://localhost:3000', 'x'.repeat(43), 'Jane', 604_800);
+    expect(other.text).toContain(`http://localhost:3000/trusted-contact/invitation?token=${'x'.repeat(43)}`);
+  });
+
+  it('Learn more about For After links to the fixed public About page in both parts', () => {
+    expect(e.html).toContain(`<a href="${ABOUT}" style="color:#483a4f;text-decoration:underline;">Learn more about For After</a>`);
+    expect(e.text).toContain(`Learn more about For After:\n${ABOUT}`);
+    // Secondary link sits under the button.
+    expect(e.html.indexOf(ABOUT)).toBeGreaterThan(e.html.indexOf('>Review invitation</a>'));
+    for (const p of parts) expect(p).not.toMatch(/localhost[^\s"]*about/i);
+  });
+
+  it('keeps the 7-day expiry and the security footer', () => {
+    for (const p of parts) {
+      expect(p).toContain('This link expires in 7 days.');
+      expect(p).toContain('nothing happens unless you accept');
+      expect(p).toContain('For After will never ask for your password or a sign-in code by email or phone.');
+    }
+  });
+
+  it('nothing private or hardcoded: no content, codes, sessions or test names', () => {
+    for (const p of [e.subject, ...parts]) {
+      expect(p).not.toMatch(/Lisa-Ann|Bridgett|Digital Perth|session|code is|@/i);
+    }
+    expect(e.subject).not.toContain(TOKEN);
+    expect(e.html).not.toMatch(/<script|<img|<link|<style/i);
+    // Exactly two links: the invitation and the About page.
+    expect(e.html.match(/href="/g)).toHaveLength(2);
+  });
+
+  it('escapes names in the HTML', () => {
+    const x = trustedContactInvitation(APP, TOKEN, '<b>Eve</b>', 604_800, '<i>Sam</i>');
+    expect(x.html).not.toContain('<b>Eve');
+    expect(x.html).not.toContain('<i>Sam');
   });
 });

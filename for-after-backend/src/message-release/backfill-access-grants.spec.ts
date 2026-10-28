@@ -19,6 +19,11 @@ const setup = () => {
     recipientMessageAccessGrant: {
       createMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
+    message: {
+      findUniqueOrThrow: vi
+        .fn()
+        .mockResolvedValue({ owner: { firstName: 'Lisa', lastName: null } }),
+    },
   };
   const prisma = {
     messageRelease: { findMany: vi.fn().mockResolvedValue(releases) },
@@ -75,6 +80,8 @@ describe('backfillAccessGrants', () => {
           messageId: 'msg-1',
           recipientId: 'r1',
           recipientEmailNormalized: 'a@x.test',
+          // The name at backfill time (documented limitation).
+          senderDisplayNameSnapshot: 'Lisa',
         },
       ],
       skipDuplicates: true,

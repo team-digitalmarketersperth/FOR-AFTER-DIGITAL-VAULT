@@ -171,6 +171,7 @@ describe('MyStoryMediaService (Phase 14B)', () => {
         promptTextSnapshot: prompt.prompt,
         promptVersion: prompt.version,
         textContent: null,
+        privateNote: null,
       };
       expect(args.create).toEqual({
         ownerUserId: OWNER,

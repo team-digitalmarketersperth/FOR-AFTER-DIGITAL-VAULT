@@ -222,6 +222,10 @@ export const hasFileSignature = (mimeType: string, bytes: Uint8Array) => {
     case 'audio/webm':
     case 'video/webm':
       return startsWith(bytes, 0, [0x1a, 0x45, 0xdf, 0xa3]);
+    // Phase 19A: death-verification evidence only (no other allowlist has it).
+    // The header must open the file; leading junk, which readers tolerate, is refused.
+    case 'application/pdf':
+      return startsWith(bytes, 0, '%PDF-');
     default:
       return false;
   }

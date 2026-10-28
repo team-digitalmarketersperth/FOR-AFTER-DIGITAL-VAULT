@@ -21,7 +21,9 @@ import {
   INVALID_CODE,
   OTP_REQUESTED,
   RECIPIENT_SESSION_COOKIE,
+  SMS_OTP_REQUESTED,
 } from '../src/recipient-auth/recipient-auth.service.js';
+import { SmsVerification } from '../src/sms/sms-verification.js';
 import {
   RecipientOtpDelivery,
   type OtpDeliveryInput,
@@ -29,6 +31,7 @@ import {
 import { RecipientPortalModule } from '../src/recipient-portal/recipient-portal.module.js';
 import { RecipientsModule } from '../src/recipients/recipients.module.js';
 import { RedisModule } from '../src/redis/redis.module.js';
+import { UsersModule } from '../src/users/users.module.js';
 
 // Real HTTP, validation, guards, PostgreSQL and Redis (OTP challenges and
 // Recipient sessions). Customer sessions use MemoryStore; object storage is
@@ -57,6 +60,22 @@ describe('Recipient Portal (e2e, PostgreSQL + Redis)', () => {
   };
   const storage = new FakeMediaStorage();
   const scanner = new FakeMalwareScanner();
+  // Twilio Verify stand-in: never sends. Like Verify, one pending
+  // verification per number (a resend reuses it), approved once.
+  const SMS_CODE = '246810';
+  // Per run, like the emails: rate-limit windows outlive a local rerun.
+  const mobile = (n: number) => `+614${n}${String(run).slice(-7)}`;
+  const MAX_MOBILE = mobile(0);
+  const MAX_MASKED = `+61******${MAX_MOBILE.slice(-3)}`;
+  const pending = new Set<string>();
+  const sms = {
+    name: 'fake',
+    send: vi.fn(async (to: string) => void pending.add(to)),
+    check: vi.fn(
+      async (to: string, code: string) =>
+        code === SMS_CODE && pending.delete(to),
+    ),
+  } satisfies SmsVerification;
 
   type Agent = ReturnType<typeof request.agent>;
   let lisa: Agent;
@@ -154,7 +173,7 @@ describe('Recipient Portal (e2e, PostgreSQL + Redis)', () => {
   };
   const noLeaks = (body: unknown) =>
     expect(JSON.stringify(body)).not.toMatch(
-      /ownerUserId|owner|schedule|scheduledFor|afterDeathDays|storageKey|deletedAt|recipientId|recipients|grant|privateNote|birthday|relationship|jobId|portal\.lisa|portal\.john|"status"/i,
+      /ownerUserId|owner|schedule|scheduledFor|afterDeathDays|storageKey|deletedAt|recipientId|recipients|grant|privateNote|Sarah graduates|version|draft|recovery|death|trusted|firstName|lastName|email|mobile|providerFileId|birthday|relationship|jobId|portal\.lisa|portal\.john|"status"/i,
     );
 
   beforeAll(async () => {
@@ -177,6 +196,8 @@ describe('Recipient Portal (e2e, PostgreSQL + Redis)', () => {
         MediaModule,
         RecipientAuthModule,
         RecipientPortalModule,
+        // Phase 18: renaming the sender through the real profile route.
+        UsersModule,
       ],
     })
       .overrideProvider(MediaStorage)
@@ -185,6 +206,8 @@ describe('Recipient Portal (e2e, PostgreSQL + Redis)', () => {
       .useValue(scanner)
       .overrideProvider(RecipientOtpDelivery)
       .useValue(delivery)
+      .overrideProvider(SmsVerification)
+      .useValue(sms)
       .compile();
     app = moduleRef.createNestApplication<NestExpressApplication>();
     configureApp(app, new session.MemoryStore());
@@ -219,7 +242,7 @@ describe('Recipient Portal (e2e, PostgreSQL + Redis)', () => {
     ids.jenny = await addRecipient(lisa, { firstName: 'Jenny', email: JENNY });
     ids.max = await addRecipient(lisa, {
       firstName: 'Max',
-      mobile: '+61 400 000 000',
+      mobile: `+61 ${MAX_MOBILE.slice(3, 6)} ${MAX_MOBILE.slice(6)}`,
     });
     ids.nora = await addRecipient(lisa, { firstName: 'Nora', email: NORA });
     ids.lisaShared = await addRecipient(lisa, {
@@ -231,7 +254,11 @@ describe('Recipient Portal (e2e, PostgreSQL + Redis)', () => {
       email: SHARED,
     });
 
-    ids.text = await released(lisa, [ids.sofia, ids.max]);
+    // Private notes to self: the owner's, never the Recipient's.
+    ids.text = await released(lisa, [ids.sofia, ids.max], {
+      textContent: 'Many happy returns.',
+      privateNote: 'Rewrite this after Sarah graduates.',
+    });
     ids.jennyMsg = await released(lisa, [ids.jenny]);
     ids.draft = await addMessage(lisa, [ids.sofia], { title: 'Draft' });
     ids.scheduled = await addMessage(lisa, [ids.sofia], { title: 'Later' });
@@ -266,7 +293,7 @@ describe('Recipient Portal (e2e, PostgreSQL + Redis)', () => {
       // Mobile-only: granted, just not reachable by email OTP yet.
       expect(byRecipient[ids.max]).toMatchObject({
         recipientEmailNormalized: null,
-        recipientMobileNormalized: '+61 400 000 000',
+        recipientMobileNormalized: MAX_MOBILE,
       });
       expect(JSON.stringify(grants)).not.toMatch(/Private note|2001|Daughter/);
     });
@@ -381,6 +408,115 @@ describe('Recipient Portal (e2e, PostgreSQL + Redis)', () => {
     });
   });
 
+  describe('SMS sign-in (Twilio Verify, faked)', () => {
+    const requestSms = (mobile: unknown, extra = {}) =>
+      request(app.getHttpServer())
+        .post(api('/recipient-auth/request-sms-otp'))
+        .send({ mobile, ...extra });
+    const verifySms = (
+      mobile: string,
+      code: string,
+      agent: Agent | null = null,
+    ) =>
+      (agent ?? request(app.getHttpServer()))
+        .post(api('/recipient-auth/verify-sms-otp'))
+        .send({ mobile, code });
+
+    it('not E.164, missing or extra fields -> 400', async () => {
+      for (const mobile of ['0400 000 000', '61400000000', 'abc', 123, '']) {
+        await requestSms(mobile).expect(400);
+      }
+      await requestSms(MAX_MOBILE, { recipientId: ids.max }).expect(400);
+      await request(app.getHttpServer())
+        .post(api('/recipient-auth/verify-sms-otp'))
+        .send({ mobile: MAX_MOBILE, code: '12345' })
+        .expect(400);
+    });
+
+    it('known and unknown mobiles get the same 202; only the eligible one is texted', async () => {
+      sms.send.mockClear();
+      const known = await requestSms(
+        `+61 ${MAX_MOBILE.slice(3, 6)} ${MAX_MOBILE.slice(6)}`,
+      ).expect(202);
+      const unknown = await requestSms(mobile(9)).expect(202);
+      expect(known.body).toEqual({ message: SMS_OTP_REQUESTED });
+      expect(unknown.body).toEqual(known.body);
+      await new Promise((r) => setImmediate(r));
+      expect(sms.send).toHaveBeenCalledExactlyOnceWith(MAX_MOBILE);
+    });
+
+    it('wrong code -> 401 and no cookie; approved -> the Recipient cookie; reuse -> 401', async () => {
+      await requestSms(MAX_MOBILE).expect(202);
+      const bad = await verifySms(MAX_MOBILE, '000000').expect(401);
+      expect(bad.body.message).toBe(INVALID_CODE);
+      expect(bad.headers['set-cookie']).toBeUndefined();
+
+      const ok = await verifySms(MAX_MOBILE, SMS_CODE).expect(200);
+      expect(ok.body).toEqual({ authenticated: true, mobile: MAX_MASKED });
+      const cookie = String(ok.headers['set-cookie']);
+      expect(cookie).toMatch(new RegExp(`^${RECIPIENT_SESSION_COOKIE}=`));
+      expect(cookie).toMatch(/HttpOnly/);
+      expect(cookie).toMatch(/SameSite=Lax/);
+      expect(cookie).not.toContain(`${SESSION_COOKIE}=`);
+      expect(
+        (await verifySms(MAX_MOBILE, SMS_CODE).expect(401)).body.message,
+      ).toBe(INVALID_CODE);
+    });
+
+    it('an SMS session sees exactly the grants on that mobile; logout ends it', async () => {
+      await requestSms(MAX_MOBILE).expect(202);
+      const max = request.agent(app.getHttpServer());
+      await verifySms(MAX_MOBILE, SMS_CODE, max).expect(200);
+      expect((await max.get(api('/recipient-auth/me')).expect(200)).body).toEqual(
+        { authenticated: true, mobile: MAX_MASKED },
+      );
+      const res = await max.get(api('/recipient/messages')).expect(200);
+      expect((res.body as { id: string }[]).map((m) => m.id)).toEqual([
+        ids.text,
+      ]);
+      noLeaks(res.body);
+      await max.get(api(`/recipient/messages/${ids.text}`)).expect(200);
+      for (const hidden of [ids.jennyMsg, ids.draft, ids.scheduled]) {
+        await max.get(api(`/recipient/messages/${hidden}`)).expect(404);
+      }
+      await max.post(api('/recipient-auth/logout')).expect(204);
+      await max.get(api('/recipient/messages')).expect(401);
+    });
+
+    it('an ineligible mobile never reaches the provider, even with a "valid" code', async () => {
+      sms.check.mockClear();
+      await verifySms(mobile(9), SMS_CODE).expect(401);
+      expect(sms.check).not.toHaveBeenCalled();
+    });
+
+    it('a Customer session is no Recipient session and does not help sign in', async () => {
+      await lisa.get(api('/recipient/messages')).expect(401);
+      await requestSms(MAX_MOBILE).expect(202);
+      const res = await verifySms(MAX_MOBILE, '000000', lisa).expect(401);
+      expect(res.headers['set-cookie']).toBeUndefined();
+      await lisa.get(api('/recipient/messages')).expect(401);
+      // Burn the outstanding fake code.
+      await verifySms(MAX_MOBILE, SMS_CODE).expect(200);
+    });
+
+    it('a removed Recipient (no grant on the mobile) cannot sign in', async () => {
+      const rae = mobile(7);
+      const id = await addRecipient(lisa, { firstName: 'Rae', mobile: rae });
+      const msg = await released(lisa, [id]);
+      await requestSms(rae).expect(202);
+      await prisma.recipientMessageAccessGrant.deleteMany({
+        where: { messageId: msg },
+      });
+      await verifySms(rae, SMS_CODE).expect(401);
+    });
+
+    it('too many requests for one mobile -> 429', async () => {
+      const burst = mobile(8);
+      for (let i = 0; i < 10; i++) await requestSms(burst).expect(202);
+      await requestSms(burst).expect(429);
+    });
+  });
+
   describe('released message access', () => {
     let sofia: Agent;
     beforeAll(async () => {
@@ -405,6 +541,8 @@ describe('Recipient Portal (e2e, PostgreSQL + Redis)', () => {
         contentType: 'TEXT',
         releasedAt: expect.any(String),
         hasMedia: false,
+        // Phase 18: the sender's display name snapshot, nothing else of theirs.
+        senderDisplayName: 'Lisa Test',
       });
       noLeaks(res.body);
     });
@@ -415,9 +553,20 @@ describe('Recipient Portal (e2e, PostgreSQL + Redis)', () => {
         .expect(200);
       expect(res.body).toMatchObject({
         id: ids.text,
-        textContent: 'Fictional released text.',
+        textContent: 'Many happy returns.',
       });
       noLeaks(res.body);
+      // Owner still sees their note; no release row or grant carries it.
+      const own = await lisa.get(api(`/messages/${ids.text}`)).expect(200);
+      expect(own.body.privateNote).toBe('Rewrite this after Sarah graduates.');
+      const rows = await prisma.messageRelease.findMany({
+        where: { messageId: ids.text },
+        include: { message: false },
+      });
+      const grants = await prisma.recipientMessageAccessGrant.findMany({
+        where: { messageId: ids.text },
+      });
+      expect(JSON.stringify([rows, grants])).not.toMatch(/Sarah graduates/);
       for (const id of [
         ids.draft,
         ids.scheduled,
@@ -644,6 +793,94 @@ describe('Recipient Portal (e2e, PostgreSQL + Redis)', () => {
       await request(app.getHttpServer())
         .post(api('/recipient-auth/logout'))
         .expect(204);
+    });
+  });
+
+  describe('sender display name (Phase 18: snapshotted at release)', () => {
+    let sofia: Agent;
+    const grantOf = (messageId: string) =>
+      prisma.recipientMessageAccessGrant.findFirstOrThrow({
+        where: { messageId, recipientId: ids.sofia },
+      });
+    beforeAll(async () => {
+      sofia = await recipientSignIn(SOFIA);
+    });
+
+    it('list and detail say who it is from: the display name only', async () => {
+      const list = await sofia.get(api('/recipient/messages')).expect(200);
+      expect(list.body.find((m: { id: string }) => m.id === ids.text)).toMatchObject({
+        senderDisplayName: 'Lisa Test',
+      });
+      const detail = await sofia.get(api(`/recipient/messages/${ids.text}`)).expect(200);
+      expect(Object.keys(detail.body).sort()).toEqual([
+        'contentType',
+        'hasMedia',
+        'id',
+        'releasedAt',
+        'senderDisplayName',
+        'textContent',
+        'title',
+      ]);
+      expect(detail.body.senderDisplayName).toBe('Lisa Test');
+      const json = JSON.stringify([list.body, detail.body]);
+      expect(json).not.toContain(customers[0]); // Lisa's email
+      expect(json).not.toMatch(/ownerUserId|"owner"|"email"|"mobile"|"role"|"status"/);
+    });
+
+    it('no grant, no sender: other Recipients, drafts and scheduled messages stay 404', async () => {
+      const jenny = await recipientSignIn(JENNY);
+      for (const [agent, id] of [
+        [jenny, ids.text],
+        [sofia, ids.draft],
+        [sofia, ids.scheduled],
+      ] as const) {
+        const res = await agent.get(api(`/recipient/messages/${id}`)).expect(404);
+        expect(JSON.stringify(res.body)).not.toMatch(/Lisa|senderDisplayName/);
+      }
+    });
+
+    it('a rename never rewrites a delivered message; later releases use the new name; retries change nothing', async () => {
+      const before = await grantOf(ids.text);
+      await lisa
+        .patch(api('/users/me'))
+        .send({ firstName: 'Elisabeth', lastName: 'Bridgett' })
+        .expect(200);
+      try {
+        // Old delivery: still the name it was released with.
+        expect(
+          (await sofia.get(api(`/recipient/messages/${ids.text}`)).expect(200)).body.senderDisplayName,
+        ).toBe('Lisa Test');
+        // A retried release job is a no-op and leaves the snapshot alone.
+        expect(
+          await app.get(MessageReleaseService).release(ids.text, new Date(Date.now() + 3_700_000)),
+        ).toEqual({ result: 'already_released' });
+        expect(await grantOf(ids.text)).toEqual(before);
+        // A new release: the name at that release.
+        const fresh = await released(lisa, [ids.sofia], { title: 'After the rename' });
+        expect(
+          (await sofia.get(api(`/recipient/messages/${fresh}`)).expect(200)).body.senderDisplayName,
+        ).toBe('Elisabeth Bridgett');
+      } finally {
+        await lisa.patch(api('/users/me')).send({ firstName: 'Lisa', lastName: 'Test' }).expect(200);
+      }
+    });
+
+    it('a legacy grant without a snapshot shows no sender (never a guessed name)', async () => {
+      const legacy = await released(lisa, [ids.sofia], { title: 'Legacy' });
+      await prisma.recipientMessageAccessGrant.updateMany({
+        where: { messageId: legacy },
+        data: { senderDisplayNameSnapshot: null },
+      });
+      const res = await sofia.get(api(`/recipient/messages/${legacy}`)).expect(200);
+      expect(res.body.senderDisplayName).toBeNull();
+    });
+
+    it('opening a message records nothing (no read receipts in the MVP)', async () => {
+      const before = await grantOf(ids.text);
+      await sofia.get(api(`/recipient/messages/${ids.text}`)).expect(200);
+      await sofia.get(api('/recipient/messages')).expect(200);
+      expect(await grantOf(ids.text)).toEqual(before);
+      expect(Object.keys(before).join()).not.toMatch(/read|opened|viewed|seen/i);
     });
   });
 });

@@ -15,7 +15,7 @@ import { Prisma } from '../src/generated/prisma/client.js';
 const FAKE =
   'DATABASE_URL=postgres://fake-user:fake-password@example.invalid:5432/db';
 const LEAKS =
-  /DATABASE_URL|fake-user|fake-password|postgres:|example\.invalid|redis:\/\/|6379|stack|\.ts\b|\.js\b|node_modules|[A-Z]:\\|xkeysib|\$metadata|SignatureDoesNotMatch|P10\d\d|ECONNREFUSED/;
+  /DATABASE_URL|fake-user|fake-password|postgres:|example\.invalid|redis:\/\/|6379|stack|\.ts\b|\.js\b|node_modules|[A-Z]:\\|Bearer|eyJ|ErrorAccessDenied|\$metadata|SignatureDoesNotMatch|P10\d\d|ECONNREFUSED/;
 
 class EmailDto {
   @IsEmail()
@@ -61,9 +61,11 @@ class BoomController {
       $metadata: { httpStatusCode: 403, requestId: 'fake' },
     });
   }
-  @Get('brevo')
-  brevo() {
-    throw new Error('Brevo 401 {"code":"unauthorized","key":"xkeysib-fake"}');
+  @Get('email-provider')
+  emailProvider() {
+    throw new Error(
+      'Graph 403 {"error":{"code":"ErrorAccessDenied"}} authorization: Bearer eyJfake.token',
+    );
   }
   @Post('validate')
   validate(@Body() dto: EmailDto) {
@@ -102,7 +104,7 @@ describe('Error boundary (e2e)', () => {
     delete process.env.SWAGGER_ENABLED;
   });
 
-  it.each(['error', 'async', 'non-error', 'prisma', 'redis', 's3', 'brevo'])(
+  it.each(['error', 'async', 'non-error', 'prisma', 'redis', 's3', 'email-provider'])(
     'an unexpected %s failure is a bare 500 that leaks nothing',
     async (path) => {
       const res = await http().get(`/api/v1/boom/${path}`).expect(500);

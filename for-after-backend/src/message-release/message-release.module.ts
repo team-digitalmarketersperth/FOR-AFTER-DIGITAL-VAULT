@@ -1,19 +1,12 @@
 import { Module } from '@nestjs/common';
-import { ReleaseNotificationModule } from '../release-notifications/release-notification.module.js';
 import { MessageReleaseQueue } from './message-release-queue.service.js';
-import { MessageReleaseProcessor } from './message-release.processor.js';
-import { MessageReleaseReconciler } from './message-release-reconciler.service.js';
 import { MessageReleaseService } from './message-release.service.js';
 
-// Internal only: no controller. Releases happen in the worker, never on request.
+// Producer side + release logic, shared by the API and the worker process. No
+// controller: releases happen in the worker (QueueWorkersModule), never on
+// request. The API only adds, moves and removes jobs here.
 @Module({
-  imports: [ReleaseNotificationModule],
-  providers: [
-    MessageReleaseService,
-    MessageReleaseQueue,
-    MessageReleaseProcessor,
-    MessageReleaseReconciler,
-  ],
-  exports: [MessageReleaseQueue],
+  providers: [MessageReleaseService, MessageReleaseQueue],
+  exports: [MessageReleaseService, MessageReleaseQueue],
 })
 export class MessageReleaseModule {}

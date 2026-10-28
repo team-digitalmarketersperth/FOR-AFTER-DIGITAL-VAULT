@@ -11,9 +11,11 @@ import type { PrismaService } from '../prisma/prisma.service.js';
 import { CreateMessageScheduleDto } from './dto/create-message-schedule.dto.js';
 import { UpdateMessageScheduleDto } from './dto/update-message-schedule.dto.js';
 import {
+  ALREADY_RELEASED_TO_SOME,
   ALREADY_SCHEDULED,
   checkSchedule,
   MessageSchedulesService,
+  MISSING_BIRTHDAY,
   NO_RECIPIENTS,
 } from './message-schedules.service.js';
 
@@ -21,11 +23,31 @@ const NOW = new Date('2026-09-25T00:00:00Z');
 const FUTURE = '2026-12-25T09:00:00+05:30';
 const PAST = '2026-01-01T00:00:00Z';
 
+// Phase 16 fields, all unset (FIXED_DATE / ON_DEATH / AFTER_DEATH / NOW).
+const nulls = {
+  timezone: null,
+  localTime: null,
+  annualMonth: null,
+  annualDay: null,
+  eventDate: null,
+  eventLabel: null,
+};
+// A complete state for checkSchedule.
+const st = (triggerType: string, fields: object = {}) =>
+  ({
+    triggerType,
+    scheduledFor: null,
+    afterDeathDays: null,
+    ...nulls,
+    ...fields,
+  }) as Parameters<typeof checkSchedule>[0];
+
 const stored = {
   id: 's1',
   triggerType: 'FIXED_DATE',
   scheduledFor: new Date('2026-12-25T03:30:00Z'),
   afterDeathDays: null,
+  ...nulls,
   createdAt: NOW,
   updatedAt: NOW,
 };
@@ -54,13 +76,40 @@ const setup = (updated = 1) => {
     update: vi.fn().mockResolvedValue(stored),
     delete: vi.fn().mockResolvedValue(stored),
   };
-  const tx = { message, messageSchedule };
+  const messageRecipientRelease = {
+    deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+    findMany: vi.fn().mockResolvedValue([]),
+    createMany: vi.fn().mockResolvedValue({ count: 0 }),
+  };
+  const messageRecipient = {
+    count: vi.fn().mockResolvedValue(0),
+    findMany: vi.fn().mockResolvedValue([]),
+  };
+  const messageRelease = { count: vi.fn().mockResolvedValue(0) };
+  const recipientMessageAccessGrant = { count: vi.fn().mockResolvedValue(0) };
+  // Recent changes (customer activity): recorded, not asserted here.
+  const customerActivity = { create: vi.fn(async () => ({})) };
+  const tx = {
+    customerActivity,
+    recipientMessageAccessGrant,
+    message,
+    messageSchedule,
+    messageRecipientRelease,
+    messageRecipient,
+    messageRelease,
+  };
   const $transaction = vi.fn((fn: (t: typeof tx) => unknown) => fn(tx));
   // Never throws (MessageReleaseQueue.sync swallows and logs Redis errors).
-  const releaseQueue = { sync: vi.fn().mockResolvedValue(undefined) };
+  const releaseQueue = {
+    sync: vi.fn().mockResolvedValue(undefined),
+    syncOccurrences: vi.fn().mockResolvedValue(undefined),
+  };
   return {
     message,
     messageSchedule,
+    messageRecipientRelease,
+    messageRecipient,
+    messageRelease,
     $transaction,
     releaseQueue,
     service: new MessageSchedulesService(
@@ -93,23 +142,64 @@ describe('CreateMessageScheduleDto', () => {
     { triggerType: 'ON_DEATH' },
     { triggerType: 'AFTER_DEATH', afterDeathDays: 0 },
     { triggerType: 'AFTER_DEATH', afterDeathDays: 36_500 },
+    { triggerType: 'NOW' },
+    {
+      triggerType: 'BIRTHDAY',
+      timezone: 'Australia/Perth',
+      localTime: '09:00',
+    },
+    {
+      triggerType: 'ANNIVERSARY',
+      timezone: 'Asia/Kolkata',
+      localTime: '23:59',
+      annualMonth: 2,
+      annualDay: 29,
+    },
+    {
+      triggerType: 'CUSTOM_EVENT',
+      timezone: 'America/New_York',
+      localTime: '00:00',
+      eventDate: '2027-06-01',
+      eventLabel: 'Graduation day',
+    },
+    {
+      triggerType: 'ANNUAL_AFTER_DEATH',
+      timezone: 'Australia/Sydney',
+      localTime: '10:30',
+    },
   ])('accepts the shape of %o', async (body) => {
     expect(await errorsFor(CreateMessageScheduleDto, body)).toEqual([]);
   });
 
+  it.each(['SOMETHING', 'now', null, undefined])(
+    'rejects unknown triggerType %s',
+    async (triggerType) => {
+      expect(
+        await errorsFor(CreateMessageScheduleDto, { triggerType }),
+      ).toContain('triggerType');
+    },
+  );
+
   it.each([
-    'NOW',
-    'BIRTHDAY',
-    'ANNIVERSARY',
-    'CUSTOM_EVENT',
-    'ANNUAL_AFTER_DEATH',
-    'SOMETHING',
-    null,
-    undefined,
-  ])('rejects unsupported triggerType %s', async (triggerType) => {
+    ['localTime', { localTime: '9:00' }],
+    ['localTime', { localTime: '24:00' }],
+    ['localTime', { localTime: '09:00:00' }],
+    ['annualMonth', { annualMonth: 13 }],
+    ['annualDay', { annualDay: 0 }],
+    ['eventDate', { eventDate: '2027-02-30' }],
+    ['eventDate', { eventDate: '2027-06-01T00:00:00Z' }],
+    ['eventLabel', { eventLabel: '<script>alert(1)</script>' }],
+    ['eventLabel', { eventLabel: '   ' }],
+    ['eventLabel', { eventLabel: 'x'.repeat(101) }],
+    ['eventLabel', { eventLabel: 'line\u0000break' }],
+    ['timezone', { timezone: 'x'.repeat(65) }],
+  ])('rejects %s in %o', async (field, patch) => {
     expect(
-      await errorsFor(CreateMessageScheduleDto, { triggerType }),
-    ).toContain('triggerType');
+      await errorsFor(CreateMessageScheduleDto, {
+        triggerType: 'CUSTOM_EVENT',
+        ...patch,
+      }),
+    ).toContain(field);
   });
 
   it.each([
@@ -141,36 +231,139 @@ describe('CreateMessageScheduleDto', () => {
     expect(await errors({})).toEqual([]);
     expect(await errors({ afterDeathDays: 10 })).toEqual([]);
     expect(await errors({ triggerType: null })).toContain('triggerType');
-    expect(await errors({ triggerType: 'NOW' })).toContain('triggerType');
+    expect(await errors({ triggerType: 'NOW' })).toEqual([]);
+    expect(await errors({ triggerType: 'LATER' })).toContain('triggerType');
   });
 });
 
 describe('checkSchedule (complete final state)', () => {
   const date = new Date(FUTURE);
+  const tz = { timezone: 'Australia/Perth', localTime: '09:00' };
   it.each([
-    { triggerType: 'FIXED_DATE', scheduledFor: date, afterDeathDays: null },
-    { triggerType: 'ON_DEATH', scheduledFor: null, afterDeathDays: null },
-    { triggerType: 'AFTER_DEATH', scheduledFor: null, afterDeathDays: 30 },
-    { triggerType: 'AFTER_DEATH', scheduledFor: null, afterDeathDays: 0 },
-  ] as const)('accepts %o', (s) => {
+    st('FIXED_DATE', { scheduledFor: date }),
+    st('ON_DEATH'),
+    st('AFTER_DEATH', { afterDeathDays: 30 }),
+    st('AFTER_DEATH', { afterDeathDays: 0 }),
+    st('NOW'),
+    st('BIRTHDAY', tz),
+    st('ANNUAL_AFTER_DEATH', tz),
+    st('ANNIVERSARY', { ...tz, annualMonth: 2, annualDay: 29 }),
+  ])('accepts %o', (s) => {
     expect(() => checkSchedule(s, NOW)).not.toThrow();
   });
 
   it.each([
-    ['FIXED_DATE without scheduledFor', 'FIXED_DATE', null, null],
-    ['FIXED_DATE in the past', 'FIXED_DATE', new Date(PAST), null],
-    ['FIXED_DATE exactly now', 'FIXED_DATE', NOW, null],
-    ['FIXED_DATE with afterDeathDays', 'FIXED_DATE', date, 10],
-    ['ON_DEATH with scheduledFor', 'ON_DEATH', date, null],
-    ['ON_DEATH with afterDeathDays', 'ON_DEATH', null, 5],
-    ['AFTER_DEATH without afterDeathDays', 'AFTER_DEATH', null, null],
-    ['AFTER_DEATH with scheduledFor', 'AFTER_DEATH', date, 30],
-    ['NOW (reserved)', 'NOW', null, null],
-    ['BIRTHDAY (reserved)', 'BIRTHDAY', null, null],
-  ] as const)('rejects %s', (_, triggerType, scheduledFor, afterDeathDays) => {
+    ['FIXED_DATE without scheduledFor', st('FIXED_DATE')],
+    [
+      'FIXED_DATE in the past',
+      st('FIXED_DATE', { scheduledFor: new Date(PAST) }),
+    ],
+    ['FIXED_DATE exactly now', st('FIXED_DATE', { scheduledFor: NOW })],
+    [
+      'FIXED_DATE with afterDeathDays',
+      st('FIXED_DATE', { scheduledFor: date, afterDeathDays: 10 }),
+    ],
+    [
+      'FIXED_DATE with a timezone',
+      st('FIXED_DATE', { scheduledFor: date, ...tz }),
+    ],
+    ['ON_DEATH with scheduledFor', st('ON_DEATH', { scheduledFor: date })],
+    ['ON_DEATH with afterDeathDays', st('ON_DEATH', { afterDeathDays: 5 })],
+    ['AFTER_DEATH without afterDeathDays', st('AFTER_DEATH')],
+    [
+      'AFTER_DEATH with scheduledFor',
+      st('AFTER_DEATH', { scheduledFor: date, afterDeathDays: 30 }),
+    ],
+    ['NOW with a date', st('NOW', { scheduledFor: date })],
+    ['NOW with birthday fields', st('NOW', tz)],
+    [
+      'BIRTHDAY without a time',
+      st('BIRTHDAY', { timezone: 'Australia/Perth' }),
+    ],
+    [
+      'BIRTHDAY with scheduledFor',
+      st('BIRTHDAY', { ...tz, scheduledFor: date }),
+    ],
+    [
+      'BIRTHDAY with a fixed offset',
+      st('BIRTHDAY', { ...tz, timezone: '+08:00' }),
+    ],
+    [
+      'BIRTHDAY with UTC (not a zone name)',
+      st('BIRTHDAY', { ...tz, timezone: 'UTC' }),
+    ],
+    [
+      'BIRTHDAY with a made-up zone',
+      st('BIRTHDAY', { ...tz, timezone: 'Mars/Olympus' }),
+    ],
+    ['ANNIVERSARY without month/day', st('ANNIVERSARY', tz)],
+    [
+      'ANNIVERSARY 30 Feb',
+      st('ANNIVERSARY', { ...tz, annualMonth: 2, annualDay: 30 }),
+    ],
+    [
+      'ANNIVERSARY 31 Apr',
+      st('ANNIVERSARY', { ...tz, annualMonth: 4, annualDay: 31 }),
+    ],
+    [
+      'ANNUAL_AFTER_DEATH with afterDeathDays',
+      st('ANNUAL_AFTER_DEATH', { ...tz, afterDeathDays: 1 }),
+    ],
+    [
+      'ANNUAL_AFTER_DEATH without a zone',
+      st('ANNUAL_AFTER_DEATH', { localTime: '09:00' }),
+    ],
+    [
+      'CUSTOM_EVENT with a client scheduledFor',
+      st('CUSTOM_EVENT', {
+        ...tz,
+        eventDate: new Date('2027-01-01'),
+        eventLabel: 'Wedding',
+        scheduledFor: date,
+      }),
+    ],
+    [
+      'CUSTOM_EVENT without a label',
+      st('CUSTOM_EVENT', { ...tz, eventDate: new Date('2027-01-01') }),
+    ],
+    [
+      'CUSTOM_EVENT in the past',
+      st('CUSTOM_EVENT', {
+        ...tz,
+        eventDate: new Date('2026-09-24'),
+        eventLabel: 'Wedding',
+      }),
+    ],
+  ])('rejects %s', (_, s) => {
+    expect(() => checkSchedule(s, NOW)).toThrow(BadRequestException);
+  });
+
+  it('CUSTOM_EVENT: local date + time + IANA zone -> derived UTC scheduledFor', () => {
+    const out = checkSchedule(
+      st('CUSTOM_EVENT', {
+        timezone: 'Australia/Perth',
+        localTime: '09:00',
+        eventDate: new Date('2026-12-25'),
+        eventLabel: 'Christmas',
+      }),
+      NOW,
+    );
+    expect(out.scheduledFor).toEqual(new Date('2026-12-25T01:00:00Z'));
+  });
+
+  it('CUSTOM_EVENT later today in its own zone is still the future', () => {
+    // NOW = 2026-09-25T00:00Z = 08:00 in Perth; 09:00 Perth is in an hour.
     expect(() =>
-      checkSchedule({ triggerType, scheduledFor, afterDeathDays }, NOW),
-    ).toThrow(BadRequestException);
+      checkSchedule(
+        st('CUSTOM_EVENT', {
+          timezone: 'Australia/Perth',
+          localTime: '09:00',
+          eventDate: new Date('2026-09-25'),
+          eventLabel: 'Today',
+        }),
+        NOW,
+      ),
+    ).not.toThrow();
   });
 });
 
@@ -197,6 +390,7 @@ describe('MessageSchedulesService', () => {
       triggerType: 'FIXED_DATE',
       scheduledFor: new Date('2026-12-25T03:30:00Z'),
       afterDeathDays: null,
+      ...nulls,
     });
     expect(select).not.toHaveProperty('messageId');
     expect(select).not.toHaveProperty('message');
@@ -214,6 +408,7 @@ describe('MessageSchedulesService', () => {
       triggerType: dto.triggerType,
       scheduledFor,
       afterDeathDays: days,
+      ...nulls,
     });
   });
 
@@ -350,7 +545,10 @@ describe('MessageSchedulesService', () => {
 
   it('get is scoped through the owning, live message', async () => {
     const { messageSchedule, service } = setup();
-    await service.findForMessage('owner-a', 'm1');
+    expect(await service.findForMessage('owner-a', 'm1')).toEqual({
+      ...stored,
+      releasedRecipientCount: 0,
+    });
     expect(messageSchedule.findFirst.mock.calls[0][0].where).toEqual({
       messageId: 'm1',
       message: owned,
@@ -385,6 +583,7 @@ describe('MessageSchedulesService', () => {
       triggerType: 'ON_DEATH',
       scheduledFor: null,
       afterDeathDays: null,
+      ...nulls,
     });
   });
 
@@ -406,6 +605,7 @@ describe('MessageSchedulesService', () => {
       triggerType: 'AFTER_DEATH',
       scheduledFor: null,
       afterDeathDays: 30,
+      ...nulls,
     });
   });
 
@@ -515,7 +715,10 @@ describe('MessageSchedulesService release-queue sync', () => {
     // sync() never throws; even if it did resolve late, create returns the row.
     const { releaseQueue, service } = setup();
     releaseQueue.sync.mockImplementation(async () => undefined);
-    await expect(service.create('owner-a', 'm1', fixed)).resolves.toBe(stored);
+    await expect(service.create('owner-a', 'm1', fixed)).resolves.toEqual({
+      ...stored,
+      releasedRecipientCount: 0,
+    });
   });
 
   it('PATCH locks the message, writes, then syncs the new timing', async () => {
@@ -583,5 +786,202 @@ describe('MessageSchedulesService release-queue sync', () => {
       ConflictException,
     );
     expect(releaseQueue.sync).not.toHaveBeenCalled();
+  });
+});
+
+// Phase 16: NOW and the per-Recipient recurring triggers.
+describe('MessageSchedulesService Phase 16 triggers', () => {
+  const birthdayDto = {
+    triggerType: 'BIRTHDAY' as const,
+    timezone: 'Australia/Perth',
+    localTime: '09:00',
+  };
+
+  it('NOW: composition checked in the transaction, queued only after commit', async () => {
+    const { message, messageSchedule, $transaction, releaseQueue, service } =
+      setup();
+    const now = { ...stored, triggerType: 'NOW', scheduledFor: null };
+    messageSchedule.create.mockResolvedValue(now);
+    await service.create('owner-a', 'm1', { triggerType: 'NOW' });
+    expect(message.findUniqueOrThrow).toHaveBeenCalled();
+    expect(messageSchedule.create.mock.calls[0][0].data).toEqual({
+      messageId: 'm1',
+      triggerType: 'NOW',
+      scheduledFor: null,
+      afterDeathDays: null,
+      ...nulls,
+    });
+    expect(releaseQueue.sync).toHaveBeenCalledWith('m1', now);
+    expect($transaction.mock.invocationCallOrder[0]).toBeLessThan(
+      releaseQueue.sync.mock.invocationCallOrder[0],
+    );
+    // Never released here: the status UPDATE only ever sets SCHEDULED.
+    for (const [arg] of message.updateMany.mock.calls) {
+      expect(arg.data).toEqual({ status: 'SCHEDULED' });
+    }
+  });
+
+  it('NOW with an incomplete composition: 409, nothing queued', async () => {
+    const { message, releaseQueue, service } = setup();
+    message.findUniqueOrThrow.mockResolvedValue({
+      contentType: 'TEXT',
+      textContent: null,
+      mediaAssets: [],
+    });
+    await expect(
+      service.create('owner-a', 'm1', { triggerType: 'NOW' }),
+    ).rejects.toThrow(ConflictException);
+    expect(releaseQueue.sync).not.toHaveBeenCalled();
+  });
+
+  it('BIRTHDAY: refuses when a live assigned Recipient has no birthday (no silent skip)', async () => {
+    const { messageRecipient, messageRecipientRelease, releaseQueue, service } =
+      setup();
+    messageRecipient.count.mockResolvedValue(1);
+    await expect(service.create('owner-a', 'm1', birthdayDto)).rejects.toThrow(
+      MISSING_BIRTHDAY,
+    );
+    expect(messageRecipient.count.mock.calls[0][0].where).toEqual({
+      messageId: 'm1',
+      recipient: { deletedAt: null, birthday: null },
+    });
+    expect(messageRecipientRelease.createMany).not.toHaveBeenCalled();
+    expect(releaseQueue.syncOccurrences).not.toHaveBeenCalled();
+  });
+
+  it('BIRTHDAY: one first occurrence per live Recipient on their own birthday', async () => {
+    const { messageRecipient, messageRecipientRelease, releaseQueue, service } =
+      setup();
+    messageRecipient.findMany.mockResolvedValue([
+      { recipientId: 'ra', recipient: { birthday: new Date('1990-03-10') } },
+      { recipientId: 'rb', recipient: { birthday: new Date('2001-07-24') } },
+    ]);
+    const pending = [{ id: 'o1', dueAt: new Date('2027-03-10T01:00:00Z') }];
+    messageRecipientRelease.findMany.mockResolvedValue(pending);
+    await service.create('owner-a', 'm1', birthdayDto);
+    // Live Recipients only.
+    expect(messageRecipient.findMany.mock.calls[0][0].where).toEqual({
+      messageId: 'm1',
+      recipient: { deletedAt: null },
+    });
+    expect(messageRecipientRelease.createMany).toHaveBeenCalledWith({
+      data: [
+        {
+          messageId: 'm1',
+          recipientId: 'ra',
+          occurrenceYear: 2027,
+          dueAt: new Date('2027-03-10T01:00:00Z'),
+        },
+        {
+          messageId: 'm1',
+          recipientId: 'rb',
+          occurrenceYear: 2027,
+          dueAt: new Date('2027-07-24T01:00:00Z'),
+        },
+      ],
+      skipDuplicates: true,
+    });
+    expect(releaseQueue.syncOccurrences).toHaveBeenCalledWith('m1', pending);
+  });
+
+  it('ANNUAL_AFTER_DEATH: scheduling creates no occurrence (only a verified death does)', async () => {
+    const { messageRecipient, messageRecipientRelease, service } = setup();
+    await service.create('owner-a', 'm1', {
+      triggerType: 'ANNUAL_AFTER_DEATH',
+      timezone: 'Australia/Perth',
+      localTime: '09:00',
+    });
+    expect(messageRecipient.findMany).not.toHaveBeenCalled();
+    expect(messageRecipientRelease.createMany).not.toHaveBeenCalled();
+  });
+
+  it('CUSTOM_EVENT stores the derived UTC time with its local intent', async () => {
+    const { messageSchedule, service } = setup();
+    await service.create('owner-a', 'm1', {
+      triggerType: 'CUSTOM_EVENT',
+      timezone: 'Australia/Perth',
+      localTime: '09:00',
+      eventDate: '2027-04-10',
+      eventLabel: 'Graduation',
+    });
+    expect(messageSchedule.create.mock.calls[0][0].data).toMatchObject({
+      triggerType: 'CUSTOM_EVENT',
+      scheduledFor: new Date('2027-04-10T01:00:00Z'),
+      eventDate: new Date('2027-04-10'),
+      timezone: 'Australia/Perth',
+      localTime: '09:00',
+      eventLabel: 'Graduation',
+    });
+  });
+
+  it('PATCH re-derives CUSTOM_EVENT time from the merged local fields', async () => {
+    const { messageSchedule, service } = setup();
+    messageSchedule.findFirst.mockResolvedValue({
+      ...stored,
+      triggerType: 'CUSTOM_EVENT',
+      scheduledFor: new Date('2027-04-10T01:00:00Z'),
+      timezone: 'Australia/Perth',
+      localTime: '09:00',
+      eventDate: new Date('2027-04-10'),
+      eventLabel: 'Graduation',
+    });
+    await service.update('owner-a', 'm1', { localTime: '18:00' });
+    expect(messageSchedule.update.mock.calls[0][0].data.scheduledFor).toEqual(
+      new Date('2027-04-10T10:00:00Z'),
+    );
+  });
+
+  it('PATCH and unschedule refused once any Recipient was released (recurring)', async () => {
+    const { messageRelease, messageSchedule, releaseQueue, service } = setup();
+    messageRelease.count.mockResolvedValue(1);
+    messageSchedule.findFirst.mockResolvedValue({
+      ...stored,
+      triggerType: 'BIRTHDAY',
+      scheduledFor: null,
+      timezone: 'Australia/Perth',
+      localTime: '09:00',
+    });
+    await expect(
+      service.update('owner-a', 'm1', { localTime: '10:00' }),
+    ).rejects.toThrow(ALREADY_RELEASED_TO_SOME);
+    await expect(service.remove('owner-a', 'm1')).rejects.toThrow(
+      ALREADY_RELEASED_TO_SOME,
+    );
+    expect(messageSchedule.update).not.toHaveBeenCalled();
+    expect(messageSchedule.delete).not.toHaveBeenCalled();
+    expect(releaseQueue.sync).not.toHaveBeenCalled();
+  });
+
+  it('unschedule drops pending occurrences with the schedule', async () => {
+    const { messageRecipientRelease, messageSchedule, service } = setup();
+    await service.remove('owner-a', 'm1');
+    expect(messageRecipientRelease.deleteMany).toHaveBeenCalledWith({
+      where: { messageId: 'm1' },
+    });
+    expect(messageSchedule.delete).toHaveBeenCalled();
+  });
+
+  it('PATCH BIRTHDAY to FIXED_DATE drops pending occurrences', async () => {
+    const { messageRecipientRelease, messageSchedule, service } = setup();
+    messageSchedule.findFirst.mockResolvedValue({
+      ...stored,
+      triggerType: 'BIRTHDAY',
+      scheduledFor: null,
+      timezone: 'Australia/Perth',
+      localTime: '09:00',
+    });
+    await service.update('owner-a', 'm1', {
+      triggerType: 'FIXED_DATE',
+      scheduledFor: FUTURE,
+    });
+    expect(messageRecipientRelease.deleteMany).toHaveBeenCalledWith({
+      where: { messageId: 'm1', releasedAt: null },
+    });
+    expect(messageSchedule.update.mock.calls[0][0].data).toEqual({
+      triggerType: 'FIXED_DATE',
+      scheduledFor: new Date(FUTURE),
+      afterDeathDays: null,
+      ...nulls,
+    });
   });
 });

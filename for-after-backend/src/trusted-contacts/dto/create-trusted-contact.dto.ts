@@ -9,7 +9,10 @@ import {
   ValidateIf,
 } from 'class-validator';
 import { normalizeEmail, trim } from '../../auth/dto/register.dto.js';
-import { IsMobile } from '../../recipients/dto/create-recipient.dto.js';
+import {
+  IsE164Mobile,
+  normalizeMobile,
+} from '../../recipients/dto/create-recipient.dto.js';
 
 export const CONTACT_METHOD_REQUIRED =
   'Provide an email or a mobile (or both).';
@@ -46,8 +49,9 @@ export class CreateTrustedContactDto {
   @MaxLength(254)
   email?: string | null;
 
+  // E.164, like Recipients: a mobile-only contact signs in by SMS code.
   @IsOptional()
-  @Transform(trim)
-  @IsMobile()
+  @Transform(normalizeMobile)
+  @IsE164Mobile()
   mobile?: string | null;
 }

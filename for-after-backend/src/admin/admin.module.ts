@@ -7,6 +7,7 @@ import { UsersModule } from '../users/users.module.js';
 import {
   AdminAuditController,
   AdminDashboardController,
+  AdminDeadLettersController,
   AdminQueuesController,
   AdminUsersController,
 } from './admin.controller.js';
@@ -30,6 +31,7 @@ import { AdminService } from './admin.service.js';
     AdminUsersController,
     AdminAuditController,
     AdminQueuesController,
+    AdminDeadLettersController,
   ],
   providers: [AdminService, AdminQueuesService],
 })

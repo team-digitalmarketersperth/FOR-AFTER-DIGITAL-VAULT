@@ -15,7 +15,15 @@ import {
 } from '../audit/audit-log.service.js';
 import { DeathVerificationQueue } from '../death-verification/death-verification-queue.service.js';
 import { ReleaseNotificationQueue } from '../release-notifications/release-notification-queue.service.js';
-import { AuditEventType } from '../generated/prisma/client.js';
+import {
+  type DeadLetterQueue,
+  sanitizeFailedReason,
+} from '../dead-letters/dead-letter.service.js';
+import {
+  AuditEventType,
+  DeadLetterStatus,
+  type Prisma,
+} from '../generated/prisma/client.js';
 import {
   MessageReleaseQueue,
   withTimeout,
@@ -31,24 +39,21 @@ const COUNT_STATES = [
   'completed',
 ] as const;
 
-// Our job ids: message-release-<uuid>, death-verification-safeguard-<uuid>,
-// release-notification-<uuid>.
+// Our job ids: message-release-<uuid>, message-release-occurrence-<uuid>,
+// death-verification-safeguard-<uuid>, release-notification-<uuid>.
 const JOB_ID = /^[A-Za-z0-9_-]{1,200}$/;
 
-/**
- * First line only, no URLs (connection strings carry credentials), no email
- * addresses, max 200 chars. Stack traces are never returned.
- */
-export const sanitizeFailedReason = (reason?: string | null) =>
-  (reason ?? '')
-    .split('\n')[0]
-    .replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, '[url]')
-    .replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, '[email]')
-    .slice(0, 200) || null;
+// Shared with dead letters (Phase 17A); re-exported for existing imports.
+export { sanitizeFailedReason };
 
 // Payloads are id-only by design; only a valid UUID is echoed back. An email
 // job carries only its ReleaseNotification id: never an address or content.
-const PAYLOAD_KEYS = new Set(['messageId', 'caseId', 'notificationId']);
+const PAYLOAD_KEYS = new Set([
+  'messageId',
+  'occurrenceId',
+  'caseId',
+  'notificationId',
+]);
 const payloadIds = (data: unknown) =>
   Object.fromEntries(
     Object.entries((data ?? {}) as Record<string, unknown>).filter(
@@ -69,9 +74,9 @@ export class AdminQueuesService {
 
   constructor(
     private readonly prisma: PrismaService,
-    releases: MessageReleaseQueue,
-    deaths: DeathVerificationQueue,
-    emails: ReleaseNotificationQueue,
+    private readonly releases: MessageReleaseQueue,
+    private readonly deaths: DeathVerificationQueue,
+    private readonly emails: ReleaseNotificationQueue,
   ) {
     this.queues = new Map<string, Queue>([
       ['message-release', releases.queue],
@@ -133,6 +138,11 @@ export class AdminQueuesService {
         'The job could not be retried. Refresh and try again.',
       );
     }
+    // Its dead letter (if any) now waits for this run's outcome.
+    await this.prisma.deadLetterJob.updateMany({
+      where: { queueName: name, jobId, status: DeadLetterStatus.OPEN },
+      data: { status: DeadLetterStatus.REQUEUED, requeuedAt: new Date() },
+    });
     await writeAuditLog(this.prisma, {
       eventType: AuditEventType.FAILED_JOB_RETRIED,
       actor,
@@ -144,6 +154,137 @@ export class AdminQueuesService {
       `admin_failed_job_retried queue ${name} job ${jobId} admin ${actor.userId}`,
     );
     return { queue: name, jobId, state: 'waiting' as const };
+  }
+
+  /** Phase 17A: durable dead letters (PostgreSQL), newest failure first. */
+  async deadLetters(query: {
+    queue?: DeadLetterQueue;
+    status?: DeadLetterStatus;
+    from?: string;
+    to?: string;
+    page: number;
+    limit: number;
+  }) {
+    const { queue, status, from, to, page, limit } = query;
+    const where: Prisma.DeadLetterJobWhereInput = {
+      queueName: queue,
+      status,
+      failedAt:
+        from || to
+          ? {
+              ...(from ? { gte: new Date(from) } : {}),
+              ...(to ? { lte: new Date(to) } : {}),
+            }
+          : undefined,
+    };
+    const [total, items] = await this.prisma.$transaction([
+      this.prisma.deadLetterJob.count({ where }),
+      this.prisma.deadLetterJob.findMany({
+        where,
+        orderBy: [{ failedAt: 'desc' }, { id: 'asc' }],
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+    ]);
+    return { items, pagination: paginate(page, limit, total) };
+  }
+
+  async deadLetter(id: string) {
+    const row = await this.prisma.deadLetterJob.findUnique({ where: { id } });
+    if (!row) throw new NotFoundException('Dead letter not found.');
+    return row;
+  }
+
+  /**
+   * Re-queue an OPEN dead letter through the queue's own helper, derived from
+   * the entity id in PostgreSQL (never from a stored payload). The worker
+   * still makes every business decision; the row stays REQUEUED until that run
+   * completes (RESOLVED) or fails again (OPEN, one new alert).
+   */
+  async retryDeadLetter(id: string, actor: AuditActor) {
+    const row = await this.deadLetter(id);
+    // Claim first: of two concurrent retries exactly one gets count 1.
+    const { count } = await this.prisma.deadLetterJob.updateMany({
+      where: { id, status: DeadLetterStatus.OPEN },
+      data: { status: DeadLetterStatus.REQUEUED, requeuedAt: new Date() },
+    });
+    if (!count) {
+      throw new ConflictException('Only open dead letters can be retried.');
+    }
+    let outcome: 'requeued' | 'stale';
+    try {
+      outcome = await this.requeue(row.entityType, row.entityId);
+    } catch (err) {
+      await this.prisma.deadLetterJob.updateMany({
+        where: { id, status: DeadLetterStatus.REQUEUED },
+        data: { status: DeadLetterStatus.OPEN },
+      });
+      this.logger.error(
+        `admin_dead_letter_retry_failed deadLetter ${id} (code: ${errorCode(err)})`,
+      );
+      throw new ServiceUnavailableException(
+        'The job could not be queued. Try again shortly.',
+      );
+    }
+    if (outcome === 'stale') {
+      // Its entity is gone: nothing left to run.
+      await this.prisma.deadLetterJob.updateMany({
+        where: { id, status: DeadLetterStatus.REQUEUED },
+        data: {
+          status: DeadLetterStatus.RESOLVED,
+          resolvedAt: new Date(),
+          resolution: 'stale',
+        },
+      });
+    }
+    await writeAuditLog(this.prisma, {
+      eventType: AuditEventType.DEAD_LETTER_RETRY_REQUESTED,
+      actor,
+      subjectType: 'DeadLetterJob',
+      subjectId: id,
+      metadata: { queue: row.queueName, jobId: row.jobId, outcome },
+    });
+    this.logger.log(
+      `admin_dead_letter_retried deadLetter ${id} queue ${row.queueName} job ${row.jobId} (${outcome}) admin ${actor.userId}`,
+    );
+    return this.deadLetter(id);
+  }
+
+  // The canonical enqueue for each entity. Throws on Redis errors.
+  private async requeue(
+    entityType: string,
+    id: string | null,
+  ): Promise<'requeued' | 'stale'> {
+    if (!id) return 'stale';
+    const now = new Date();
+    const where = { where: { id }, select: { id: true } };
+    switch (entityType) {
+      case 'Message':
+        if (!(await this.prisma.message.findUnique(where))) return 'stale';
+        await this.releases.ensure(id, now);
+        return 'requeued';
+      case 'MessageRecipientRelease': {
+        const occ = await this.prisma.messageRecipientRelease.findUnique({
+          where: { id },
+          select: { messageId: true },
+        });
+        if (!occ) return 'stale';
+        await this.releases.ensureOccurrence(occ.messageId, id, now, now);
+        return 'requeued';
+      }
+      case 'DeathVerificationCase':
+        if (!(await this.prisma.deathVerificationCase.findUnique(where)))
+          return 'stale';
+        await this.deaths.requeueSafeguard(id, now);
+        return 'requeued';
+      case 'ReleaseNotification':
+        if (!(await this.prisma.releaseNotification.findUnique(where)))
+          return 'stale';
+        await this.emails.requeue(id);
+        return 'requeued';
+      default:
+        return 'stale';
+    }
   }
 
   /** Total failed jobs, or null when Redis cannot be read (never a fake 0). */

@@ -29,7 +29,6 @@ import { MalwareScanner } from '../media/scanner/malware-scanner.service.js';
 import { StorageQuota } from '../media/storage-quota.service.js';
 import { MediaStorage } from '../media/storage/media-storage.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { MyWishesDisclaimerService } from './my-wishes-disclaimer.service.js';
 import type { MyWishPrompt } from './my-wishes.prompts.js';
 import { liveWishId } from './my-wishes.service.js';
 
@@ -40,9 +39,7 @@ const MEDIA_NOT_FOUND = 'Media not found.';
  * limits, allowlist, quota, upload checks (provider, magic bytes, malware
  * scan), signed URLs and cleanup as My Story media (docs/media-storage.md);
  * the browser never decides READY. Private: no Recipient, Trusted Contact or
- * admin route reaches these files. Adding a file is writing a wish, so it
- * needs the current notice acknowledged (Phase 15A); completing, viewing and
- * deleting never do.
+ * admin route reaches these files.
  */
 @Injectable()
 export class MyWishesMediaService {
@@ -54,7 +51,6 @@ export class MyWishesMediaService {
     private readonly scanner: MalwareScanner,
     private readonly cleanup: MediaCleanup,
     private readonly quota: StorageQuota,
-    private readonly disclaimer: MyWishesDisclaimerService,
     config: ConfigService,
   ) {
     this.settings = mediaSettings(config);
@@ -81,7 +77,6 @@ export class MyWishesMediaService {
     dto: CreateMediaUploadDto,
   ): Promise<UploadUrlResponse> {
     const extension = uploadExtension(dto, this.settings.maxBytes);
-    await this.disclaimer.assertAcknowledged(ownerUserId);
     const id = randomUUID();
     const upload = await this.prisma.$transaction(async (tx) => {
       await this.quota.reserve(tx, ownerUserId, dto.sizeBytes);

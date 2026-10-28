@@ -8,11 +8,13 @@ import {
   Prisma,
   TrustedContactInvitationStatus,
 } from '../generated/prisma/client.js';
+import { noteActivity, recordActivity } from '../activity/customer-activity.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import {
-  type InvitationState,
   invitationState,
   latestInvitation,
+  type TrustedContactReadiness,
+  trustedContactReadiness,
   TrustedContactInvitationsService,
 } from './trusted-contact-invitations.service.js';
 import {
@@ -39,13 +41,15 @@ type Row = Prisma.TrustedContactGetPayload<{
 }>;
 
 export type TrustedContactResponse = Omit<Row, 'invitations'> & {
-  invitation: { status: InvitationState; sentAt: Date | null };
+  invitation: ReturnType<typeof invitationState>;
+  readiness: TrustedContactReadiness;
 };
 
 // Never the token, its hash or the address it was sent to.
 const toResponse = ({ invitations, ...row }: Row): TrustedContactResponse => ({
   ...row,
-  invitation: invitationState(row.email, invitations[0]),
+  invitation: invitationState(row, invitations[0]),
+  readiness: trustedContactReadiness(row, invitations[0]),
 });
 
 /** Phase 10 product decision: at most two active Trusted Contacts per Customer. */
@@ -97,12 +101,14 @@ export class TrustedContactsService {
       if (active >= MAX_TRUSTED_CONTACTS) {
         throw new ConflictException(MAX_REACHED);
       }
-      return tx.trustedContact.create({
+      const created = await tx.trustedContact.create({
         data: { ...toData(dto), firstName: dto.firstName, ownerUserId },
         select: { id: true },
       });
+      await recordActivity(tx, { userId: ownerUserId, type: 'TRUSTED_CONTACT_ADDED', entityId: created.id });
+      return created;
     });
-    if (dto.email) await this.invitations.send(ownerUserId, id, meta);
+    if (dto.email) await this.invitations.send(ownerUserId, id, 'EMAIL', meta);
     return this.findOwnedById(ownerUserId, id);
   }
 
@@ -148,7 +154,9 @@ export class TrustedContactsService {
       : clearsMobile
         ? { email: { not: null } }
         : undefined;
-    return this.updateOwned(ownerUserId, id, toData(dto), keepsContactMethod);
+    const updated = await this.updateOwned(ownerUserId, id, toData(dto), keepsContactMethod);
+    await noteActivity(this.prisma, { userId: ownerUserId, type: 'TRUSTED_CONTACT_UPDATED', entityId: id });
+    return updated;
   }
 
   // Soft delete: death reports keep referencing the row. A pending invitation
@@ -167,6 +175,7 @@ export class TrustedContactsService {
         },
       },
     });
+    await noteActivity(this.prisma, { userId: ownerUserId, type: 'TRUSTED_CONTACT_REMOVED', entityId: id });
   }
 
   private async updateOwned(

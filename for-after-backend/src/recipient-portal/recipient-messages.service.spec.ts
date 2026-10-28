@@ -5,15 +5,21 @@ import type { PrismaService } from '../prisma/prisma.service.js';
 import { RecipientMessagesController } from './recipient-messages.controller.js';
 import { RecipientMessagesService } from './recipient-messages.service.js';
 
-const SOFIA = 'sofia@example.com';
+const SOFIA = { emailNormalized: 'sofia@example.com' };
 const MSG = '11111111-1111-4111-8111-111111111111';
 const MSG2 = '22222222-2222-4222-8222-222222222222';
 const MEDIA = '33333333-3333-4333-8333-333333333333';
 const EARLY = new Date('2030-01-01T00:00:00Z');
 const LATE = new Date('2030-06-01T00:00:00Z');
 
-const grant = (id = MSG, releasedAt = EARLY, media = 0) => ({
+const grant = (
+  id = MSG,
+  releasedAt = EARLY,
+  media = 0,
+  sender: string | null = 'Lisa Bridgett',
+) => ({
   messageRelease: { releasedAt },
+  senderDisplayNameSnapshot: sender,
   message: {
     id,
     title: 'For Sofia',
@@ -47,8 +53,8 @@ const setup = () => {
 
 // The only authorization filter: this email's grant, RELEASED, not deleted.
 const eligible = {
-  recipientEmailNormalized: SOFIA,
-  message: { status: 'RELEASED', deletedAt: null },
+  recipientEmailNormalized: SOFIA.emailNormalized,
+  message: { status: { in: ['RELEASED', 'SCHEDULED'] }, deletedAt: null },
 };
 const visibleMedia = {
   status: 'READY',
@@ -70,6 +76,7 @@ describe('RecipientMessagesService', () => {
         contentType: 'TEXT',
         releasedAt: LATE,
         hasMedia: true,
+        senderDisplayName: 'Lisa Bridgett',
       },
       {
         id: MSG,
@@ -77,11 +84,25 @@ describe('RecipientMessagesService', () => {
         contentType: 'TEXT',
         releasedAt: EARLY,
         hasMedia: false,
+        senderDisplayName: 'Lisa Bridgett',
       },
     ]);
     const args = prisma.recipientMessageAccessGrant.findMany.mock.calls[0][0];
     expect(args.where).toEqual(eligible);
     expect(args.orderBy[0]).toEqual({ messageRelease: { releasedAt: 'desc' } });
+  });
+
+  it('the sender name comes only from the grant snapshot; a legacy grant without one is null', async () => {
+    const { prisma, service } = setup();
+    prisma.recipientMessageAccessGrant.findFirst.mockResolvedValue(grant(MSG, EARLY, 0, null));
+    expect(await service.findOne(SOFIA, MSG)).toMatchObject({ senderDisplayName: null });
+    prisma.recipientMessageAccessGrant.findFirst.mockResolvedValue(grant());
+    const detail = await service.findOne(SOFIA, MSG);
+    expect(detail.senderDisplayName).toBe('Lisa Bridgett');
+    // Never the live owner: the query selects the snapshot, not the User.
+    const { select } = prisma.recipientMessageAccessGrant.findFirst.mock.calls[0][0];
+    expect(select.senderDisplayNameSnapshot).toBe(true);
+    expect(JSON.stringify(select)).not.toMatch(/owner|email|mobile|firstName|lastName/);
   });
 
   it('a message granted twice to the same email (two Recipient rows) is listed once', async () => {
@@ -119,6 +140,7 @@ describe('RecipientMessagesService', () => {
       textContent: 'Fictional released text.',
       releasedAt: EARLY,
       hasMedia: false,
+      senderDisplayName: 'Lisa Bridgett',
     });
     expect(
       prisma.recipientMessageAccessGrant.findFirst.mock.calls[0][0].where,

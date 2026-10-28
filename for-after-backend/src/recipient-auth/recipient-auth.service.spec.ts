@@ -10,7 +10,10 @@ import {
   OTP_REQUESTED,
   RECIPIENT_SESSION_COOKIE,
   RecipientAuthService,
+  SMS_OTP_REQUESTED,
+  SMS_UNAVAILABLE,
 } from './recipient-auth.service.js';
+import { SmsVerificationError } from '../sms/sms-verification.js';
 import type { EmailMessage, EmailProvider } from '../email/email-provider.js';
 import {
   otpDeliveryFactory,
@@ -25,6 +28,9 @@ import { fakeRedis } from '../../test/fake-redis.js';
 
 const PEPPER = 'test-pepper-not-a-secret-000000000000';
 const SOFIA = 'sofia@example.com';
+const MAX = '+61400000123';
+// The fake provider's only approved code; real codes live in Twilio.
+const SMS_CODE = '123456';
 
 const configOf = (env: Record<string, string | undefined>) =>
   new ConfigService({
@@ -46,11 +52,17 @@ const setup = (
   };
   const count = vi.fn().mockResolvedValue(grants);
   const prisma = { recipientMessageAccessGrant: { count } };
+  const sms = {
+    name: 'fake',
+    send: vi.fn(async (_to: string) => undefined),
+    check: vi.fn(async (_to: string, code: string) => code === SMS_CODE),
+  };
   const service = new RecipientAuthService(
     prisma as unknown as PrismaService,
     { client: redis.client } as unknown as RedisService,
     delivery,
     configOf(env),
+    sms,
   );
   const flush = () => new Promise((r) => setImmediate(r));
   // Request a code and return what the fake delivery captured.
@@ -59,7 +71,7 @@ const setup = (
     await flush();
     return { ...res, code: sent.at(-1)?.code };
   };
-  return { service, redis, sent, delivery, count, request };
+  return { service, redis, sent, delivery, count, request, sms, flush };
 };
 
 const wrongCode = (code: string) =>
@@ -87,7 +99,7 @@ describe('RecipientAuthService: request OTP', () => {
     expect(count).toHaveBeenCalledWith({
       where: {
         recipientEmailNormalized: SOFIA,
-        message: { status: 'RELEASED', deletedAt: null },
+        message: { status: { in: ['RELEASED', 'SCHEDULED'] }, deletedAt: null },
       },
       take: 1,
     });
@@ -348,6 +360,154 @@ describe('RecipientAuthService: sessions and config', () => {
   });
 });
 
+describe('RecipientAuthService: SMS sign-in (Twilio Verify)', () => {
+  const sessionKeys = (redis: ReturnType<typeof fakeRedis>) =>
+    [...redis.store.keys()].filter((k) => k.includes('recipient_sess'));
+
+  it('same generic body for eligible and unknown mobiles; only eligible ones get an SMS', async () => {
+    const known = setup();
+    const unknown = setup({}, { grants: 0 });
+    const a = await known.service.requestSmsOtp(MAX, 'ip');
+    const b = await unknown.service.requestSmsOtp('+61400000999', 'ip');
+    await known.flush();
+    expect(a).toEqual({ message: SMS_OTP_REQUESTED });
+    expect(b).toEqual(a);
+    expect(known.sms.send).toHaveBeenCalledExactlyOnceWith(MAX);
+    // No SMS relay: an arbitrary number never reaches the provider.
+    expect(unknown.sms.send).not.toHaveBeenCalled();
+  });
+
+  it('eligibility is the email rule, on the mobile snapshot', async () => {
+    const { service, count } = setup();
+    await service.requestSmsOtp(MAX, 'ip');
+    expect(count).toHaveBeenCalledWith({
+      where: {
+        recipientMobileNormalized: MAX,
+        message: { status: { in: ['RELEASED', 'SCHEDULED'] }, deletedAt: null },
+      },
+      take: 1,
+    });
+  });
+
+  it('a provider failure on send does not fail or change the response', async () => {
+    const { service, sms } = setup();
+    sms.send.mockRejectedValue(new SmsVerificationError('twilio_60200'));
+    await expect(service.requestSmsOtp(MAX, 'ip')).resolves.toEqual({
+      message: SMS_OTP_REQUESTED,
+    });
+  });
+
+  it('requests are rate-limited per mobile and per IP; keys hold no number', async () => {
+    const { service, redis, sms } = setup({
+      RECIPIENT_OTP_REQUEST_LIMIT: '2',
+      RECIPIENT_OTP_IP_REQUEST_LIMIT: '2',
+    });
+    await service.requestSmsOtp(MAX, '1.1.1.1');
+    await service.requestSmsOtp(MAX, '2.2.2.2');
+    const err = await service
+      .requestSmsOtp(MAX, '3.3.3.3')
+      .catch((e: unknown) => e);
+    expect((err as HttpException).getStatus()).toBe(429);
+    expect(sms.send).toHaveBeenCalledTimes(2);
+    await service.requestSmsOtp('+61400000124', '1.1.1.1');
+    await expect(
+      service.requestSmsOtp('+61400000125', '1.1.1.1'),
+    ).rejects.toBeInstanceOf(HttpException);
+    expect([...redis.store.keys()].join()).not.toMatch(/400000|1\.1\.1\.1/);
+  });
+
+  it('an approved code creates the same Recipient session as email sign-in', async () => {
+    const { service, redis, sms } = setup();
+    const { sessionId, principal } = await service.verifySmsOtp(MAX, SMS_CODE);
+    expect(sms.check).toHaveBeenCalledExactlyOnceWith(MAX, SMS_CODE);
+    expect(principal).toEqual({ mobile: MAX });
+    expect(sessionId).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(await service.getSession(sessionId)).toEqual({ mobile: MAX });
+    // Same namespace and TTL as email sessions; no code stored anywhere.
+    expect(sessionKeys(redis)).toHaveLength(1);
+    expect(JSON.stringify([...redis.store.values()])).not.toContain(SMS_CODE);
+    redis.advance(604_800_001);
+    expect(await service.getSession(sessionId)).toBeNull();
+  });
+
+  it('a code the provider does not approve (wrong, expired, reused) -> generic 401, no session', async () => {
+    const { service, redis } = setup();
+    await expect(service.verifySmsOtp(MAX, '000000')).rejects.toThrow(
+      new UnauthorizedException(INVALID_CODE),
+    );
+    expect(sessionKeys(redis)).toHaveLength(0);
+  });
+
+  it('an ineligible mobile never reaches the provider and gets the same 401', async () => {
+    const { service, sms, redis } = setup({}, { grants: 0 });
+    await expect(service.verifySmsOtp(MAX, SMS_CODE)).rejects.toThrow(
+      INVALID_CODE,
+    );
+    expect(sms.check).not.toHaveBeenCalled();
+    expect(sessionKeys(redis)).toHaveLength(0);
+  });
+
+  it('access is re-checked after approval (removed meanwhile -> no session)', async () => {
+    const { service, count, redis } = setup();
+    count.mockResolvedValueOnce(1).mockResolvedValueOnce(0);
+    await expect(service.verifySmsOtp(MAX, SMS_CODE)).rejects.toThrow(
+      INVALID_CODE,
+    );
+    expect(sessionKeys(redis)).toHaveLength(0);
+  });
+
+  it('a provider error -> 503 with a safe message, no session', async () => {
+    const { service, sms, redis } = setup();
+    sms.check.mockRejectedValue(new SmsVerificationError('twilio_20003'));
+    const err = await service
+      .verifySmsOtp(MAX, SMS_CODE)
+      .catch((e: unknown) => e);
+    expect((err as HttpException).getStatus()).toBe(503);
+    expect((err as HttpException).message).toBe(SMS_UNAVAILABLE);
+    expect(sessionKeys(redis)).toHaveLength(0);
+  });
+
+  it('verification is rate-limited per mobile (attempts x requests) and per IP', async () => {
+    const perMobile = setup({
+      RECIPIENT_OTP_MAX_ATTEMPTS: '2',
+      RECIPIENT_OTP_REQUEST_LIMIT: '1',
+    });
+    for (const ip of ['a', 'b']) {
+      await perMobile.service.verifySmsOtp(MAX, '000000', ip).catch(() => null);
+    }
+    const err = await perMobile.service
+      .verifySmsOtp(MAX, SMS_CODE, 'c')
+      .catch((e: unknown) => e);
+    expect((err as HttpException).getStatus()).toBe(429);
+    const perIp = setup({ RECIPIENT_OTP_VERIFY_IP_LIMIT: '1' });
+    await perIp.service.verifySmsOtp(MAX, '000000', 'ip').catch(() => null);
+    const ipErr = await perIp.service
+      .verifySmsOtp('+61400000124', SMS_CODE, 'ip')
+      .catch((e: unknown) => e);
+    expect((ipErr as HttpException).getStatus()).toBe(429);
+  });
+
+  it('logs mask the mobile and never contain the code or session id', async () => {
+    const spies = (['log', 'warn', 'error'] as const).map((m) =>
+      vi.spyOn(Logger.prototype, m).mockImplementation(() => undefined),
+    );
+    const { service, flush } = setup();
+    await service.requestSmsOtp(MAX, 'ip');
+    await flush();
+    await service.verifySmsOtp(MAX, '000000').catch(() => null);
+    const { sessionId } = await service.verifySmsOtp(MAX, SMS_CODE);
+    const logged = JSON.stringify(spies.map((s) => s.mock.calls));
+    expect(logged).toContain('recipient_sms_otp_requested +61******123');
+    expect(logged).toContain('recipient_sms_otp_invalid');
+    expect(logged).toContain('recipient_sms_otp_verified');
+    expect(logged).toContain('recipient_session_created +61******123');
+    expect(logged).not.toContain(MAX);
+    expect(logged).not.toContain(SMS_CODE);
+    expect(logged).not.toContain(sessionId);
+    spies.forEach((s) => s.mockRestore());
+  });
+});
+
 describe('OTP delivery (Step 24: email)', () => {
   it('sends exactly one recipient sign-in email with the code, and nothing else', async () => {
     const sent: EmailMessage[] = [];
@@ -408,6 +568,21 @@ describe('RecipientSessionAuthGuard', () => {
     ).toBe(true);
     expect(req.recipient).toEqual({ emailNormalized: SOFIA });
     expect(req.user).toBeUndefined();
+  });
+
+  it('an SMS session -> { mobile } principal; a session with neither field is none', async () => {
+    const { service, redis } = setup();
+    const id = await service.createSession({ mobile: MAX });
+    const req = {
+      headers: { cookie: `${RECIPIENT_SESSION_COOKIE}=${id}` },
+    } as Request;
+    await new RecipientSessionAuthGuard(service).canActivate(ctx(req));
+    expect(req.recipient).toEqual({ mobile: MAX });
+    const key = [...redis.store.keys()].find((k) => k.includes('recipient_sess'))!;
+    redis.store.set(key, JSON.stringify({ authenticatedAt: 'x' }));
+    await expect(
+      new RecipientSessionAuthGuard(service).canActivate(ctx(req)),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
   });
 
   it('missing, unknown or expired session → 401', async () => {

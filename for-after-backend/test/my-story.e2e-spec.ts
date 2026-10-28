@@ -182,6 +182,7 @@ describe('My Story (e2e, PostgreSQL)', () => {
       'id',
       'mediaCount',
       'memories',
+      'privateNote',
       'promptKey',
       'promptTextSnapshot',
       'promptVersion',

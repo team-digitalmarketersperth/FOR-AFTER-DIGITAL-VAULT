@@ -1,0 +1,247 @@
+{
+  "run": "20261021110105-15b683",
+  "profile": "smoke",
+  "config": {
+    "profile": "smoke",
+    "messages": 100,
+    "fanout": 1,
+    "workers": 1,
+    "rate": 0,
+    "duration": 0,
+    "latencyMs": 80,
+    "jitterMs": 40,
+    "providerDedupe": false,
+    "p500": 0,
+    "p429": 0,
+    "pTimeout": 0,
+    "permanentEvery": 0,
+    "duplicates": false,
+    "cancelBefore": 0,
+    "cancelWaiting": 0,
+    "startDelay": 0,
+    "reconcileSeconds": 60,
+    "deadline": 300,
+    "accept": {
+      "p95DueToRelease": 30,
+      "p95DueToSent": 60,
+      "drain": 180
+    },
+    "emailTimeoutMs": 10000
+  },
+  "host": {
+    "cpus": 8,
+    "cpuModel": "11th Gen Intel(R) Core(TM) i5-1145G7 @ 2.60GHz",
+    "memGb": 8,
+    "node": "v22.23.2"
+  },
+  "queues": {
+    "release": "p24load-20261021110105-15b683-release",
+    "email": "p24load-20261021110105-15b683-email",
+    "death": "p24load-20261021110105-15b683-death"
+  },
+  "events": [
+    {
+      "t": 6233,
+      "what": "api_ready",
+      "consumers": 0
+    },
+    {
+      "t": 9313,
+      "what": "drafts_created",
+      "messages": 100
+    },
+    {
+      "t": 11919,
+      "what": "scheduled",
+      "dueAt": "2026-10-21T11:01:35.006Z",
+      "leftBeforeDueMs": 17394
+    },
+    {
+      "t": 15406,
+      "what": "workers_ready",
+      "workers": 1,
+      "consumers": 3
+    },
+    {
+      "t": 40283,
+      "what": "settled"
+    }
+  ],
+  "counts": {
+    "messagesCreated": 100,
+    "cancelled": 0,
+    "expectedReleased": 100,
+    "released": 100,
+    "cancelledReleased": 0,
+    "grants": 100,
+    "expectedDeliveries": 100,
+    "notificationRows": 100,
+    "sent": 100,
+    "failed": 0,
+    "pending": 0,
+    "failedCodes": {},
+    "retries": 0,
+    "deadLetters": 0,
+    "deadLettersByQueue": {},
+    "deadLetterAlerts": {},
+    "opsAlertEmails": 0,
+    "opsAlertEmailsForPreexistingDeadLetters": 18,
+    "duplicateGrantPairs": 0,
+    "grantsWithMultipleNotificationRows": 0
+  },
+  "provider": {
+    "releaseAttempts": 100,
+    "outcomes": {
+      "accepted": 100
+    },
+    "distinctIdempotencyKeys": 100,
+    "keysAcceptedMoreThanOnce": 0,
+    "deliveriesWithoutProviderDedupe": 100,
+    "deliveriesIfProviderHonoursKey": 100,
+    "providerDedupeSimulated": false
+  },
+  "latencySeconds": {
+    "dueToReleased": {
+      "n": 100,
+      "p50": 1.491,
+      "p95": 2.348,
+      "p99": 2.407,
+      "max": 2.424
+    },
+    "dueToSentRecorded": {
+      "n": 100,
+      "p50": 5.514,
+      "p95": 10.076,
+      "p99": 10.418,
+      "max": 10.544
+    },
+    "notificationCreatedToSent": {
+      "n": 100,
+      "p50": 4.015,
+      "p95": 7.721,
+      "p99": 8.001,
+      "max": 8.113
+    },
+    "releaseQueueWait": {
+      "n": 100,
+      "p50": 1.487,
+      "p95": 2.34,
+      "p99": 2.399,
+      "max": 2.402
+    },
+    "releaseProcessing": {
+      "n": 100,
+      "p50": 0.019,
+      "p95": 0.048,
+      "p99": 0.098,
+      "max": 0.217
+    },
+    "emailQueueWaitFirstAttempt": {
+      "n": 100,
+      "p50": 3.909,
+      "p95": 7.628,
+      "p99": 7.89,
+      "max": 7.986
+    },
+    "emailProcessing": {
+      "n": 100,
+      "p50": 0.107,
+      "p95": 0.14,
+      "p99": 0.142,
+      "max": 0.228
+    }
+  },
+  "jobSamplesCaptured": {
+    "release": 100,
+    "email": 100
+  },
+  "throughput": {
+    "drainSeconds": 10.544,
+    "drainAfterLastDueSeconds": 10.544,
+    "notificationsPerSecond": 9.48,
+    "peakEmailBacklog": 78,
+    "peakReleaseBacklog": 94
+  },
+  "resources": {
+    "workers": [
+      {
+        "id": "w1",
+        "exited": null,
+        "closeMs": null,
+        "cpuMs": 4031,
+        "peakRssMb": 173
+      }
+    ],
+    "pgConnectionsPeak": 7,
+    "redisClientsPeak": 17
+  },
+  "quietPeriod": {
+    "newProviderAttempts": 0,
+    "newReleases": 0
+  },
+  "apiOnlyConsumers": 0,
+  "timedOut": false,
+  "checks": [
+    {
+      "name": "settled before deadline",
+      "ok": true,
+      "detail": "300s"
+    },
+    {
+      "name": "API process alone consumed nothing",
+      "ok": true
+    },
+    {
+      "name": "every expected message released exactly once",
+      "ok": true,
+      "detail": "100/100"
+    },
+    {
+      "name": "cancelled messages never released",
+      "ok": true,
+      "detail": "0 cancelled"
+    },
+    {
+      "name": "one grant per message and recipient",
+      "ok": true
+    },
+    {
+      "name": "one notification row per grant",
+      "ok": true
+    },
+    {
+      "name": "every notification terminal (none PENDING)",
+      "ok": true
+    },
+    {
+      "name": "FAILED only for permanent rejections or exhausted retries",
+      "ok": true,
+      "detail": "0/0 permanent, 0 exhausted"
+    },
+    {
+      "name": "one dead letter and one ops alert per FAILED notification",
+      "ok": true,
+      "detail": "0 dead letters, 0 alerts, 0 failed"
+    },
+    {
+      "name": "quiet period: reconcilers add no provider attempt or release",
+      "ok": true
+    },
+    {
+      "name": "drain from first due ≤ 180s (provisional)",
+      "ok": true,
+      "detail": "10.544s"
+    },
+    {
+      "name": "p95 due→released ≤ 30s (provisional)",
+      "ok": true,
+      "detail": "2.348s"
+    },
+    {
+      "name": "p95 due→sent ≤ 60s (provisional)",
+      "ok": true,
+      "detail": "10.076s"
+    }
+  ],
+  "passed": true
+}

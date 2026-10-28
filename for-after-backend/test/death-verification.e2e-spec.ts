@@ -1,4 +1,5 @@
 import { ConfigModule } from '@nestjs/config';
+import { senderSnapshots } from './sender-snapshots.js';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import { ThrottlerGuard } from '@nestjs/throttler';
@@ -18,7 +19,12 @@ import { DeathVerificationModule } from '../src/death-verification/death-verific
 import { MediaModule } from '../src/media/media.module.js';
 import { MediaStorage } from '../src/media/storage/media-storage.service.js';
 import { FakeMediaStorage } from './fake-media-storage.js';
+import { MessageReleaseReconciler } from '../src/message-release/message-release-reconciler.service.js';
 import { MessageReleaseService } from '../src/message-release/message-release.service.js';
+import {
+  annualOccurrence,
+  localParts,
+} from '../src/message-schedules/recurrence.js';
 import { MessageSchedulesModule } from '../src/message-schedules/message-schedules.module.js';
 import { MessagesModule } from '../src/messages/messages.module.js';
 import type { OtpDeliveryInput } from '../src/otp-auth/otp-auth.service.js';
@@ -33,6 +39,7 @@ import { TrustedContactAuthModule } from '../src/trusted-contact-auth/trusted-co
 import { TrustedContactOtpDelivery } from '../src/trusted-contact-auth/trusted-contact-auth.service.js';
 import { TrustedContactPortalModule } from '../src/trusted-contact-portal/trusted-contact-portal.module.js';
 import { TrustedContactsModule } from '../src/trusted-contacts/trusted-contacts.module.js';
+import { QueueWorkersModule } from '../src/worker.module.js';
 
 // Step 15 end to end: real HTTP, guards, PostgreSQL, Redis and both BullMQ
 // queues (safeguard + message release). Safety notices and OTPs go through
@@ -60,6 +67,9 @@ describe('Death verification workflow (e2e)', () => {
     vera: at('dv.vera'),
     cora: at('dv.cora'),
     admin: at('dv.admin'),
+    // Phase 24 (§50 duplicate death approval): a second admin and a Customer.
+    admin2: at('dv.admin2'),
+    dupe: at('dv.dupe'),
   };
   const DAVID = at('dv.david');
   const SOFIA = at('dv.sofia');
@@ -200,6 +210,8 @@ describe('Death verification workflow (e2e)', () => {
     });
     const moduleRef = await Test.createTestingModule({
       imports: [
+        // Phase 17B: the worker process's consumers, started explicitly.
+        QueueWorkersModule,
         ConfigModule.forRoot({ isGlobal: true }),
         PrismaModule,
         RedisModule,
@@ -247,14 +259,14 @@ describe('Death verification workflow (e2e)', () => {
         .expect(201);
     }
     // Admins cannot self-register: an operator sets the role.
-    await prisma.user.update({
-      where: { email: users.admin },
+    await prisma.user.updateMany({
+      where: { email: { in: [users.admin, users.admin2] } },
       data: { role: 'ADMIN' },
     });
     for (const [key, email] of Object.entries(users)) {
       // Step 16: an admin session needs password + TOTP.
       agents[key] =
-        key === 'admin'
+        key === 'admin' || key === 'admin2'
           ? (await adminSignIn(app, email, password)).agent
           : await signIn(email);
     }
@@ -290,6 +302,14 @@ describe('Death verification workflow (e2e)', () => {
             scheduledFor: new Date(Date.now() + 3_600_000).toISOString(),
           },
         },
+        {
+          title: 'Every year after death',
+          schedule: {
+            triggerType: 'ANNUAL_AFTER_DEATH',
+            timezone: 'Australia/Perth',
+            localTime: '09:00',
+          },
+        },
       ]);
       Object.assign(ids, {
         lisaTc: setup.tcId,
@@ -297,6 +317,7 @@ describe('Death verification workflow (e2e)', () => {
         afterOverdue: setup.messageIds[1],
         afterFuture: setup.messageIds[2],
         fixed: setup.messageIds[3],
+        annual: setup.messageIds[4],
       });
       agents.david = await otpSignIn('trusted-contact-auth', DAVID);
       const res = await report(ids.lisaTc);
@@ -337,11 +358,14 @@ describe('Death verification workflow (e2e)', () => {
         .expect(200);
       expect(Object.keys(tc.body).sort()).toEqual([
         'canReport',
+        'canUploadEvidence',
         'openedAt',
         'reportedByYou',
         'status',
       ]);
       expect(tc.body.canReport).toBe(false);
+      // Phase 19A: the reporter of an open case may add evidence.
+      expect(tc.body.canUploadEvidence).toBe(true);
     });
 
     it('admin cannot verify during the safeguard (409), no override exists', async () => {
@@ -352,9 +376,21 @@ describe('Death verification workflow (e2e)', () => {
 
     it('the real safeguard job advances to READY_FOR_REVIEW; nothing is released', async () => {
       await toReadyForReview(users.lisa);
-      for (const id of [ids.onDeath, ids.afterOverdue, ids.afterFuture]) {
+      for (const id of [
+        ids.onDeath,
+        ids.afterOverdue,
+        ids.afterFuture,
+        ids.annual,
+      ]) {
         expect(await statusOf(id)).toBe('SCHEDULED');
       }
+      // Phase 16: a report, the safeguard and READY_FOR_REVIEW create no
+      // ANNUAL_AFTER_DEATH occurrence (only a verified death does).
+      expect(
+        await prisma.messageRecipientRelease.count({
+          where: { messageId: ids.annual },
+        }),
+      ).toBe(0);
       expect(
         await prisma.messageRelease.count({
           where: { message: { owner: { email: users.lisa } } },
@@ -450,7 +486,7 @@ describe('Death verification workflow (e2e)', () => {
       });
       const byMessage = Object.fromEntries(acts.map((a) => [a.messageId, a]));
       expect(Object.keys(byMessage).sort()).toEqual(
-        [ids.onDeath, ids.afterOverdue, ids.afterFuture].sort(),
+        [ids.onDeath, ids.afterOverdue, ids.afterFuture, ids.annual].sort(),
       );
       expect(byMessage[ids.onDeath].dueAt).toEqual(kase.verifiedAt);
       expect(byMessage[ids.afterOverdue].dueAt).toEqual(
@@ -461,6 +497,27 @@ describe('Death verification workflow (e2e)', () => {
       );
       // FIXED_DATE is not a death trigger.
       expect(byMessage[ids.fixed]).toBeUndefined();
+
+      // ANNUAL_AFTER_DEATH: first anniversary one calendar year after the
+      // death (local date in Perth, 09:00), one occurrence per live Recipient.
+      const local = localParts(deathAt, 'Australia/Perth');
+      const firstAnniversary = annualOccurrence(
+        local.year + 1,
+        local.month,
+        local.day,
+        '09:00',
+        'Australia/Perth',
+      );
+      expect(byMessage[ids.annual].dueAt).toEqual(firstAnniversary);
+      const occ = await prisma.messageRecipientRelease.findMany({
+        where: { messageId: ids.annual },
+      });
+      expect(occ).toHaveLength(1);
+      expect(occ[0]).toMatchObject({
+        occurrenceYear: local.year + 1,
+        dueAt: firstAnniversary,
+        releasedAt: null,
+      });
     });
 
     it('queue releases ON_DEATH and overdue AFTER_DEATH; future AFTER_DEATH and FIXED_DATE wait', async () => {
@@ -471,6 +528,12 @@ describe('Death verification workflow (e2e)', () => {
       );
       expect(await statusOf(ids.afterFuture)).toBe('SCHEDULED');
       expect(await statusOf(ids.fixed)).toBe('SCHEDULED');
+      expect(await statusOf(ids.annual)).toBe('SCHEDULED');
+      expect(
+        await prisma.recipientMessageAccessGrant.count({
+          where: { messageId: ids.annual },
+        }),
+      ).toBe(0);
       const releases = await prisma.messageRelease.findMany({
         where: { messageId: { in: [ids.onDeath, ids.afterOverdue] } },
       });
@@ -500,7 +563,12 @@ describe('Death verification workflow (e2e)', () => {
         await prisma.deathTriggeredMessageActivation.count({
           where: { deathVerificationCaseId: ids.lisaCase },
         }),
-      ).toBe(3);
+      ).toBe(4);
+      expect(
+        await prisma.messageRecipientRelease.count({
+          where: { messageId: ids.annual },
+        }),
+      ).toBe(1);
       expect(
         await prisma.messageRelease.count({
           where: { messageId: ids.onDeath },
@@ -528,12 +596,71 @@ describe('Death verification workflow (e2e)', () => {
       ]);
     });
 
+    it('ANNUAL_AFTER_DEATH: the anniversary releases to the Recipient, then next year waits', async () => {
+      // Test clock: the first anniversary has arrived.
+      const [first] = await prisma.messageRecipientRelease.findMany({
+        where: { messageId: ids.annual },
+      });
+      await prisma.messageRecipientRelease.update({
+        where: { id: first.id },
+        data: { dueAt: new Date(Date.now() - 1000) },
+      });
+      await app.get(MessageReleaseReconciler).reconcile();
+      await until(
+        async () =>
+          !!(
+            await prisma.messageRecipientRelease.findUnique({
+              where: { id: first.id },
+            })
+          )?.releasedAt,
+      );
+      // The Message keeps recurring: still SCHEDULED, released to Sofia.
+      expect(await statusOf(ids.annual)).toBe('SCHEDULED');
+      const grants = await prisma.recipientMessageAccessGrant.findMany({
+        where: { messageId: ids.annual },
+        include: { notifications: true },
+      });
+      expect(grants).toHaveLength(1);
+      expect(grants[0].notifications.map((n) => n.occurrenceId)).toEqual([
+        first.id,
+      ]);
+      // Next year by calendar, not +365 days.
+      const next = await prisma.messageRecipientRelease.findFirst({
+        where: { messageId: ids.annual, releasedAt: null },
+      });
+      const kase = await caseOf(users.lisa);
+      const local = localParts(kase.verifiedDeathAt!, 'Australia/Perth');
+      expect(next).toMatchObject({
+        occurrenceYear: first.occurrenceYear + 1,
+        dueAt: annualOccurrence(
+          first.occurrenceYear + 1,
+          local.month,
+          local.day,
+          '09:00',
+          'Australia/Perth',
+        ),
+      });
+      // A duplicate job or retry changes nothing.
+      expect(
+        await app.get(MessageReleaseService).releaseOccurrence(first.id),
+      ).toEqual({ result: 'already_released' });
+      expect(
+        await prisma.releaseNotification.count({
+          where: { grant: { messageId: ids.annual } },
+        }),
+      ).toBe(1);
+    });
+
     it('the Recipient Portal shows death-triggered releases with no special casing', async () => {
       const sofia = await otpSignIn('recipient-auth', SOFIA);
       const { body } = await sofia.get(api('/recipient/messages')).expect(200);
       const titles = body.map((m: { title: string }) => m.title);
       expect(titles).toEqual(
-        expect.arrayContaining(['On death', 'After death, overdue']),
+        expect.arrayContaining([
+          'On death',
+          'After death, overdue',
+          'Every year after death',
+        ]),
       );
       expect(titles).not.toContain('After death, future');
     });
@@ -700,6 +827,45 @@ describe('Death verification workflow (e2e)', () => {
     });
   });
 
+  describe('§50 duplicate death approval (Phase 24)', () => {
+    it('two admins verifying at once: one VERIFIED, one 409; one activation, one release, one grant', async () => {
+      const setup = await setupCustomer('dupe', [
+        { title: 'Dupe on death', schedule: { triggerType: 'ON_DEATH' } },
+      ]);
+      const { body } = await report(setup.tcId);
+      await toReadyForReview(users.dupe);
+      const [a, b] = await Promise.all([
+        verify(body.caseId),
+        verify(body.caseId, {}, agents.admin2),
+      ]);
+      expect([a.status, b.status].sort((x, y) => x - y)).toEqual([200, 409]);
+      expect((await caseOf(users.dupe)).status).toBe('VERIFIED');
+      expect(
+        await prisma.deathVerificationAuditEvent.count({
+          where: {
+            deathVerificationCaseId: body.caseId,
+            eventType: 'ADMIN_VERIFIED',
+          },
+        }),
+      ).toBe(1);
+      expect(
+        await prisma.deathTriggeredMessageActivation.count({
+          where: { deathVerificationCaseId: body.caseId },
+        }),
+      ).toBe(1);
+      const [messageId] = setup.messageIds;
+      await until(async () => (await statusOf(messageId)) === 'RELEASED');
+      // A late third approval changes nothing.
+      await verify(body.caseId).expect(409);
+      await app.get(MessageReleaseReconciler).reconcile();
+      await sleep(1500);
+      expect(await prisma.messageRelease.count({ where: { messageId } })).toBe(1);
+      expect(
+        await prisma.recipientMessageAccessGrant.count({ where: { messageId } }),
+      ).toBe(1);
+    });
+  });
+
   describe('notice failure and reconciliation', () => {
     it('a failed notice keeps PENDING_VERIFICATION; the reconciler starts the safeguard later', async () => {
       const email = users.olga;
@@ -863,6 +1029,11 @@ describe('Death verification workflow (e2e)', () => {
       await toReadyForReview(users.ivan);
       expect(await statusOf(messageIds[0])).toBe('SCHEDULED');
       expect(await accountStatus(users.ivan)).toBe('ACTIVE');
+      // Phase 19B: two contacts → two confirmations. Eve's report alone is not
+      // enough; David's independent report on case 2 completes it.
+      await verify(second.caseId).expect(409);
+      await report(tcId);
+      expect(await accountStatus(users.ivan)).toBe('ACTIVE');
       await verify(second.caseId).expect(200);
       expect(await accountStatus(users.ivan)).toBe('PASSED');
       await until(async () => (await statusOf(messageIds[0])) === 'RELEASED');
@@ -953,5 +1124,18 @@ describe('Death verification workflow (e2e)', () => {
       }
       expect(await openCount(users.cora)).toBeLessThanOrEqual(1);
     });
+  });
+
+  // Phase 18: every grant this suite released carries its sender's display
+  // name, snapshotted inside the release transaction, for each trigger path.
+  it('every access grant snapshots the sender display name (ON_DEATH, AFTER_DEATH, ANNUAL_AFTER_DEATH)', async () => {
+    const rows = await senderSnapshots(prisma, Object.values(users));
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row.snapshot, row.trigger).toBe(row.current);
+      expect(row.snapshot, row.trigger).not.toBeNull();
+    }
+    const triggers = new Set(rows.map((r) => r.trigger));
+    for (const t of ['ON_DEATH', 'AFTER_DEATH', 'ANNUAL_AFTER_DEATH']) expect(triggers, t).toContain(t);
   });
 });

@@ -1,3 +1,4 @@
+import type { DeadLetterService } from '../dead-letters/dead-letter.service.js';
 import { Logger } from '@nestjs/common';
 import { type Job, UnrecoverableError } from 'bullmq';
 import {
@@ -45,6 +46,7 @@ const setup = (
     {} as ReleaseNotificationQueue,
     email,
     { settings: { appBaseUrl: 'https://app.example.com' } } as EmailConfig,
+    {} as DeadLetterService,
   );
   const job = (attemptsMade = 0) =>
     ({
@@ -93,7 +95,7 @@ describe('ReleaseNotificationProcessor', () => {
       row({
         grant: {
           recipientEmailNormalized: 'a@b.co',
-          message: { status: 'SCHEDULED' },
+          message: { status: 'DRAFT' },
         },
       }),
       'stale',

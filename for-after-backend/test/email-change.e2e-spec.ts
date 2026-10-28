@@ -287,6 +287,12 @@ describe('Change email with verification (e2e)', () => {
           where: { eventType: 'EMAIL_CHANGED', subjectId: id },
         }),
       ).toBe(1);
+      // The Customer's own Recent changes: once, never repeated by the used link.
+      expect(
+        await prisma.customerActivity.count({
+          where: { type: 'EMAIL_CHANGED', userId: id },
+        }),
+      ).toBe(1);
     });
 
     it('an expired link changes nothing', async () => {

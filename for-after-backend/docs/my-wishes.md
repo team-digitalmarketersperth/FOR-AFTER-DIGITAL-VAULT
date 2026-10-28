@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | ✅ Built in Step 11 (text answers) · notice served by the API + versioned acknowledgement (Phase 15A, 2026-10-08) · photos/recordings/videos + sharing as a separate Message after a verified death (Phase 15B, 2026-10-09) · AI help **deferred post-MVP** |
+| **Status** | ✅ Built in Step 11 (text answers) · notice served by the API (Phase 15A, 2026-10-08; informational only, no acknowledgement gate, since 2026-10-14) · photos/recordings/videos + sharing as a separate Message after a verified death (Phase 15B, 2026-10-09) · AI help **deferred post-MVP** |
 | **Who can see it** | Only the Customer: no Recipient, Trusted Contact (incl. Step 14) or admin access. People the Customer picks receive only a separate Message copy, released by the normal Message rules |
 | **Related** | [My Story](my-story.md) · [Death verification](death-verification.md) · [API](api.md) |
 
@@ -34,13 +34,12 @@ of the wording has not been done** and stays an open item (`task.md` Phase 01).
 | | |
 |---|---|
 | Wording, version **1** | "My Wishes records personal preferences and guidance only. It is not a will, legal document, medical directive, financial instruction or substitute for professional advice." (exactly the Step 18 text) |
-| Source | The backend only (`MyWishesDisclaimer` in `src/my-wishes/my-wishes-disclaimer.service.ts`, code-defined, not in the database or env). The frontend renders what `GET /my-wishes/disclaimer` returns and keeps no copy; if it cannot load, the UI shows an error with retry and offers no writing |
-| Acknowledgement | **Required once per version, before creating or editing a wish.** An unticked checkbox ("I have read this notice.") and Continue on the My Wishes pages. It records that this version was shown and confirmed: it is not consent, a waiver, legal advice or a signature, and must never be described as one |
-| Enforcement | Server-side: `PUT …/response` answers **409** `Please acknowledge the current My Wishes notice before saving.` without an acknowledgement of the current version. Reading (`GET`) and deleting (`DELETE`) never need one, so a Customer can always read or remove their wishes |
-| New version | Changing a word of the notice means a new version: bump `version` with the new text. Earlier acknowledgements do not count for it (writes wait for a new one); existing wishes are never changed, hidden or deleted |
-| Record | `MyWishesDisclaimerAcknowledgement` (`userId`, `disclaimerVersion`, `acknowledgedAt`; unique per user and version; migration `my_wishes_disclaimer_acknowledgements`, additive). Kept as history, never edited. Idempotent (repeated or concurrent submits keep one row). Only the current version can be acknowledged (409 `The My Wishes notice has changed. Please read the current version.`). The body is `{ version }` only; user, time and text never come from the client |
-| Existing users | **Not backfilled**: no one is recorded as having acknowledged anything they were not shown |
-| Audit | `MY_WISHES_DISCLAIMER_ACKNOWLEDGED` once per user and version: actor id and `{ disclaimerVersion }` only; no IP, device, notice text or wish content |
+| Source | The backend only (`MyWishesDisclaimer` in `src/my-wishes/my-wishes-disclaimer.service.ts`, code-defined, not in the database or env). The frontend renders what `GET /my-wishes/disclaimer` returns and keeps no copy; if it cannot load, the UI shows an error with retry. It loads alongside the wishes and never holds them back |
+| Display | **Informational only** (product decision 2026-10-14, replacing the 15A acknowledgement gate). The notice is shown above the prompts on the list and each editor page; there is no checkbox, no "I have read this notice." and no Continue. Customers read, write, autosave, add files to and delete wishes straight away |
+| Enforcement | None: no My Wishes route (text, media upload, autosave) checks for an acknowledgement. Auth, Customer-only access, ownership, validation, media rules and sharing/release are unchanged |
+| New version | Changing a word of the notice means a new version: bump `version` with the new text. Nothing waits for it; existing wishes are never changed, hidden or deleted |
+| Historical record | `MyWishesDisclaimerAcknowledgement` (`userId`, `disclaimerVersion`, `acknowledgedAt`; unique per user and version; migration `my_wishes_disclaimer_acknowledgements`, additive) is **kept**: rows from the 15A period stay as history, never edited, and never affect access. The current UI creates none. `POST /my-wishes/disclaimer/acknowledgement` stays for older clients only (idempotent; current version only, 409 `The My Wishes notice has changed. Please read the current version.`; body `{ version }`). An acknowledgement was never consent, a waiver, legal advice or a signature |
+| Audit | The legacy route still writes `MY_WISHES_DISCLAIMER_ACKNOWLEDGED` once per user and version (actor id and `{ disclaimerVersion }` only). No Customer Activity event exists for it |
 
 The notice is still not stored per answer, and `acceptedLegalDisclaimer` or similar on a wish is rejected (400) like any
 unknown field.
@@ -112,16 +111,13 @@ All under `/api/v1`, `SessionAuthGuard` + `CustomerGuard` (no session 401; `ADMI
 | `PUT` | `/my-wishes/prompts/:promptKey/response` | 200, created / updated / restored answer |
 | `DELETE` | `/my-wishes/prompts/:promptKey/response` | 204 soft delete with its files; 404 if there is no live answer. Messages made from it stay |
 | `POST` | `/my-wishes/prompts/:promptKey/response/messages` | 201, a new independent DRAFT Message from chosen parts (Phase 15B) |
-| `POST` | `/my-wishes/prompts/:promptKey/response/media/upload-url` | 201, signed ImageKit upload (PHOTO/AUDIO/VIDEO); needs the notice acknowledged |
+| `POST` | `/my-wishes/prompts/:promptKey/response/media/upload-url` | 201, signed ImageKit upload (PHOTO/AUDIO/VIDEO) |
 | `POST` | `/my-wishes/prompts/:promptKey/response/media/:mediaAssetId/complete` | 200, verified and scanned → `READY` |
 | `GET` | `/my-wishes/prompts/:promptKey/response/media` | 200, the wish's live files (`[]` if none) |
 | `GET` | `/my-wishes/prompts/:promptKey/response/media/:mediaAssetId/access-url` | 200, short-lived signed URL (`READY` only) |
 | `DELETE` | `/my-wishes/prompts/:promptKey/response/media/:mediaAssetId` | 204, soft delete, then the file is removed |
-| `GET` | `/my-wishes/disclaimer` | 200 `{ version, text, requiresAcknowledgement, acknowledged, acknowledgedAt }` (own state only) |
-| `POST` | `/my-wishes/disclaimer/acknowledgement` | 200, same shape; body `{ version }` (current version only, idempotent) |
-
-`PUT …/response` and `…/media/upload-url` (adding a file is writing a wish) are 409 until the current notice version is
-acknowledged (Phase 15A); reading, completing an upload already authorised, deleting and creating a message never are.
+| `GET` | `/my-wishes/disclaimer` | 200 `{ version, text, requiresAcknowledgement: false, acknowledged, acknowledgedAt }` (own historical state only) |
+| `POST` | `/my-wishes/disclaimer/acknowledgement` | Legacy (older clients): 200, same shape; body `{ version }` (current version only, idempotent). Not required by anything |
 
 Prompt: `{ key, category, version, prompt, answered, response }`; `response` is null or
 `{ id, promptKey, textContent, mediaCount, createdAt, updatedAt }` (`textContent` may be null, `mediaCount` = `READY`
@@ -164,8 +160,6 @@ storage quota).
   its reconciler, which also retires stale `PENDING_UPLOAD` rows (the `myWishMediaAsset` table is in its list).
 - **Upload shell:** a file needs a wish row to belong to: upload auth creates an empty, private one when there is none (or
   restores a deleted one empty, with the current wording). It is never shown as a wish until it has content.
-- **Notice:** adding a file needs the current notice acknowledged, like saving text (the existing
-  `MyWishesDisclaimerService.assertAcknowledged`, not a second check).
 
 ## Sharing after death (Phase 15B)
 
@@ -181,7 +175,6 @@ Product decisions approved 2026-10-09 (`task.md` Phase 01):
 | Several messages | One wish can make any number of messages; different wishes can go to different people |
 | Timing | `ON_DEATH` or `AFTER_DEATH` (existing `afterDeathDays`) for after-death sharing. `FIXED_DATE`/`NOW` stay available as for any Message but are not "after-death wish release" |
 | Media | PHOTO / AUDIO / VIDEO allowed |
-| Notice | Creating a message reads a wish, so it needs no acknowledgement (Phase 15A gates writing wishes only) |
 | AI help | Deferred post-MVP (below) |
 
 ```text
@@ -234,9 +227,10 @@ notice gate, quota, magic bytes, malware, scanner outage, access, delete; Wish �
 → no release → safeguard → review → admin verifies → `ON_DEATH` and overdue `AFTER_DEATH` released, future one waits →
 Recipient reads copies, never My Wishes; Trusted Contact and admin never see wish content); frontend
 `my-wishes-rich.test.tsx` and Playwright (`vault.spec.ts`, `portals.spec.ts`). Phase 15A: `my-wishes-disclaimer.service.spec.ts` (exact
-wording, status, idempotent acknowledgement, version rules, audit, DTO, guards) and e2e (409 before acknowledgement,
-concurrent submits → one row and one audit event, per-user state, a simulated version 2: read/delete still work, writes
-wait, history kept); frontend `prompts.test.tsx` and Playwright (`e2e/vault.spec.ts`).
+wording, status, legacy idempotent acknowledgement, version rules, audit, DTO, guards) and e2e (no acknowledgement:
+read/create/update/delete/upload/autosave all work and create no rows; legacy route: concurrent submits → one row and one
+audit event; a historical row changes nothing; a simulated version 2 blocks nothing); frontend `prompts.test.tsx` (no
+checkbox or Continue, form usable while the notice loads or fails) and Playwright (`e2e/vault.spec.ts`).
 
 ## Not built
 Wills, estate planning, executors, medical directives, powers of attorney, legal-document generation, a legal review of the

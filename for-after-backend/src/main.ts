@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { RedisStore } from 'connect-redis';
@@ -18,5 +19,7 @@ async function bootstrap() {
   // Runs onModuleDestroy (closes the Postgres pool and Redis) on SIGTERM/SIGINT.
   app.enableShutdownHooks();
   await app.listen(process.env.PORT ?? 4000);
+  // Producer only: queue jobs are consumed by the worker process (src/worker.ts).
+  new Logger('Api').log('API started');
 }
 await bootstrap();

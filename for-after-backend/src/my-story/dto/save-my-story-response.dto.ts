@@ -13,6 +13,7 @@ import {
 } from 'class-validator';
 import {
   IfDefined,
+  PrivateNote,
   TEXT_CONTENT_MAX,
 } from '../../messages/dto/create-message.dto.js';
 import {
@@ -53,6 +54,10 @@ export class SaveMyStoryResponseDto {
     message: 'memoryVaultItemIds must not contain duplicates',
   })
   memoryVaultItemIds?: string[];
+
+  // Owner-only; never shared. Omitted = unchanged, null/blank = cleared.
+  @PrivateNote()
+  privateNote?: string | null;
 }
 
 // GET /my-story/prompts?category=CHILDHOOD

@@ -55,6 +55,7 @@ const setup = (job = fakeJob()) => {
   const email = fakeQueue();
   const audit: Record<string, unknown>[] = [];
   const prisma = {
+    deadLetterJob: { updateMany: vi.fn(async () => ({ count: 0 })) },
     auditLog: {
       create: async ({ data }: { data: Record<string, unknown> }) => {
         audit.push(data);

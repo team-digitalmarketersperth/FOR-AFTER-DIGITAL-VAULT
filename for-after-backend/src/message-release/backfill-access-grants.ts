@@ -10,7 +10,7 @@ import { createAccessGrants } from './message-release.service.js';
  * Explicit, idempotent backfill for releases made before Step 13 (no access
  * grants yet). Dry run unless `apply`. Limitation: contact details were not
  * snapshotted at the time, so grants use the Recipients' CURRENT email/mobile
- * and only still-live assignments. Never run automatically
+ * (and the sender's CURRENT display name) and only still-live assignments. Never run automatically
  * (docs/recipient-portal.md). Logs ids and counts only.
  */
 export async function backfillAccessGrants(

@@ -51,8 +51,8 @@ import {
   MyWishesDisclaimerService,
 } from './my-wishes-disclaimer.service.js';
 
-// Phase 15A: the authoritative My Wishes notice and the session user's own
-// acknowledgement of its current version.
+// Phase 15A: the authoritative My Wishes notice (informational since
+// 2026-10-14). The acknowledgement route is kept for older clients only.
 @ApiTags('My Wishes')
 @ApiCookieAuth(AUTH.customer)
 @Controller('my-wishes/disclaimer')
@@ -135,7 +135,7 @@ export class MyWishesController {
     @Param('promptKey', WishPromptKeyPipe) prompt: MyWishPrompt,
     @Body() dto: SaveMyWishResponseDto,
   ): Promise<WishResponse> {
-    return this.wishes.save(user.id, prompt, dto.textContent);
+    return this.wishes.save(user.id, prompt, dto);
   }
 
   // Also removes the wish's files (Phase 15B). Messages made from it stay.
@@ -160,9 +160,8 @@ export class MyWishesController {
     return this.toMessage.createMessage(user.id, prompt, dto);
   }
 
-  // Phase 15B media: same flow as My Story media. Upload auth needs the
-  // current notice acknowledged and creates the wish's private empty shell
-  // if it has none yet.
+  // Phase 15B media: same flow as My Story media. Upload auth creates the
+  // wish's private empty shell if it has none yet.
   @Post(':promptKey/response/media/upload-url')
   createUploadUrl(
     @CurrentUser() user: SafeUser,

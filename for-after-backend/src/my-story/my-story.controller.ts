@@ -46,6 +46,7 @@ import {
 import {
   MyStoryService,
   type PromptWithResponse,
+  type StoryBook,
   type StoryResponse,
 } from './my-story.service.js';
 import { AUTH } from '../config/swagger.js';
@@ -63,6 +64,20 @@ export class PromptKeyPipe implements PipeTransform<string, MyStoryPrompt> {
     const prompt = getPromptByKey(key);
     if (!prompt) throw new NotFoundException(PROMPT_NOT_FOUND);
     return prompt;
+  }
+}
+
+/** The owner's chaptered reading view: the session user's own answers, read-only. */
+@ApiTags('My Story')
+@ApiCookieAuth(AUTH.customer)
+@Controller('my-story')
+@UseGuards(SessionAuthGuard, CustomerGuard)
+export class MyStoryBookController {
+  constructor(private readonly story: MyStoryService) {}
+
+  @Get('book')
+  book(@CurrentUser() user: SafeUser): Promise<StoryBook> {
+    return this.story.book(user.id);
   }
 }
 

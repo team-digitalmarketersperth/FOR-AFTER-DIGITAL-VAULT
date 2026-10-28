@@ -31,7 +31,19 @@ const row = {
   createdAt: new Date(),
   updatedAt: new Date(),
   recipients: [{ recipient: sofia }],
+  versions: [{ version: 1 }],
 };
+
+// What lockOwnedDraft's SELECT ... FOR UPDATE returns for an owned DRAFT.
+const locked = {
+  title: row.title,
+  contentType: row.contentType,
+  textContent: row.textContent,
+  status: 'DRAFT',
+  createdAt: new Date('2026-10-01T00:00:00Z'),
+  updatedAt: new Date('2026-10-02T00:00:00Z'),
+};
+const v1 = { version: 1, title: row.title, contentType: 'TEXT', textContent: row.textContent };
 
 const noMatch = () =>
   new Prisma.PrismaClientKnownRequestError('No record found', {
@@ -46,22 +58,38 @@ const setup = (owned = 1) => {
     findMany: vi.fn().mockResolvedValue([row]),
     findFirst: vi.fn().mockResolvedValue(row),
     update: vi.fn().mockResolvedValue(row),
+    findUniqueOrThrow: vi.fn().mockResolvedValue(row),
     count: vi.fn().mockResolvedValue(0),
   };
   const recipient = { count: vi.fn().mockResolvedValue(owned) };
+  const messageVersion = {
+    findFirst: vi.fn().mockResolvedValue(v1),
+    create: vi.fn().mockResolvedValue({}),
+  };
+  const draftRecovery = { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) };
+  // The row lock: an owned DRAFT unless a test says otherwise.
+  const $queryRaw = vi.fn().mockResolvedValue([locked]);
   // The media cleanup (file purge); named storage for the assertions below.
   const storage = {
     purge: vi.fn().mockResolvedValue({ purged: 0, failed: 0 }),
   };
-  const prisma = {
+  const prisma: Record<string, unknown> = {
     message,
     recipient,
-    // Array form: run the queries as given.
-    $transaction: vi.fn((ops: Promise<unknown>[]) => Promise.all(ops)),
+    messageVersion,
+    draftRecovery,
+    $queryRaw,
   };
+  // Array form: run the queries as given. Callback form: the same client as tx.
+  prisma.$transaction = vi.fn((arg: unknown) =>
+    Array.isArray(arg) ? Promise.all(arg) : (arg as (tx: unknown) => unknown)(prisma),
+  );
   return {
     message,
     recipient,
+    messageVersion,
+    draftRecovery,
+    $queryRaw,
     storage,
     service: new MessagesService(
       prisma as unknown as PrismaService,
@@ -209,8 +237,27 @@ describe('MessagesService', () => {
       title: 'For Sofia',
       textContent: 'Fictional text.',
       contentType: 'TEXT',
+      privateNote: null,
       status: 'DRAFT',
       recipients: { create: [{ recipientId: 'r1' }] },
+      // Version 1 is written with the message (explicit save = checkpoint).
+      versions: {
+        create: {
+          version: 1,
+          reason: 'CREATED',
+          title: 'For Sofia',
+          contentType: 'TEXT',
+          textContent: 'Fictional text.',
+        },
+      },
+    });
+  });
+
+  it('create clears only the new-message autosave it names, in the same transaction', async () => {
+    const { draftRecovery, service } = setup();
+    await service.create('owner-a', { ...create, recoveryDraftKey: 'k1' });
+    expect(draftRecovery.deleteMany).toHaveBeenCalledWith({
+      where: { userId: 'owner-a', type: 'NEW_MESSAGE', key: 'k1' },
     });
   });
 
@@ -264,7 +311,7 @@ describe('MessagesService', () => {
 
   it('lists one page of the owner’s live messages, newest first, as summaries', async () => {
     const { message, service } = setup();
-    const { createdAt: _, ...summaryRow } = row;
+    const { createdAt: _, versions: __, ...summaryRow } = row;
     message.findMany.mockResolvedValue([summaryRow]);
     message.count.mockResolvedValue(30);
     const res = await service.findPageForOwner('owner-a', 2, 10);
@@ -330,14 +377,18 @@ describe('MessagesService', () => {
     );
   });
 
-  it('update title/text is one owner-scoped, DRAFT-only write', async () => {
-    const { message, recipient, service } = setup();
+  it('update title/text locks the owned DRAFT row first, then writes', async () => {
+    const { message, recipient, $queryRaw, service } = setup();
     await service.update('owner-a', 'm1', {
       title: 'New',
       textContent: 'New text',
     });
+    // SELECT ... WHERE id = $1 AND ownerUserId = $2 AND deletedAt IS NULL FOR UPDATE
+    const [sql, ...values] = $queryRaw.mock.calls[0];
+    expect(sql.join('?')).toMatch(/"ownerUserId" = \?::uuid AND "deletedAt" IS NULL\s+FOR UPDATE/);
+    expect(values).toEqual(['m1', 'owner-a']);
     const { where, data } = message.update.mock.calls[0][0];
-    expect(where).toEqual(draft('owner-a', 'm1'));
+    expect(where).toEqual({ id: 'm1' });
     expect(data).toEqual({
       title: 'New',
       textContent: 'New text',
@@ -390,7 +441,8 @@ describe('MessagesService', () => {
   });
 
   it('cross-user update and delete are 404', async () => {
-    const { message, service } = setup();
+    const { message, $queryRaw, service } = setup();
+    $queryRaw.mockResolvedValue([]);
     message.update.mockRejectedValue(noMatch());
     await expect(
       service.update('owner-b', 'm1', { title: 'X' }),
@@ -404,7 +456,8 @@ describe('MessagesService', () => {
   });
 
   it('an owned message that is not DRAFT is 409 on update and delete', async () => {
-    const { message, service } = setup();
+    const { message, $queryRaw, service } = setup();
+    $queryRaw.mockResolvedValue([{ ...locked, status: 'SCHEDULED' }]);
     message.update.mockRejectedValue(noMatch());
     message.count.mockResolvedValue(1);
     await expect(
@@ -457,5 +510,64 @@ describe('MessagesService', () => {
     message.create.mockRejectedValue(new Error('boom'));
     await expect(service.create('owner-a', create)).rejects.toThrow('boom');
     expect(message.count).not.toHaveBeenCalled();
+  });
+});
+
+describe('MessagesService version checkpoints (explicit save only)', () => {
+  it('a changed title/text becomes the next version, EDITED', async () => {
+    const { message, messageVersion, service } = setup();
+    message.update.mockResolvedValue({ ...row, textContent: 'New text' });
+    await service.update('owner-a', 'm1', { textContent: 'New text' });
+    expect(messageVersion.create).toHaveBeenCalledTimes(1);
+    expect(messageVersion.create.mock.calls[0][0].data).toEqual({
+      messageId: 'm1',
+      version: 2,
+      reason: 'EDITED',
+      title: 'For Sofia',
+      contentType: 'TEXT',
+      textContent: 'New text',
+    });
+  });
+
+  it('a save that changes nothing versioned (same text, recipients only) writes no version', async () => {
+    const { messageVersion, service } = setup(2);
+    await service.update('owner-a', 'm1', { recipientIds: ['r1', 'r2'] });
+    await service.update('owner-a', 'm1', { textContent: row.textContent });
+    expect(messageVersion.create).not.toHaveBeenCalled();
+  });
+
+  it('a message from before version history keeps its old content as version 1 first', async () => {
+    const { message, messageVersion, service } = setup();
+    messageVersion.findFirst.mockResolvedValue(null);
+    message.update.mockResolvedValue({ ...row, title: 'Renamed' });
+    await service.update('owner-a', 'm1', { title: 'Renamed' });
+    const [baseline, edit] = messageVersion.create.mock.calls.map((c) => c[0].data);
+    expect(baseline).toEqual({
+      messageId: 'm1',
+      version: 1,
+      // updatedAt is a day after createdAt: it had been edited before.
+      reason: 'EDITED',
+      createdAt: locked.updatedAt,
+      title: 'For Sofia',
+      contentType: 'TEXT',
+      textContent: 'Fictional text.',
+    });
+    expect(edit).toMatchObject({ version: 2, reason: 'EDITED', title: 'Renamed' });
+  });
+
+  it("an explicit save clears this message's autosave", async () => {
+    const { draftRecovery, service } = setup();
+    await service.update('owner-a', 'm1', { title: 'New' });
+    expect(draftRecovery.deleteMany).toHaveBeenCalledWith({
+      where: { userId: 'owner-a', type: 'MESSAGE', key: 'm1' },
+    });
+  });
+
+  it('a rejected save (not DRAFT) writes no version and keeps the autosave', async () => {
+    const { $queryRaw, messageVersion, draftRecovery, service } = setup();
+    $queryRaw.mockResolvedValue([{ ...locked, status: 'RELEASED' }]);
+    await expect(service.update('owner-a', 'm1', { title: 'X' })).rejects.toThrow(ConflictException);
+    expect(messageVersion.create).not.toHaveBeenCalled();
+    expect(draftRecovery.deleteMany).not.toHaveBeenCalled();
   });
 });

@@ -83,7 +83,7 @@ Critical operations (e.g., processing a death report, releasing messages) requir
 
 - **Storage Access**: Direct S3/R2 signed URLs are used with strict expiration times. No buckets have public read access.
 - **Media Delivery**: photos, audio and video are private ImageKit files served only through short-lived signed URLs (`ik-t` expiry + `ik-s` signature); unsigned requests are refused. `IMAGEKIT_PRIVATE_KEY` is backend-only.
-- **My Wishes notice (Phase 15A)**: the backend serves the notice and enforces a per-version acknowledgement before any wish is written; reading and deleting never need it. The acknowledgement record holds the user id, version and time only (no IP, device or content), is never described as legal consent, and existing users were not backfilled.
+- **My Wishes notice (Phase 15A; informational since 2026-10-14)**: the backend serves the notice; nothing about My Wishes requires an acknowledgement any more. Historical acknowledgement rows are kept and never affect access; the legacy route stays for older clients. The acknowledgement record holds the user id, version and time only (no IP, device or content), is never described as legal consent, and existing users were not backfilled.
 - **My Wishes (Phase 15B)**: wishes and their files stay private to the Customer while alive and after death; Trusted Contacts and admins never read them (admin death-verification APIs carry no wish data). Files are private ImageKit media with the same checks (magic bytes, ClamAV, quota) and signed URLs. Recipients only ever see a **copied Message snapshot** the Customer made deliberately, released by the normal verified-death path; no AI is used (deferred post-MVP).
 - **My Story (Phase 14B)**: answers, their files and their linked memories are private to the Customer. Files are private ImageKit media with the same checks (magic bytes, ClamAV) and signed URLs as other media. Recipients only ever see a **copied Message snapshot** made deliberately by the Customer; a linked memory grants nobody access and is never copied.
 - **Storage quota (Phase 12C)**: per-Customer limit enforced server-side before any upload is signed, under a row lock on the Customer (no parallel oversubscription); usage is computed from PostgreSQL and only the owner can read it (`GET /users/me/storage`). Quota errors carry no plan, limit or other Customer's data.
@@ -174,6 +174,17 @@ Full design: `docs/death-verification.md`.
   the audit trail. The safety notice carries no report or content data. Admin decision notes and report notes are never
   logged; audit rows hold no free text.
 - **Durable audit trail.** `DeathVerificationAuditEvent` rows for every step, written with the change they record.
+- **Second confirmation (Phase 19B) ≠ verification ≠ release.** A case opened while two Trusted Contacts could confirm
+  needs two distinct reporters (by normalized email, so duplicate rows never make two people) before verify; the
+  number is snapshotted at opening and never lowered. The check runs inside the verify transaction under the case row
+  lock a report also takes (no stale count), with no override. Counts are admin-only; contacts, Customers and
+  Recipients see nothing new. See `docs/death-verification.md` §2B.
+- **Evidence (Phase 19A) ≠ verification ≠ release.** A reporter's supporting files (PDF/JPEG/PNG) change nothing but
+  their own rows; verify keeps its rules and never requires evidence. Authorization comes from the session + route
+  relationship (never body ids); another contact, the Customer and Recipients get `404`/`401`. Same private ImageKit
+  storage, provider check, file-signature check and ClamAV scan as all media; a case that closes mid-upload discards
+  the upload. Signed URLs are short-lived, issued per click, and never stored, logged or audited; admin views are
+  recorded on the case timeline. No OCR or automated judgement of content. See `docs/death-verification.md` §2A.
 
 ## 17. Admin backend (Step 16, as built)
 
@@ -194,7 +205,9 @@ Full design: `docs/admin.md`.
 - **Data minimisation.** Admin user views return account metadata and counts, never vault content, notes, secrets or
   URLs. Detail views of users and death cases are audited.
 - **Queues.** A server-side allowlist maps public names to the app's own queues; failed-job reasons are sanitized (no
-  URLs/credentials/stack traces); a retry only re-queues and the worker re-checks PostgreSQL.
+  URLs/credentials/stack traces); a retry only re-queues and the worker re-checks PostgreSQL. Durable dead letters
+  (Phase 17A) store ids, a safe error code and the sanitized first line only (no payload, content, addresses, secrets
+  or stacks); operator alerts carry ids and the code only and are sent directly, never through a queue.
 - **CSRF.** Same model as Customer routes (`SameSite=Lax` + CORS allowlist + JSON). No token yet; tracked in Phase 05.
 - **Known gaps.** Enrollment is trust-on-first-use (promote only when the owner enrolls immediately); no MFA reset API
   (operator procedure in `docs/admin.md` §3); password-login throttle is in memory per instance.

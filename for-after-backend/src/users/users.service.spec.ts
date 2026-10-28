@@ -4,12 +4,21 @@ import type { PrismaService } from '../prisma/prisma.service.js';
 import { UsersService } from './users.service.js';
 
 const setup = () => {
-  const user = { findUnique: vi.fn(), create: vi.fn(), update: vi.fn() };
+  const user = {
+    findUnique: vi.fn(),
+    // updateProfile compares before/after (no history row for a no-op save).
+    findUniqueOrThrow: vi.fn().mockResolvedValue({ firstName: null, lastName: null }),
+    create: vi.fn(),
+    update: vi.fn(),
+  };
   const auditLog = { create: vi.fn() };
+  // Recent changes (customer activity): recorded, not asserted here.
+  const customerActivity = { create: vi.fn(async () => ({})) };
+
   const prisma = {
     user,
     auditLog,
-    $transaction: (fn: (tx: unknown) => unknown) => fn({ user, auditLog }),
+    $transaction: (fn: (tx: unknown) => unknown) => fn({ user, auditLog, customerActivity }),
   };
   return {
     user,

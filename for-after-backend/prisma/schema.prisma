@@ -71,6 +71,10 @@ model User {
   authTokens AuthToken[]
 
   recipientPhotos RecipientPhoto[]
+
+  activities      CustomerActivity[]
+  // Autosaved, not-yet-saved edits (Message, My Story, My Wishes).
+  draftRecoveries DraftRecovery[]
 }
 
 enum AuthTokenPurpose {
@@ -158,6 +162,8 @@ enum AuditEventType {
   TRUSTED_CONTACT_INVITATION_DECLINED
   // Phase 15A: the version only (never wish content or the notice text).
   MY_WISHES_DISCLAIMER_ACKNOWLEDGED
+  // Phase 17A: an admin re-queued a dead-lettered job. Ids and outcome only.
+  DEAD_LETTER_RETRY_REQUESTED
 }
 
 // Admin actors (Step 16), the Customer acting on their own account (Step 22)
@@ -215,11 +221,12 @@ model Recipient {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  messageRecipients MessageRecipient[]
-  accessGrants      RecipientMessageAccessGrant[]
+  messageRecipients  MessageRecipient[]
+  accessGrants       RecipientMessageAccessGrant[]
+  releaseOccurrences MessageRecipientRelease[]
   // Phase 09: at most one READY, non-deleted photo (partial unique index in
   // the migration). Customer-managed; the Recipient never sees it.
-  photos            RecipientPhoto[]
+  photos             RecipientPhoto[]
 
   @@index([ownerUserId])
 }
@@ -271,7 +278,11 @@ model TrustedContactInvitation {
   trustedContactId String         @db.Uuid
   trustedContact   TrustedContact @relation(fields: [trustedContactId], references: [id], onDelete: Cascade)
 
-  emailNormalized String
+  // Where this link was sent: exactly one is set (CHECK in the migration).
+  // The link only works while it still matches the contact's current email
+  // (email invitation) or mobile (SMS invitation, E.164).
+  emailNormalized String?
+  mobile          String?
   tokenHash       String                         @unique
   status          TrustedContactInvitationStatus @default(PENDING)
   expiresAt       DateTime
@@ -341,12 +352,19 @@ model DeathVerificationCase {
   // Not proof that anything has been released.
   deathTriggersActivatedAt DateTime?
 
+  // Phase 19B: distinct Trusted Contact confirmations (reports by distinct
+  // reporter email) admin verify requires; snapshotted when the case opens and
+  // never recalculated. 1 or 2 (CHECK in the migration). NULL only on cases
+  // opened before 19B that were already closed: such a case is never verified.
+  requiredConfirmations Int?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   reports     DeathReport[]
   auditEvents DeathVerificationAuditEvent[]
   activations DeathTriggeredMessageActivation[]
+  evidence    DeathVerificationEvidence[]
 
   @@index([ownerUserId, openedAt])
   @@index([status])
@@ -365,6 +383,10 @@ enum DeathVerificationAuditEventType {
   ADMIN_REJECTED
   DEATH_TRIGGER_ACTIVATION_STARTED
   DEATH_TRIGGER_ACTIVATION_COMPLETED
+  // Phase 19A: a reporter's evidence file passed every check (READY), and an
+  // admin opened one. Supporting material only: neither changes the case.
+  EVIDENCE_UPLOADED
+  EVIDENCE_VIEWED_BY_ADMIN
 }
 
 enum DeathVerificationActorType {
@@ -440,8 +462,47 @@ model DeathReport {
 
   createdAt DateTime @default(now())
 
+  evidence DeathVerificationEvidence[]
+
   @@unique([deathVerificationCaseId, reportedByTrustedContactId])
   @@index([reportedByTrustedContactId])
+}
+
+// Phase 19A: a supporting file (death certificate etc.) a reporter attaches to
+// their own DeathReport while the case is open. Supporting material only: it
+// never verifies the case, changes the account or releases anything. Same
+// storage columns and upload checks as every media table, but not Customer
+// content: outside the storage quota and the Storage Manager. Cascades with
+// its report and case, like the report itself.
+model DeathVerificationEvidence {
+  id                      String                @id @default(uuid()) @db.Uuid
+  deathVerificationCaseId String                @db.Uuid
+  deathVerificationCase   DeathVerificationCase @relation(fields: [deathVerificationCaseId], references: [id], onDelete: Cascade)
+  deathReportId           String                @db.Uuid
+  deathReport             DeathReport           @relation(fields: [deathReportId], references: [id], onDelete: Cascade)
+
+  status     MediaAssetStatus @default(PENDING_UPLOAD)
+  storageKey String           @unique
+
+  storageProvider  MediaStorageProvider @default(IMAGEKIT)
+  // Provider's own id, set once the upload is verified (ImageKit fileId).
+  providerFileId   String?
+  // Set once the provider object is gone; a soft-deleted row without it is
+  // retried by the media cleanup reconciler.
+  storageDeletedAt DateTime?
+
+  originalFileName String // metadata only, never used as a path; admin-only
+  mimeType         String
+  sizeBytes        Int // expected size, verified against storage on complete
+
+  uploadedAt DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([deathVerificationCaseId, status])
+  @@index([deathReportId, status])
 }
 
 // Future values are defined now; the API only accepts TEXT until media exists.
@@ -472,13 +533,20 @@ model Message {
   contentType MessageContentType @default(TEXT)
   textContent String?
   status      MessageStatus      @default(DRAFT)
+  // Owner-only reminder (docs/private-notes.md): never released, shared,
+  // copied, searched, versioned or shown to anyone else.
+  privateNote String?
 
-  recipients      MessageRecipient[]
-  schedule        MessageSchedule?
-  mediaAssets     MediaAsset[]
-  release         MessageRelease?
-  accessGrants    RecipientMessageAccessGrant[]
-  deathActivation DeathTriggeredMessageActivation?
+  recipients        MessageRecipient[]
+  schedule          MessageSchedule?
+  mediaAssets       MediaAsset[]
+  release           MessageRelease?
+  accessGrants      RecipientMessageAccessGrant[]
+  deathActivation   DeathTriggeredMessageActivation?
+  // Phase 16: BIRTHDAY / ANNIVERSARY / ANNUAL_AFTER_DEATH, per Recipient per year.
+  recipientReleases MessageRecipientRelease[]
+  // Saved checkpoints of the written content (title, type, text), newest = current.
+  versions          MessageVersion[]
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -486,6 +554,33 @@ model Message {
 
   @@index([ownerUserId])
   @@index([ownerUserId, status])
+}
+
+enum MessageVersionReason {
+  CREATED
+  EDITED
+  RESTORED
+}
+
+// One row per explicit save (or restore) that changed title, contentType or
+// textContent. Immutable; media, recipients and schedule are not versioned
+// (deleted media is purged from storage, so it could not be restored).
+// Owned through the Message; removed with it.
+model MessageVersion {
+  id        String  @id @default(uuid()) @db.Uuid
+  messageId String  @db.Uuid
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  // 1, 2, 3... per message, assigned under the message row lock.
+  version     Int
+  reason      MessageVersionReason
+  title       String
+  contentType MessageContentType
+  textContent String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([messageId, version])
 }
 
 // "This message is intended for this Recipient", not "may read it now".
@@ -503,8 +598,8 @@ model MessageRecipient {
   @@index([recipientId])
 }
 
-// Product trigger types. The API accepts only FIXED_DATE, ON_DEATH and
-// AFTER_DEATH for now; the others are reserved (docs/scheduling.md).
+// Product trigger types, all accepted by the API (docs/scheduling.md).
+// BIRTHDAY, ANNIVERSARY and ANNUAL_AFTER_DEATH recur yearly per Recipient.
 enum ReleaseTriggerType {
   NOW
   FIXED_DATE
@@ -517,7 +612,7 @@ enum ReleaseTriggerType {
 }
 
 // When a message is intended to become releasable. PostgreSQL is the source
-// of truth; Step 12 executes FIXED_DATE only (docs/message-release.md).
+// of truth (docs/message-release.md).
 // Hard-deleted on unschedule (the Message stays); kept after release. The
 // migration adds a CHECK that the fields match the trigger type.
 model MessageSchedule {
@@ -526,8 +621,15 @@ model MessageSchedule {
   message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
 
   triggerType    ReleaseTriggerType
-  scheduledFor   DateTime? // FIXED_DATE only, UTC instant
+  scheduledFor   DateTime? // FIXED_DATE, CUSTOM_EVENT (derived), UTC instant
   afterDeathDays Int? // AFTER_DEATH only
+  // Phase 16 (CHECK in the migration says which trigger uses which).
+  timezone       String? // IANA zone: BIRTHDAY, ANNIVERSARY, CUSTOM_EVENT, ANNUAL_AFTER_DEATH
+  localTime      String? // "HH:mm" local wall time, same triggers
+  annualMonth    Int? // ANNIVERSARY
+  annualDay      Int? // ANNIVERSARY
+  eventDate      DateTime?          @db.Date // CUSTOM_EVENT local date
+  eventLabel     String? // CUSTOM_EVENT, plain text
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -554,6 +656,31 @@ model MessageRelease {
   updatedAt DateTime @updatedAt
 }
 
+// Phase 16: one yearly occurrence of a recurring trigger for one Recipient.
+// The next one is created when this one releases, so PostgreSQL always holds
+// the next due time. The unique key is the final guard against a double
+// release. The first release creates the grant; every release (including
+// later years) creates its own ReleaseNotification.
+model MessageRecipientRelease {
+  id          String    @id @default(uuid()) @db.Uuid
+  messageId   String    @db.Uuid
+  message     Message   @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  recipientId String    @db.Uuid
+  recipient   Recipient @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+
+  occurrenceYear Int
+  dueAt          DateTime
+  releasedAt     DateTime?
+
+  notification ReleaseNotification?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([messageId, recipientId, occurrenceYear])
+  @@index([releasedAt, dueAt])
+}
+
 // Post-release authorization (Step 13): this released Message was released to
 // this Recipient, reachable by these contact details. Written in the release
 // transaction and frozen: later Recipient edits or soft deletes do not move or
@@ -573,13 +700,18 @@ model RecipientMessageAccessGrant {
   recipient        Recipient      @relation(fields: [recipientId], references: [id], onDelete: Cascade)
 
   // Snapshots at release time. Email: trimmed + lowercased (same as the API).
-  // Mobile: as stored (no normalization exists yet; SMS OTP is deferred).
+  // Mobile: E.164 without formatting (matched by SMS sign-in).
   recipientEmailNormalized  String?
   recipientMobileNormalized String?
+  // Phase 18: the sender's display name ("First Last") when this Recipient got
+  // access, shown with the released Message. Never rewritten; null on grants
+  // created before 2026-10-16 or when the Customer had no name.
+  senderDisplayNameSnapshot String?
 
   // Step 24: the "a message is waiting for you" email, if the grant has an email.
-  notification ReleaseNotification?
-  createdAt    DateTime             @default(now())
+  // Phase 16: several for recurring triggers (one per occurrence).
+  notifications ReleaseNotification[]
+  createdAt     DateTime              @default(now())
 
   @@unique([messageReleaseId, recipientId])
   @@index([messageId])
@@ -595,13 +727,17 @@ enum ReleaseNotificationStatus {
 }
 
 // Step 24. One "a message is waiting for you" email per access grant that has
-// an email snapshot, created in the release transaction. The unique grantId is
-// the idempotency key: retries, reconciliation and a second worker can never
-// make a second row. Operational fields only: no subject, body or content.
+// an email snapshot, created in the release transaction. Idempotency key:
+// grantId for a whole-message release (partial unique index in the
+// migration), occurrenceId for a recurring occurrence (Phase 16). Retries,
+// reconciliation and a second worker can never make a second row.
+// Operational fields only: no subject, body or content.
 model ReleaseNotification {
-  id      String                      @id @default(uuid()) @db.Uuid
-  grantId String                      @unique @db.Uuid
-  grant   RecipientMessageAccessGrant @relation(fields: [grantId], references: [id], onDelete: Cascade)
+  id           String                      @id @default(uuid()) @db.Uuid
+  grantId      String                      @db.Uuid
+  grant        RecipientMessageAccessGrant @relation(fields: [grantId], references: [id], onDelete: Cascade)
+  occurrenceId String?                     @unique @db.Uuid
+  occurrence   MessageRecipientRelease?    @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
 
   status            ReleaseNotificationStatus @default(PENDING)
   attemptCount      Int                       @default(0)
@@ -615,6 +751,60 @@ model ReleaseNotification {
   updatedAt DateTime @updatedAt
 
   @@index([status, createdAt])
+  @@index([grantId])
+}
+
+// Phase 17A. OPEN = retries exhausted, needs attention; REQUEUED = an admin
+// queued it again (resolved when that run completes); RESOLVED = the job later
+// completed (worker outcome in `resolution`) or the entity no longer exists.
+enum DeadLetterStatus {
+  OPEN
+  REQUEUED
+  RESOLVED
+}
+
+enum OpsAlertStatus {
+  PENDING
+  SENT
+  FAILED
+  NOT_CONFIGURED
+}
+
+// Phase 17A durable dead letter: one row per BullMQ job id that exhausted its
+// automatic retries. BullMQ's failed set (7 days) is only a short-term view;
+// this row is kept. Ids and safe categories only: never a payload, message
+// content, address, note or provider response. No FK on purpose: the entity
+// can be deleted and the operational record must stay.
+model DeadLetterJob {
+  id           String           @id @default(uuid()) @db.Uuid
+  // Stable public queue name (message-release, death-verification, email-delivery).
+  queueName    String
+  jobId        String
+  jobName      String
+  // Message | MessageRecipientRelease | DeathVerificationCase | ReleaseNotification
+  entityType   String
+  entityId     String?          @db.Uuid
+  attemptsMade Int
+  errorCode    String?
+  // Sanitized: first line, no URLs/emails/secrets, max 200 chars. No stack.
+  errorMessage String?
+  // Latest terminal failure of this job id; failureCount counts them.
+  failedAt     DateTime
+  failureCount Int              @default(1)
+  status       DeadLetterStatus @default(OPEN)
+  // Worker outcome category of the run that resolved it (e.g. released, stale).
+  resolution   String?
+  requeuedAt   DateTime?
+  resolvedAt   DateTime?
+  alertStatus  OpsAlertStatus   @default(PENDING)
+  alertedAt    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([queueName, jobId])
+  @@index([status, failedAt])
+  @@index([queueName, failedAt])
 }
 
 // VIDEO is reserved; the API accepts PHOTO and AUDIO only.
@@ -696,6 +886,9 @@ model MemoryVaultItem {
   title       String
   category    MemoryVaultCategory
   textContent String?
+  // Owner-only reminder (docs/private-notes.md): never released, shared,
+  // copied, searched, versioned or shown to anyone else.
+  privateNote String?
 
   mediaAssets MemoryVaultMediaAsset[]
   tags        MemoryVaultItemTag[]
@@ -788,6 +981,9 @@ model MyStoryResponse {
   // Optional since Phase 14B: an answer may be photos/recordings or linked
   // memories only. The service never lets a saved answer be empty.
   textContent String?
+  // Owner-only reminder (docs/private-notes.md): never released, shared,
+  // copied, searched, versioned or shown to anyone else.
+  privateNote String?
 
   mediaAssets MyStoryMediaAsset[]
   memoryLinks MyStoryMemoryLink[]
@@ -862,6 +1058,9 @@ model MyWishResponse {
   // Optional since Phase 15B: a wish may be photos/recordings only. The
   // service never lets a saved wish be empty.
   textContent String?
+  // Owner-only reminder (docs/private-notes.md): never released, shared,
+  // copied, searched, versioned or shown to anyone else.
+  privateNote String?
 
   mediaAssets MyWishMediaAsset[]
 
@@ -954,4 +1153,80 @@ model RecipientPhoto {
 
   @@index([ownerUserId])
   @@index([recipientId, status])
+}
+
+// Customer activity ("Recent changes"): the account owner's own meaningful
+// changes, in their own words. Not the admin AuditLog: no IP, device, actor
+// or content, and it goes with the account. Kept when the item it names is
+// deleted (no FK to it). Starts when the feature was enabled; never backfilled.
+enum CustomerActivityType {
+  PERSON_ADDED
+  PERSON_UPDATED
+  PERSON_REMOVED
+  TRUSTED_CONTACT_ADDED
+  TRUSTED_CONTACT_UPDATED
+  TRUSTED_CONTACT_REMOVED
+  MESSAGE_CREATED
+  MESSAGE_UPDATED
+  MESSAGE_DELETED
+  MESSAGE_SCHEDULED
+  MESSAGE_RESCHEDULED
+  MESSAGE_UNSCHEDULED
+  MEMORY_ADDED
+  MEMORY_UPDATED
+  MEMORY_DELETED
+  STORY_RESPONSE_ADDED
+  STORY_RESPONSE_UPDATED
+  STORY_RESPONSE_DELETED
+  WISH_RESPONSE_ADDED
+  WISH_RESPONSE_UPDATED
+  WISH_RESPONSE_DELETED
+  PROFILE_UPDATED
+  EMAIL_CHANGED
+  MESSAGE_VERSION_RESTORED
+}
+
+model CustomerActivity {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type     CustomerActivityType
+  // The item's id (a prompt key for My Story / My Wishes), for a link back
+  // while it still exists. Never a name, title or any content.
+  entityId String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt(sort: Desc), id(sort: Desc)])
+}
+
+enum DraftRecoveryType {
+  MESSAGE // key = Message id (an existing DRAFT)
+  NEW_MESSAGE // key = server-issued id; no Message row until Save
+  MY_STORY // key = prompt key
+  MY_WISHES // key = prompt key
+}
+
+// Autosave: the Customer's unsaved edits, kept server-side so they can be
+// recovered. Never the canonical content, never a version, never logged.
+// payload is validated per type (text fields only). Expires 30 days after
+// the last autosave; explicit Save or Discard deletes it.
+model DraftRecovery {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type         DraftRecoveryType
+  key          String
+  payload      Json
+  // What the editor started from (a Message version number, a hash of an
+  // answer's saved text, or "none"), to flag edits made elsewhere since.
+  baseRevision String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  expiresAt DateTime
+
+  @@unique([userId, type, key])
 }

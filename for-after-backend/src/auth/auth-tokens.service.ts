@@ -23,6 +23,7 @@ import {
   UserStatus,
 } from '../generated/prisma/client.js';
 import { positiveInt } from '../media/media.service.js';
+import { recordActivity } from '../activity/customer-activity.js';
 import { errorCode, PrismaService } from '../prisma/prisma.service.js';
 import { maskEmail } from './dto/register.dto.js';
 
@@ -408,6 +409,8 @@ export class AuthTokensService {
           subjectType: 'User',
           subjectId: used.userId,
         });
+        // The Customer's own "Recent changes" (no addresses).
+        await recordActivity(tx, { userId: used.userId, type: 'EMAIL_CHANGED' });
         return {
           result: 'changed' as const,
           userId: used.userId,

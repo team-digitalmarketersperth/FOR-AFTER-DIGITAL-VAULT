@@ -11,6 +11,11 @@ import {
 } from '../generated/prisma/client.js';
 import { positiveInt } from '../media/media.service.js';
 import { errorCode, PrismaService } from '../prisma/prisma.service.js';
+import {
+  createFirstOccurrences,
+  firstOccurrence,
+  type RecurringSchedule,
+} from '../message-release/recipient-occurrences.js';
 import { DeathNoticeDelivery } from './death-verification-notice.js';
 
 const DAY_MS = 86_400_000;
@@ -48,6 +53,7 @@ export const OPEN_STATUSES: Status[] = [
 export const DEATH_TRIGGERS: ReleaseTriggerType[] = [
   ReleaseTriggerType.ON_DEATH,
   ReleaseTriggerType.AFTER_DEATH,
+  ReleaseTriggerType.ANNUAL_AFTER_DEATH,
 ];
 
 type Actor =
@@ -78,13 +84,35 @@ export const audit = (
  * activated. ON_DEATH: as soon as For After verified the death (verifiedAt),
  * never the historical time of death. AFTER_DEATH: the approved time of death
  * + afterDeathDays (UTC days), so it may already be overdue at verification.
+ * ANNUAL_AFTER_DEATH (Phase 16): the first anniversary of the approved death
+ * (one calendar year later, local time and zone of the schedule); it then
+ * releases through per-Recipient yearly occurrences.
  */
 export const deathTriggerDueAt = (
-  schedule: { triggerType: ReleaseTriggerType; afterDeathDays: number | null },
+  schedule: Partial<RecurringSchedule> & {
+    triggerType: ReleaseTriggerType;
+    afterDeathDays: number | null;
+  },
   verifiedAt: Date,
   verifiedDeathAt: Date,
 ): Date | null => {
   if (schedule.triggerType === ReleaseTriggerType.ON_DEATH) return verifiedAt;
+  if (schedule.triggerType === ReleaseTriggerType.ANNUAL_AFTER_DEATH) {
+    return (
+      firstOccurrence(
+        {
+          triggerType: schedule.triggerType,
+          timezone: schedule.timezone ?? null,
+          localTime: schedule.localTime ?? null,
+          annualMonth: null,
+          annualDay: null,
+        },
+        null,
+        verifiedDeathAt,
+        verifiedAt,
+      )?.dueAt ?? null
+    );
+  }
   if (
     schedule.triggerType === ReleaseTriggerType.AFTER_DEATH &&
     schedule.afterDeathDays != null
@@ -308,7 +336,16 @@ export class DeathVerificationWorkflow {
         },
         select: {
           id: true,
-          schedule: { select: { triggerType: true, afterDeathDays: true } },
+          schedule: {
+            select: {
+              triggerType: true,
+              afterDeathDays: true,
+              timezone: true,
+              localTime: true,
+              annualMonth: true,
+              annualDay: true,
+            },
+          },
         },
       });
       const data = pending.flatMap(({ id, schedule }) => {
@@ -330,6 +367,13 @@ export class DeathVerificationWorkflow {
         data,
         skipDuplicates: true,
       });
+      // ANNUAL_AFTER_DEATH: the yearly occurrences per live Recipient, only
+      // now that the death is verified (the reconciler queues them).
+      for (const { id, schedule } of pending) {
+        if (schedule?.triggerType === ReleaseTriggerType.ANNUAL_AFTER_DEATH) {
+          await createFirstOccurrences(tx, id, schedule, now, verifiedDeathAt);
+        }
+      }
       if (first) {
         await tx.deathVerificationCase.update({
           where: { id: caseId },
@@ -342,6 +386,7 @@ export class DeathVerificationWorkflow {
       const waiting = await tx.deathTriggeredMessageActivation.findMany({
         where: {
           deathVerificationCaseId: caseId,
+          triggerType: { not: ReleaseTriggerType.ANNUAL_AFTER_DEATH },
           message: { status: MessageStatus.SCHEDULED, deletedAt: null },
         },
         select: { messageId: true, dueAt: true },

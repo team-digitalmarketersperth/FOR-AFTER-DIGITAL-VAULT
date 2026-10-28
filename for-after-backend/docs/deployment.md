@@ -69,7 +69,17 @@ flowchart LR
 
 - Multi-stage `Dockerfile` for the NestJS backend to keep images small and secure.
 - Alpine or distroless Node.js base images.
-- The BullMQ release worker currently runs inside the API process; a separate worker container is planned.
+- Two processes from one image/build (Phase 17B): the API (`node dist/main.js`, HTTP, queue producers only) and the
+  worker (`node dist/worker.js`, every BullMQ consumer and reconciler, no HTTP). Both need `DATABASE_URL` and `REDIS_URL`
+  (or `QUEUE_REDIS_URL`); only the API needs session/HTTP settings. Run at least one worker at all times, or nothing is
+  released or emailed. More workers are safe (idempotent jobs, no leader election). See
+  [`message-release.md` §3](message-release.md#3-components).
+- The worker handles SIGTERM/SIGINT gracefully (finishes the active job, then closes Redis and PostgreSQL); give it a
+  stop timeout of at least 30 s.
+- **Planned, not deployed:** Firebase App Hosting (Next.js) + Cloud Run API (NestJS HTTP) + a separate Cloud Run worker
+  with minimum 1 instance and instance-based billing. The worker listens on no port; a Cloud Run *worker pool* fits as is,
+  a Cloud Run *service* would need a tiny `/health` listener on `PORT` added to `src/worker.ts`. The Railway client demo
+  still runs a single API service (its workers are whatever that deployed build contains).
 
 ---
 
@@ -97,9 +107,9 @@ flowchart LR
 | `NODE_ENV` | `production` (Secure cookies, trust one proxy hop) |
 | `COOKIE_DOMAIN`, `RECIPIENT_COOKIE_DOMAIN`, `TRUSTED_CONTACT_COOKIE_DOMAIN` | `.forafter.com.au` |
 | `FRONTEND_URL`, `WORDPRESS_URL` | production origins only |
-| `EMAIL_PROVIDER` | `brevo` (transactional email → Brevo; startup refuses anything but `brevo`/`resend` in production) |
-| `BREVO_API_KEY` | secret manager only; a v3 API key. Turn Brevo's authorised-IP blocking **on** (it is off for development) and add the production egress IPs |
-| `EMAIL_FROM_ADDRESS` | an address on a For After domain authenticated in Brevo ([email setup](email-production-setup.md)) |
+| `EMAIL_PROVIDER` | `microsoft` (Microsoft Graph `sendMail`; startup refuses anything but `microsoft`/`resend` in production) |
+| `MS_TENANT_ID`, `MS_CLIENT_ID`, `MS_SENDER_MAILBOX`, `EMAIL_FROM` | the Entra ID app registration and the sender mailbox ([email setup](email-production-setup.md) §7) |
+| `MS_CLIENT_SECRET` | secret manager only, and development only: production should use a certificate or federated credential (not implemented yet, §7). **Pending:** live tenant verification |
 | `APP_BASE_URL` | `https://app.forafter.com.au` (https required) |
 | `DEATH_VERIFICATION_SAFEGUARD_SECONDS` | `1209600` (14 days) or the approved value; **never** a testing value like 60 |
 | `STORAGE_LIMIT_BYTES` | per-Customer storage limit; default 5 GiB (Phase 12C, approved 2026-10-08) |
@@ -145,6 +155,32 @@ These must be solved before Recipients or Trusted Contacts can use production:
 | Health checks | `GET /health/database`, `GET /health/redis` (built; custom controller) |
 | Queue metrics | BullMQ dashboard, planned |
 | Infrastructure | AWS CloudWatch (logs, CPU, memory) |
+| Dead letters + ops alerts | Built (Phase 17, 2026-10-17), see below |
+
+### Dead letters and operational alerts (Phase 17)
+
+- **Who owns it:** the **worker** (`src/worker.ts` → `QueueWorkersModule`). It records a `DeadLetterJob` row when a
+  `message-release`, `death-verification` or `email-delivery` job has used all its retries, and runs the alert
+  reconciler. The API process runs none of this; it only serves the Admin views.
+- **Alerts are out of band:** one email per new dead letter, sent directly through `EmailProvider` (Microsoft Graph), never via the
+  `email-delivery` queue, so a broken email queue cannot block or loop its own alert. Content: queue, job id, entity
+  type + id, attempts, error code. No customer data, payloads or provider responses.
+- **Configuration (worker service):**
+
+  | Variable | Notes |
+  |---|---|
+  | `OPS_ALERT_EMAIL` | **Required in production**: a monitored operations inbox. Unset → alerts are recorded `NOT_CONFIGURED` and only logged |
+  | `OPS_ALERT_RECONCILE_INTERVAL_SECONDS` | default `300`, `0` = off. Retries `PENDING`/`FAILED` alerts from the last 24 h, 20 per pass, each at most once per 15 min |
+  | `EMAIL_PROVIDER`, `MS_*`, `EMAIL_FROM*` | the worker needs them to send alerts (it already has them for release emails) |
+
+- **Testing safely:** never break a real job. Record one synthetic dead letter through `DeadLetterService.record()` (a
+  made-up job id, no entity) in a one-off script with `OPS_ALERT_RECONCILE_INTERVAL_SECONDS=0`, check the inbox, then
+  `resolve()` the row. Verified locally on 2026-10-17. E2E runs force `EMAIL_PROVIDER=disabled` and turn the reconciler off.
+- **Retrying:** Admin → Queues → Dead letters → Retry (`POST /admin/system/dead-letters/:id/retry`). The job is rebuilt
+  from the entity id and current PostgreSQL state (never the old payload), the worker re-checks everything, and the row
+  becomes `RESOLVED` only when that run completes. Each retry is audited.
+- **Post-MVP:** queue-health alerts (waiting-job backlog / oldest-job age, repeated Redis connection failures, recovery
+  notices). Today a stuck queue shows in `GET /admin/system/queues` and in failed jobs, but sends no alert.
 
 ---
 

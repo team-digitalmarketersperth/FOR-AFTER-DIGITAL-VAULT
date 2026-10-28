@@ -132,6 +132,13 @@ describe('Storage quota (e2e, PostgreSQL)', () => {
       remainingBytes: LIMIT,
       percentage: 0,
       level: 'NORMAL',
+      breakdown: [
+        { source: 'MESSAGE', bytes: 0 },
+        { source: 'MEMORY_VAULT', bytes: 0 },
+        { source: 'MY_STORY', bytes: 0 },
+        { source: 'MY_WISHES', bytes: 0 },
+        { source: 'RECIPIENT_PHOTO', bytes: 0 },
+      ],
     });
     await request(app.getHttpServer())
       .get(api('/users/me/storage'))
@@ -187,7 +194,7 @@ describe('Storage quota (e2e, PostgreSQL)', () => {
     expect(storage.createUpload.mock.calls.length).toBe(signed);
     // Exactly what is left fits → 100 %.
     await messageUpload(lisa, ids.lisaMessage, photo(1000)).expect(201);
-    expect(await usage(lisa)).toEqual({
+    expect(await usage(lisa)).toMatchObject({
       usedBytes: 7000,
       reservedBytes: 3000,
       limitBytes: LIMIT,

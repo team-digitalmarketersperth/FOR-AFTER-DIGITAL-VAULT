@@ -1,4 +1,5 @@
 import { OmitType } from '@nestjs/swagger';
+import { ReleaseTriggerType } from '../../generated/prisma/client.js';
 import { IfDefined } from '../../messages/dto/create-message.dto.js';
 import {
   CreateMessageScheduleDto,
@@ -14,5 +15,5 @@ export class UpdateMessageScheduleDto extends OmitType(
 ) {
   @IfDefined()
   @SupportedTrigger()
-  triggerType?: SupportedTrigger;
+  triggerType?: ReleaseTriggerType;
 }

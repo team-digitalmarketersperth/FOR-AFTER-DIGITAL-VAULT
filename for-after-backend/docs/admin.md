@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| **Built** | Admin TOTP + recovery codes, admin idle timeout, `AdminGuard` (role + MFA), dashboard, users (list/search/detail/suspend/reactivate), `AuditLog` + viewer, queue summary / failed jobs / retry, paginated + audited death-verification admin routes |
+| **Built** | Admin TOTP + recovery codes, admin idle timeout, `AdminGuard` (role + MFA), dashboard, users (list/search/detail/suspend/reactivate), `AuditLog` + viewer, queue summary / failed jobs / retry, durable dead letters + operator alerts (Phase 17A), paginated + audited death-verification admin routes |
 | **Deferred** | Subscriptions (needs Stripe, Phase 21), deliveries (needs the delivery worker, Phase 17/20), re-authentication for sensitive actions, admin MFA reset/re-enrollment API, role management, account deletion (Phase 23), CSRF tokens (Phase 05) |
 | **Code** | `src/admin-auth/` · `src/admin/` · `src/audit/` · `src/auth/guards/` |
 | **Related** | [Authentication](authentication.md) · [Authorization](authorization.md) · [Security](security.md) · [Death verification](death-verification.md) · [API](api.md) |
@@ -161,6 +161,9 @@ All under `/api/v1`. Every `/admin/*` route: `SessionAuthGuard` + `AdminGuard`.
 | `GET` | `/admin/system/queues` | per queue: `waiting, active, delayed, prioritized, failed, completed` |
 | `GET` | `/admin/system/queues/:queueName/failed` | `page, limit`; sanitized |
 | `POST` | `/admin/system/queues/:queueName/jobs/:jobId/retry` | failed jobs only |
+| `GET` | `/admin/system/dead-letters` | Phase 17A; `queue, status, from, to, page, limit` |
+| `GET` | `/admin/system/dead-letters/:deadLetterId` | Phase 17A; ids + sanitized error |
+| `POST` | `/admin/system/dead-letters/:deadLetterId/retry` | Phase 17A; `OPEN` only; audited |
 | `GET` | `/admin/death-verifications` | Step 15; now `{ items, pagination }` with `status, page, limit` |
 | `GET` | `/admin/death-verifications/:caseId` | Step 15; now audited |
 | `POST` | `/admin/death-verifications/:caseId/verify` \| `/reject` | Step 15, unchanged rules; now also in `AuditLog` |
@@ -264,9 +267,45 @@ id-only by design anyway).
 releases anything itself**: the worker re-reads PostgreSQL exactly as for any job, so a stale, cancelled, already
 released or not-yet-due Message stays protected. There is no admin "release now" endpoint and none may be added.
 
-**Dead letters.** Exhausted jobs stay in BullMQ's `failed` set for 7 days (`removeOnFail`), which these endpoints
-surface. There is no separate dead-letter queue, and alerting on failures is still open (Phase 17). For release jobs
-the reconciler re-queues a still-`SCHEDULED` message anyway, so retry is mostly useful after an outage.
+**Dead letters (Phase 17A).** A job whose automatic retries are exhausted (its last attempt, or an
+`UnrecoverableError` such as a permanent email error) gets one durable `DeadLetterJob` row in PostgreSQL, unique per
+`(queueName, jobId)` (DB constraint). Ordinary retry attempts record nothing and alert nobody. Detection is BullMQ's
+Worker `failed` event (emitted after **every** attempt in 6.x) filtered to the terminal one, wired once per worker by
+`DeadLetterService.watch`. BullMQ's `failed` set (7 days, above) stays as a short-term view; the row is the record and
+is kept (no retention rule yet: a product/ops decision, not invented here).
+
+| Field | Content |
+|---|---|
+| ids | `queueName` (public name), `jobId`, `jobName`, `entityType` + `entityId`: `Message`, `MessageRecipientRelease`, `DeathVerificationCase` or `ReleaseNotification` (no FK: the record outlives the entity) |
+| failure | `attemptsMade`, `errorCode` (safe category: provider/Prisma/driver code or error class), `errorMessage` (the failed-jobs sanitizer above, plus `secret=value` and `Bearer` redaction), `failedAt`, `failureCount` |
+| state | `status` `OPEN` → `REQUEUED` → `RESOLVED`, `resolution` (the worker's outcome: `released`, `sent`, `stale`, `already_sent`, …), `requeuedAt`, `resolvedAt` |
+| alert | `alertStatus` `PENDING` / `SENT` / `FAILED` / `NOT_CONFIGURED`, `alertedAt` |
+
+Never stored: the job payload, message content, addresses, notes, OTPs, URLs, stack traces or provider responses.
+
+- `GET /admin/system/dead-letters`: `queue, status, from, to` (ISO, on `failedAt`), `page, limit`; newest first.
+- `GET /admin/system/dead-letters/:deadLetterId`.
+- `POST /admin/system/dead-letters/:deadLetterId/retry` (audited `DEAD_LETTER_RETRY_REQUESTED`, metadata
+  `queue, jobId, outcome` only): only `OPEN` (else `409`; two admins at once → exactly one wins). The row is claimed
+  `OPEN → REQUEUED` first, then the job is queued again through the queue's own helper, derived from the entity id in
+  PostgreSQL (`MessageReleaseQueue.ensure` / `ensureOccurrence`, `DeathVerificationQueue.requeueSafeguard`,
+  `ReleaseNotificationQueue.requeue`), never from a stored payload. Entity gone → `RESOLVED` / `stale`, nothing queued.
+  Redis down → back to `OPEN`, `503`.
+- Any later **completed** run of that job id (this retry, the failed-job retry above, or the release reconciler
+  re-queueing a still-`SCHEDULED` message) marks the row `RESOLVED` with the worker's outcome. A new terminal failure
+  after that reopens it (`failureCount + 1`) and alerts once more; a failure while still `OPEN` only counts; the same
+  failure seen twice (same `failedAt`) changes nothing.
+- The worker still makes every business decision, so stale, cancelled, already-released, terminal death cases and
+  already-`SENT` emails are no-ops.
+
+**Operational alert.** One per transition into `OPEN`, sent directly with `EmailProvider` to `OPS_ALERT_EMAIL`
+(subject "For After queue failure requires attention"; queue, job id, entity, failed at, attempts, error code and
+"Review Admin → Queues"; no content and not even the sanitized message). One attempt, idempotency key
+`dead-letter/<id>/<failureCount>`, **never through a queue**: if the provider is down, the `email-delivery` dead
+letter is still recorded, its alert is `FAILED` and logged, and nothing loops or dead-letters the alert. Without
+`OPS_ALERT_EMAIL` the alert is a log line (`ops_alert_not_configured`, `NOT_CONFIGURED`). Every dead letter also logs
+`dead_letter_recorded` at error level (ids and code only). Admin Portal → Queues shows a **Dead letters** section
+(status/queue filters, View, Retry on `OPEN` rows).
 
 ---
 
@@ -338,7 +377,10 @@ Folder 16's admin logins now include an "Admin - TOTP Verify" step.
 - **Subscriptions**: admin subscription management deferred until the Stripe backend exists (Phase 21). No billing
   tables or figures were invented.
 - **Deliveries**: admin delivery monitoring deferred until the delivery worker/data model exists (Phase 17/20).
-- **Dead-letter queue / alerts**: failed jobs are surfaced; a real DLQ and alerting remain Phase 17 work.
+- **Dead letters / alerts**: built in Phase 17A (§8). Known gaps: a job BullMQ fails as *stalled* (the worker
+  process died mid-job beyond `maxStalledCount`) emits no Worker `failed` event, so it is not dead-lettered (the
+  reconcilers still repair it from PostgreSQL); a crash between recording and alerting leaves `alertStatus`
+  `PENDING` (visible, not re-sent); alerts are email only; no retention rule for dead-letter rows yet.
 - **CSRF**: admin routes use the same model as Customer routes: `SameSite=Lax` cookies + a CORS allowlist
   (`FRONTEND_URL`, `WORDPRESS_URL`) + JSON bodies. Lax blocks cross-site `POST` cookies, and cross-origin JSON requests
   need a preflight the allowlist refuses. Residual risk: an XSS or compromised page on an allowlisted origin, and

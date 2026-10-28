@@ -28,6 +28,7 @@ import { ReleaseNotificationQueue } from '../src/release-notifications/release-n
 import { TrustedContactAuthModule } from '../src/trusted-contact-auth/trusted-contact-auth.module.js';
 import { TrustedContactPortalModule } from '../src/trusted-contact-portal/trusted-contact-portal.module.js';
 import { TrustedContactsModule } from '../src/trusted-contacts/trusted-contacts.module.js';
+import { QueueWorkersModule } from '../src/worker.module.js';
 
 // Step 24 end to end: real HTTP, PostgreSQL, Redis and the BullMQ workers
 // (release, email, death verification). Only the email provider is a fake
@@ -139,6 +140,8 @@ describe('Email delivery (e2e, fake provider)', () => {
     });
     const moduleRef = await Test.createTestingModule({
       imports: [
+        // Phase 17B: the worker process's consumers, started explicitly.
+        QueueWorkersModule,
         ConfigModule.forRoot({ isGlobal: true }),
         PrismaModule,
         RedisModule,
@@ -226,13 +229,13 @@ describe('Email delivery (e2e, fake provider)', () => {
       expect(msg.status).toBe('RELEASED');
       const grants = await prisma.recipientMessageAccessGrant.findMany({
         where: { messageId },
-        include: { notification: true },
+        include: { notifications: true },
       });
       expect(grants).toHaveLength(2);
       // The mobile-only Recipient has a grant but no email to send.
       expect(
-        grants.find((g) => g.recipientId === mobileOnlyId)?.notification,
-      ).toBeNull();
+        grants.find((g) => g.recipientId === mobileOnlyId)?.notifications,
+      ).toEqual([]);
 
       const [email] = inbox.to(SOFIA, 'message-released');
       expect(inbox.to(SOFIA)).toHaveLength(1);
@@ -594,14 +597,17 @@ describe('Email delivery (e2e, fake provider)', () => {
         where: { id: multiId },
         include: {
           release: true,
-          accessGrants: { include: { notification: true } },
+          accessGrants: { include: { notifications: true } },
         },
       });
       expect(msg.status).toBe('RELEASED');
       expect(msg.release).not.toBeNull();
       expect(msg.accessGrants).toHaveLength(4);
       const byRecipient = Object.fromEntries(
-        msg.accessGrants.map((g) => [g.recipientId, g.notification]),
+        msg.accessGrants.map((g) => [
+          g.recipientId,
+          g.notifications[0] ?? null,
+        ]),
       );
       expect(byRecipient[dot]).toBeNull(); // no address: no row, no attempt
       expect(byRecipient[ava]).toMatchObject({

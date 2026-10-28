@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { EmailProvider } from '../email/email-provider.js';
 import { EmailConfig, EmailModule } from '../email/email.module.js';
+import { MediaModule } from '../media/media.module.js';
 import { MessageReleaseModule } from '../message-release/message-release.module.js';
 import { UsersModule } from '../users/users.module.js';
 import {
@@ -13,20 +14,16 @@ import {
   AdminDeathVerificationController,
   CustomerDeathVerificationController,
 } from './death-verification.controller.js';
+import { DeathVerificationEvidenceService } from './death-verification-evidence.service.js';
 import { DeathVerificationService } from './death-verification.service.js';
 
-// Reports arrive through the Trusted Contact portal (Step 14). Step 15 adds
-// the safeguard workflow, the Customer confirm-alive routes and the minimal
-// admin decision routes. UsersModule backs SessionAuthGuard; MessageReleaseModule
-// provides the one message-release queue death triggers are executed through.
+// The safeguard workflow and its producer queue, shared by the API and the
+// worker process (Phase 17B; the consumer is DeathVerificationProcessor in
+// QueueWorkersModule). MessageReleaseModule provides the one message-release
+// queue death triggers are executed through.
 @Module({
-  imports: [UsersModule, MessageReleaseModule, EmailModule],
-  controllers: [
-    CustomerDeathVerificationController,
-    AdminDeathVerificationController,
-  ],
+  imports: [MessageReleaseModule, EmailModule],
   providers: [
-    DeathVerificationService,
     DeathVerificationWorkflow,
     DeathVerificationQueue,
     // The notice is an email (EMAIL_PROVIDER); tests override the token.
@@ -36,6 +33,24 @@ import { DeathVerificationService } from './death-verification.service.js';
       inject: [EmailProvider, EmailConfig],
     },
   ],
-  exports: [DeathVerificationService, DeathVerificationQueue],
+  exports: [DeathVerificationWorkflow, DeathVerificationQueue],
+})
+export class DeathVerificationQueueModule {}
+
+// Reports arrive through the Trusted Contact portal (Step 14). Step 15 adds
+// the Customer confirm-alive routes and the minimal admin decision routes.
+// UsersModule backs SessionAuthGuard. MediaModule: evidence files (Phase 19A).
+@Module({
+  imports: [UsersModule, DeathVerificationQueueModule, MediaModule],
+  controllers: [
+    CustomerDeathVerificationController,
+    AdminDeathVerificationController,
+  ],
+  providers: [DeathVerificationService, DeathVerificationEvidenceService],
+  exports: [
+    DeathVerificationService,
+    DeathVerificationEvidenceService,
+    DeathVerificationQueueModule,
+  ],
 })
 export class DeathVerificationModule {}

@@ -3,6 +3,7 @@ import { paginate } from '../audit/audit-log.service.js';
 import { Prisma } from '../generated/prisma/client.js';
 import { MediaCleanup } from '../media/media-cleanup.service.js';
 import { isNoMatch, storedRefSelect } from '../media/media.service.js';
+import { noteActivity, recordActivity } from '../activity/customer-activity.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import {
   CreateMemoryVaultItemDto,
@@ -22,6 +23,8 @@ const memorySelect = {
   title: true,
   category: true,
   textContent: true,
+  // Owner-only; never searched or copied into a Message.
+  privateNote: true,
   createdAt: true,
   updatedAt: true,
   tags: {
@@ -38,11 +41,12 @@ export type MemoryTag = Prisma.MemoryVaultTagGetPayload<{
 }>;
 export type MemoryResponse = Omit<MemoryRow, 'tags'> & { tags: MemoryTag[] };
 export type MemoryPage = {
-  items: MemoryResponse[];
+  // The list never carries private notes; the detail does.
+  items: Omit<MemoryResponse, 'privateNote'>[];
   pagination: ReturnType<typeof paginate>;
 };
 
-const toResponse = ({ tags, ...row }: MemoryRow): MemoryResponse => ({
+const toResponse = <R extends Pick<MemoryRow, 'tags'>>({ tags, ...row }: R) => ({
   ...row,
   tags: tags.map((t) => t.tag),
 });
@@ -100,20 +104,23 @@ export class MemoryVaultService {
     ownerUserId: string,
     dto: CreateMemoryVaultItemDto,
   ): Promise<MemoryResponse> {
-    const row = await this.prisma.$transaction(async (tx) =>
-      tx.memoryVaultItem.create({
+    const row = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.memoryVaultItem.create({
         data: {
           ownerUserId,
           title: dto.title,
           category: dto.category,
           textContent: dto.textContent,
+          privateNote: dto.privateNote,
           tags: {
             create: await this.tagLinks(tx, ownerUserId, dto.tags ?? []),
           },
         },
         select: memorySelect,
-      }),
-    );
+      });
+      await recordActivity(tx, { userId: ownerUserId, type: 'MEMORY_ADDED', entityId: created.id });
+      return created;
+    });
     return toResponse(row);
   }
 
@@ -153,7 +160,7 @@ export class MemoryVaultService {
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip: (q.page - 1) * q.limit,
         take: q.limit,
-        select: memorySelect,
+        select: { ...memorySelect, privateNote: false },
       }),
     ]);
     return {
@@ -196,21 +203,24 @@ export class MemoryVaultService {
     dto: UpdateMemoryVaultItemDto,
   ): Promise<MemoryResponse> {
     try {
-      const row = await this.prisma.$transaction(async (tx) =>
-        tx.memoryVaultItem.update({
+      const row = await this.prisma.$transaction(async (tx) => {
+        const updated = await tx.memoryVaultItem.update({
           where: this.owned(ownerUserId, id),
           data: {
             title: dto.title,
             category: dto.category,
             textContent: dto.textContent,
+            privateNote: dto.privateNote,
             tags: dto.tags && {
               deleteMany: {},
               create: await this.tagLinks(tx, ownerUserId, dto.tags),
             },
           },
           select: memorySelect,
-        }),
-      );
+        });
+        await recordActivity(tx, { userId: ownerUserId, type: 'MEMORY_UPDATED', entityId: id });
+        return updated;
+      });
       return toResponse(row);
     } catch (err) {
       if (isNoMatch(err)) throw new NotFoundException(MEMORY_NOT_FOUND);
@@ -241,6 +251,7 @@ export class MemoryVaultService {
       if (isNoMatch(err)) throw new NotFoundException(MEMORY_NOT_FOUND);
       throw err;
     }
+    await noteActivity(this.prisma, { userId: ownerUserId, type: 'MEMORY_DELETED', entityId: id });
     await this.cleanup.purge('memoryVaultMediaAsset', deleted.mediaAssets);
   }
 }

@@ -1,6 +1,7 @@
 import { ConflictException, Injectable } from '@nestjs/common';
 import { type AuditActor, writeAuditLog } from '../audit/audit-log.service.js';
 import { AuditEventType, Prisma } from '../generated/prisma/client.js';
+import { recordActivity } from '../activity/customer-activity.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 
 // The only User fields that may leave the API. passwordHash is never selected
@@ -60,11 +61,22 @@ export class UsersService {
     return found?.passwordHash ?? null;
   }
 
+  // A save that changes nothing records no "Account details updated".
   updateProfile(id: string, input: ProfileInput): Promise<SafeUser> {
-    return this.prisma.user.update({
-      where: { id },
-      data: { firstName: input.firstName, lastName: input.lastName },
-      select: safeUserSelect,
+    return this.prisma.$transaction(async (tx) => {
+      const before = await tx.user.findUniqueOrThrow({
+        where: { id },
+        select: { firstName: true, lastName: true },
+      });
+      const user = await tx.user.update({
+        where: { id },
+        data: { firstName: input.firstName, lastName: input.lastName },
+        select: safeUserSelect,
+      });
+      if (before.firstName !== user.firstName || before.lastName !== user.lastName) {
+        await recordActivity(tx, { userId: id, type: 'PROFILE_UPDATED' });
+      }
+      return user;
     });
   }
 

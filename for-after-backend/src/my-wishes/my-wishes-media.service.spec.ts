@@ -23,10 +23,6 @@ import type { StorageQuota } from '../media/storage-quota.service.js';
 import type { MediaStorage } from '../media/storage/media-storage.service.js';
 import type { MessageSnapshotService } from '../messages/message-snapshot.service.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
-import {
-  DISCLAIMER_NOT_ACKNOWLEDGED,
-  type MyWishesDisclaimerService,
-} from './my-wishes-disclaimer.service.js';
 import { MyWishesMediaService } from './my-wishes-media.service.js';
 import { getWishPromptByKey } from './my-wishes.prompts.js';
 import { WISH_NOT_FOUND } from './my-wishes.service.js';
@@ -77,10 +73,6 @@ const setup = () => {
   const tx = { myWishResponse, myWishMediaAsset };
   const $transaction = vi.fn((fn: (t: typeof tx) => unknown) => fn(tx));
   const quota = { reserve: vi.fn().mockResolvedValue(undefined) };
-  // Phase 15A: acknowledged unless a test says otherwise.
-  const disclaimer = {
-    assertAcknowledged: vi.fn().mockResolvedValue(undefined),
-  };
   const cleanup = {
     purge: vi.fn().mockResolvedValue({ purged: 1, failed: 0 }),
   };
@@ -90,7 +82,6 @@ const setup = () => {
     scanner as unknown as MalwareScanner,
     cleanup as unknown as MediaCleanup,
     quota as unknown as StorageQuota,
-    disclaimer as unknown as MyWishesDisclaimerService,
     { get: () => undefined } as unknown as ConfigService,
   );
   // The browser's direct upload of these bytes to the row's path.
@@ -113,7 +104,6 @@ const setup = () => {
     myWishResponse,
     myWishMediaAsset,
     quota,
-    disclaimer,
     cleanup,
     service,
     uploaded,
@@ -177,6 +167,7 @@ describe('MyWishesMediaService (Phase 15B)', () => {
         promptTextSnapshot: prompt.prompt,
         promptVersion: prompt.version,
         textContent: null,
+        privateNote: null,
       };
       expect(args.create).toEqual({
         ownerUserId: OWNER,
@@ -184,40 +175,6 @@ describe('MyWishesMediaService (Phase 15B)', () => {
         ...fresh,
       });
       expect(args.update).toEqual({ ...fresh, deletedAt: null });
-    });
-
-    it('needs the current notice acknowledged (Phase 15A); nothing reserved, created or signed without it', async () => {
-      const t = setup();
-      t.disclaimer.assertAcknowledged.mockRejectedValue(
-        new ConflictException(DISCLAIMER_NOT_ACKNOWLEDGED),
-      );
-      await expect(
-        t.service.createUploadUrl(OWNER, prompt, {
-          kind: 'PHOTO',
-          mimeType: 'image/jpeg',
-          originalFileName: 'a.jpg',
-          sizeBytes: 10,
-        }),
-      ).rejects.toThrow(DISCLAIMER_NOT_ACKNOWLEDGED);
-      expect(t.disclaimer.assertAcknowledged).toHaveBeenCalledWith(OWNER);
-      expect(t.quota.reserve).not.toHaveBeenCalled();
-      expect(t.myWishMediaAsset.create).not.toHaveBeenCalled();
-      expect(t.storage.createUpload).not.toHaveBeenCalled();
-    });
-
-    it('completing, viewing, listing and deleting never need an acknowledgement', async () => {
-      const t = setup();
-      t.disclaimer.assertAcknowledged.mockRejectedValue(new Error('no'));
-      const fileId = t.uploaded(fileStart('image/jpeg'));
-      t.myWishMediaAsset.findFirst.mockResolvedValue({
-        ...pendingRow,
-        sizeBytes: fileStart('image/jpeg').length,
-      });
-      await t.service.complete(OWNER, prompt, 'a1', fileId);
-      await t.service.findAll(OWNER, prompt);
-      t.myWishMediaAsset.update.mockResolvedValue(ref);
-      await t.service.remove(OWNER, prompt, 'a1');
-      expect(t.disclaimer.assertAcknowledged).not.toHaveBeenCalled();
     });
 
     it('over quota → refused, nothing created or signed', async () => {

@@ -8,7 +8,8 @@
 | **Provider** | **ImageKit** (private files, signed expiring URLs only). Legacy **Backblaze B2** rows stay readable (read/delete only) |
 | **Related** | [Message composition](message-composition.md) · [Memory Vault](memory-vault.md) · [Recipient Portal](recipient-portal.md) |
 
-> ℹ️ Trusted Contacts (Step 14) have **no** media access of any kind, and death-report evidence upload is not built.
+> ℹ️ Trusted Contacts have **no** access to Customer media of any kind. Their only files are their own
+> death-verification evidence (Phase 19A, §2f).
 
 > ℹ️ **Product decision (2026-10-07):** ImageKit replaced Backblaze B2 for every new upload, and replaced the planned
 > Mux / Cloudflare Stream video pipeline. Nothing was deleted from B2.
@@ -16,7 +17,7 @@
 ## 🧭 Contents
 
 1. [Architecture principle](#1-architecture-principle)
-2. [ImageKit media (Phase 12)](#2-imagekit-media-phase-12) · [2a Recipient photo](#2a-recipient-photo-phase-09) · [2b Video](#2b-video-phase-12) · [2c Legacy B2](#2c-legacy-backblaze-b2-read-and-delete-only) · [2d Cleanup](#2d-deletion-and-cleanup) · [2e Malware scanning](#2e-malware-scanning-phase-12b)
+2. [ImageKit media (Phase 12)](#2-imagekit-media-phase-12) · [2a Recipient photo](#2a-recipient-photo-phase-09) · [2b Video](#2b-video-phase-12) · [2c Legacy B2](#2c-legacy-backblaze-b2-read-and-delete-only) · [2d Cleanup](#2d-deletion-and-cleanup) · [2e Malware scanning](#2e-malware-scanning-phase-12b) · [2f Death-verification evidence](#2f-death-verification-evidence-phase-19a)
 3. [File storage (planned)](#3-file-storage-planned)
 4. [MediaFile model (superseded)](#4-mediafile-model-superseded-by-mediaasset-see-docsdatabasemd)
 5. [Storage quotas](#5-storage-quotas)
@@ -107,8 +108,7 @@ Client -> DELETE ...                       (soft delete first, then the ImageKit
   Story → Message copies use `MediaStorage.copyObject` through the shared `MessageSnapshotService` (as Memory → Message).
 - **My Wishes** (`MyWishMediaAsset`, Phase 15B, `docs/my-wishes.md`): the same again, PHOTO/AUDIO/VIDEO, under
   `/for-after/users/<userId>/my-wishes/<responseId>/…`; owner-only, never Recipients, Trusted Contacts or admins; counts
-  toward the one storage quota; in the `MediaCleanup` table list (deletes, FAILED, stale uploads). Adding a file needs the
-  current My Wishes notice acknowledged. Wish → Message copies go through the same `MessageSnapshotService`.
+  toward the one storage quota; in the `MediaCleanup` table list (deletes, FAILED, stale uploads). Wish → Message copies go through the same `MessageSnapshotService`.
 - **Memory Vault** (`MemoryVaultMediaAsset`, `docs/memory-vault.md`): same provider, rules and verification, PHOTO/AUDIO
   only (video was approved for messages only), no DRAFT lock. Deleting a memory soft-deletes its media in the same
   UPDATE and deletes their files.
@@ -258,9 +258,25 @@ Then `CLAMAV_HOST=127.0.0.1` in `.env`. `CLAMD_CONF_<Directive>` is the official
   clean PNG, WAV, 1 MB and 100 MB MP4 → READY (100 MB in ~17 s); bare EICAR → clamd INFECTED; files carrying a local
   test signature → FAILED, file deleted, access 409, not schedulable; clamd unreachable → 503, stays PENDING_UPLOAD.
 
+## 2f. Death-verification evidence (Phase 19A)
+
+Supporting files a reporting Trusted Contact attaches to their death report (policy, routes and access rules:
+[death-verification.md §2A](death-verification.md#2a-supporting-evidence-phase-19a)). Table
+`DeathVerificationEvidence`, with the same storage columns, private ImageKit upload, `checkUpload()` (provider check →
+file signature → ClamAV), signed access URLs and `MediaCleanup` reconciliation as every media table.
+
+- **Scoped allowlist:** `application/pdf`, `image/jpeg`, `image/png` (`EVIDENCE_MIME_TYPES`). PDF is accepted **only**
+  here: message, Memory Vault, My Story/Wishes and Recipient-photo allowlists are unchanged. The PDF signature check
+  requires `%PDF-` at byte 0 (leading bytes, which PDF readers tolerate, are refused).
+- **Key:** `/for-after/users/<ownerUserId>/death-verification/<caseId>/evidence/<evidenceId>.<ext>` (ids only).
+- **Not Customer content:** outside the storage quota sum and the Storage Manager; the Customer cannot list or delete it.
+- **Checked live (2026-10-13):** a synthetic PDF through the real ImageKit adapter (private upload, verify with
+  `application/pdf`, signature, full read, signed URL served identical bytes, unsigned URL `403`, delete) and through
+  local clamd (`CLEAN`).
+
 ## 3. File Storage (planned)
-- **Planned uses**: documents, death certificates, export ZIPs. Same principle: private files, direct upload with
-  server-signed tokens, short-lived signed downloads.
+- **Planned uses**: other documents, export ZIPs. Same principle: private files, direct upload with server-signed
+  tokens, short-lived signed downloads. (Death certificates: built as §2f.)
 
 ## 4. MediaFile Model (superseded by `MediaAsset`, see docs/database.md)
 The original plan's `MediaFile` model (provider, providerAssetId, objectKey, …) was replaced by `MediaAsset`,
@@ -287,12 +303,47 @@ bytes), until per-plan limits arrive with billing (Phase 21; the Basic/Standard/
 - **Levels** (integer byte math, counted = used + reserved): `NORMAL` < 80 %, `WARNING` ≥ 80 %, `HIGH` ≥ 90 %, `FULL`
   ≥ 100 %. At `FULL` existing files stay fully available (lists, previews, release); only new storage is refused.
 - **API:** `GET /users/me/storage` (Customer session) → `{ usedBytes, reservedBytes, limitBytes, remainingBytes,
-  percentage, level }`, the caller's own data only.
-- **UI:** Account settings → Storage: "x of y used", a progress bar and calm notices at 80/90/100 % (no upgrade offer:
-  plans are not built). Upload forms show the server's 409 message; the server stays authoritative.
+  percentage, level, breakdown }`, the caller's own data only. `breakdown` = READY bytes per source
+  (`MESSAGE`, `MEMORY_VAULT`, `MY_STORY`, `MY_WISHES`, `RECIPIENT_PHOTO`); it sums to `usedBytes`. Uploads in progress
+  are only `reservedBytes`, never a file or a breakdown line.
+- **UI:** Account settings → Storage: "x of y used" (used + reserved), a progress bar and calm notices; the whole card
+  is one stretched link to the Storage Manager (§5a). Notices: ≥ 80 % "You're using N% of your storage." (Manage
+  storage), ≥ 90 % "You're almost out of storage." (Free up space), 100 % "Your storage is full. You can still view and
+  remove existing content, but new uploads are paused until you free up space." (Manage storage). No upgrade offer:
+  plans are not built. Upload forms show the server's 409 message; the server stays authoritative.
 - Tests: unit (levels and edges, policy SQL, reserve order), e2e on PostgreSQL with a 10,000-byte limit (all paths,
   thresholds, FULL, deletes/FAILED/retired, owner isolation, the concurrency race, memory copies), component tests and
   Playwright (API started with a small `STORAGE_LIMIT_BYTES`).
+
+## 5a. Storage Manager
+
+`/settings/storage` (Customer app): what uses storage and the files themselves, so a Customer can free space.
+
+- **Same numbers as Settings:** the header and breakdown come from `GET /users/me/storage`. Totals and the list share
+  one owner-scoped row set (`ownedMedia()` in `storage-quota.service.ts`), so they cannot drift apart.
+- **List:** `GET /users/me/storage/items?page=1&limit=25&type=PHOTO|AUDIO|VIDEO&source=<source>&sort=size_desc|created_desc|created_asc`
+  (Customer session; page/limit the shared convention, max 100; **largest first by default**). Filtering, sorting and
+  paging run in PostgreSQL; ties break on `id`, so pages never repeat or skip a file. Only counted files: READY and not
+  deleted. Response `{ items, pagination }`; each item
+  `{ id, type, sizeBytes, source, sourceId, displayName, createdAt, canDelete, deleteRestriction }`.
+  `sourceId` is what the source's own routes use (message id, memory id, My Story / My Wishes prompt key, Recipient id).
+  `displayName` is safe context only: the message or memory title, the prompt wording, or the Recipient's name; never
+  answer text, file names, storage keys, provider ids, URLs, owner ids or deletion fields. The list fetches no signed
+  previews; **View** opens the file where it lives.
+- **No generic delete endpoint.** The Storage Manager is a read/navigation layer: it deletes through the file's own
+  feature endpoint (`DELETE /messages/:id/media/:mediaId`, `/memory-vault/:id/media/:mediaId`,
+  `/my-story/prompts/:key/response/media/:mediaId`, `/my-wishes/prompts/:key/response/media/:mediaId`,
+  `/recipients/:id/photo/:photoId`), so that feature's ownership and status rules, soft delete and `MediaCleanup` apply
+  unchanged (DB first; a provider failure never restores access, the reconciler retries). Usage drops at once.
+- **Rules per source:** message media only while the message is `DRAFT`. `SCHEDULED` → `canDelete: false`,
+  `deleteRestriction: MESSAGE_SCHEDULED` ("Unschedule the message before changing its content", **Open message**);
+  `RELEASED` → `MESSAGE_RELEASED` (cannot be removed here, **View message**; no released-content deletion policy is
+  introduced). Memory Vault, My Story and My Wishes media and Recipient photos (photo only, the person stays) can be
+  deleted. The API refuses a crafted delete the same way (409 / 404).
+- **Full storage never blocks deletion or viewing:** quota checks run only when an upload is reserved.
+- Tests: unit (breakdown, shared SQL), e2e on PostgreSQL (`test/storage-manager.e2e-spec.ts`: totals and breakdown,
+  sorting/filters/paging, safe fields, owner isolation, crafted deletes, full quota still deletes, usage drops, repeat
+  delete, provider failure), component tests, Playwright (`e2e/storage.vault.spec.ts`, small `STORAGE_LIMIT_BYTES`).
 
 ## 6. Content Types
 - **Accepted now:** photos JPEG, PNG, WebP; audio MP3, M4A, WebM, WAV; video MP4, WebM (messages only). No SVG.

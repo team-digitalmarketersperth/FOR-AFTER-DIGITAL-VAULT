@@ -33,6 +33,7 @@ import { TrustedContactPortalModule } from '../src/trusted-contact-portal/truste
 import { TrustedContactsModule } from '../src/trusted-contacts/trusted-contacts.module.js';
 import { FAKE_MALWARE, FakeMalwareScanner } from './fake-malware-scanner.js';
 import { FakeMediaStorage, fileStart } from './fake-media-storage.js';
+import { QueueWorkersModule } from '../src/worker.module.js';
 
 // Phase 15B (approved policy): rich My Wishes (photo/audio/video) and
 // Wish → Message: an independent DRAFT that goes through the normal
@@ -131,11 +132,6 @@ describe('My Wishes rich answers + Wish → Message + verified-death release (e2
       .expect(200);
     return agent;
   };
-  const acknowledge = (agent: Agent) =>
-    agent
-      .post(api('/my-wishes/disclaimer/acknowledgement'))
-      .send({ version: 1 })
-      .expect(200);
   // Upload auth → (fake) direct ImageKit upload → verified complete.
   const attach = async (
     agent: Agent,
@@ -190,6 +186,8 @@ describe('My Wishes rich answers + Wish → Message + verified-death release (e2
     });
     const moduleRef = await Test.createTestingModule({
       imports: [
+        // Phase 17B: the worker process's consumers, started explicitly.
+        QueueWorkersModule,
         ConfigModule.forRoot({ isGlobal: true }),
         PrismaModule,
         RedisModule,
@@ -274,25 +272,12 @@ describe('My Wishes rich answers + Wish → Message + verified-death release (e2
   });
 
   describe('rich media on a wish', () => {
-    it('adding a file is writing a wish: 409 until the current notice is acknowledged; nothing is created', async () => {
-      await agents.lisa
-        .post(`${media()}/upload-url`)
-        .send({
-          kind: 'PHOTO',
-          mimeType: 'image/jpeg',
-          originalFileName: 'a.jpg',
-          sizeBytes: 6,
-        })
-        .expect(409);
+    it('a file can start a wish (no notice acknowledgement needed): an upload shell is never “answered” until something is READY', async () => {
       expect(
-        await prisma.myWishResponse.count({
-          where: { owner: { email: users.lisa } },
+        await prisma.myWishesDisclaimerAcknowledgement.count({
+          where: { user: { email: users.lisa } },
         }),
       ).toBe(0);
-      await acknowledge(agents.lisa);
-    });
-
-    it('a file can start a wish: an upload shell is never “answered” until something is READY', async () => {
       const res = await agents.lisa
         .post(`${media()}/upload-url`)
         .send({

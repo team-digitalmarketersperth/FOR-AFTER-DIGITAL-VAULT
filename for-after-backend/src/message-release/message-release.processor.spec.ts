@@ -1,3 +1,4 @@
+import type { DeadLetterService } from '../dead-letters/dead-letter.service.js';
 import { Logger } from '@nestjs/common';
 import { DelayedError, type Job } from 'bullmq';
 import type { ReleaseNotificationQueue } from '../release-notifications/release-notification-queue.service.js';
@@ -30,12 +31,14 @@ const setup = (outcome?: ReleaseOutcome | Error) => {
       { release } as unknown as MessageReleaseService,
       {} as MessageReleaseQueue,
       notifications as unknown as ReleaseNotificationQueue,
+      {} as DeadLetterService,
     ),
     run: (j: object = job) =>
       new MessageReleaseProcessor(
         { release } as unknown as MessageReleaseService,
         {} as MessageReleaseQueue,
         notifications as unknown as ReleaseNotificationQueue,
+      {} as DeadLetterService,
       ).process(j as unknown as Job<{ messageId: string }>, 'token'),
   };
 };

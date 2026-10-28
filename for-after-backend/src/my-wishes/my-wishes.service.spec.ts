@@ -1,6 +1,5 @@
 import {
   BadRequestException,
-  ConflictException,
   type ExecutionContext,
   Logger,
   NotFoundException,
@@ -27,10 +26,6 @@ import {
   MY_WISHES_CATEGORIES,
   MY_WISHES_PROMPTS,
 } from './my-wishes.prompts.js';
-import {
-  DISCLAIMER_NOT_ACKNOWLEDGED,
-  type MyWishesDisclaimerService,
-} from './my-wishes-disclaimer.service.js';
 import type { MediaCleanup } from '../media/media-cleanup.service.js';
 import {
   EMPTY_WISH,
@@ -67,12 +62,20 @@ const setup = () => {
     findFirst: vi.fn().mockResolvedValue(row),
     upsert: vi.fn().mockResolvedValue(row),
     update: vi.fn().mockResolvedValue({ mediaAssets: [] }),
+    // Added vs updated, for the Customer's Recent changes.
+    count: vi.fn().mockResolvedValue(0),
   };
+  // Recent changes (customer activity): recorded, not asserted here.
+  const customerActivity = { create: vi.fn(async () => ({})) };
+  // An explicit save clears the answer's autosave (draft recovery).
+  const draftRecovery = { deleteMany: vi.fn(async () => ({ count: 0 })) };
   const prisma: object = new Proxy(
     { myWishResponse },
     {
       get(target, prop) {
         if (prop === 'myWishResponse') return target.myWishResponse;
+        if (prop === 'customerActivity') return customerActivity;
+        if (prop === 'draftRecovery') return draftRecovery;
         if (prop === '$transaction')
           return (fn: (tx: object) => unknown) => fn(prisma);
         throw new Error(`My Wishes must not use prisma.${String(prop)}`);
@@ -80,17 +83,12 @@ const setup = () => {
     },
   );
   const cleanup = { purge: vi.fn().mockResolvedValue({}) };
-  // Phase 15A: acknowledged unless a test says otherwise.
-  const disclaimer = {
-    assertAcknowledged: vi.fn().mockResolvedValue(undefined),
-  };
   return {
     myWishResponse,
-    disclaimer,
+    draftRecovery,
     cleanup,
     service: new MyWishesService(
       prisma as unknown as PrismaService,
-      disclaimer as unknown as MyWishesDisclaimerService,
       cleanup as unknown as MediaCleanup,
     ),
   };
@@ -225,32 +223,16 @@ describe('MyWishesPromptsQueryDto', () => {
   });
 });
 
-describe('MyWishesService: disclaimer gate (Phase 15A)', () => {
-  it('a save checks the current acknowledgement first; without it nothing is written', async () => {
-    const { myWishResponse, disclaimer, service } = setup();
-    await service.save('lisa', prompt, 'A wish.');
-    expect(disclaimer.assertAcknowledged).toHaveBeenCalledWith('lisa');
-    expect(
-      disclaimer.assertAcknowledged.mock.invocationCallOrder[0],
-    ).toBeLessThan(myWishResponse.upsert.mock.invocationCallOrder[0]);
-    disclaimer.assertAcknowledged.mockRejectedValue(
-      new ConflictException(DISCLAIMER_NOT_ACKNOWLEDGED),
-    );
-    await expect(service.save('lisa', prompt, 'A wish.')).rejects.toThrow(
-      DISCLAIMER_NOT_ACKNOWLEDGED,
-    );
+describe('MyWishesService: the notice is informational (2026-10-14)', () => {
+  it('saving, reading and deleting never look at notice acknowledgements', async () => {
+    // setup()'s prisma proxy throws on any model it does not stub, so a read
+    // of myWishesDisclaimerAcknowledgement here would fail the test.
+    const { myWishResponse, service } = setup();
+    await service.save('lisa', prompt, { textContent: 'A wish.' });
     expect(myWishResponse.upsert).toHaveBeenCalledTimes(1);
-  });
-
-  it('reading and deleting never need an acknowledgement', async () => {
-    const { disclaimer, service } = setup();
-    disclaimer.assertAcknowledged.mockRejectedValue(
-      new Error('not acknowledged'),
-    );
     await service.listPrompts('lisa');
     await service.getResponse('lisa', prompt).catch(() => undefined);
     await service.remove('lisa', prompt);
-    expect(disclaimer.assertAcknowledged).not.toHaveBeenCalled();
   });
 });
 
@@ -310,7 +292,7 @@ describe('MyWishesService', () => {
 
   it('PUT: one owner-scoped upsert with the trusted snapshot; restores deleted', async () => {
     const { myWishResponse, service } = setup();
-    expect(await service.save('lisa', prompt, text)).toEqual(answer);
+    expect(await service.save('lisa', prompt, { textContent: text })).toEqual(answer);
     const args = myWishResponse.upsert.mock.calls[0][0];
     expect(args.where).toEqual({ ownerUserId_promptKey: unique });
     const saved = {
@@ -319,15 +301,24 @@ describe('MyWishesService', () => {
       promptVersion: 1,
       textContent: text,
     };
-    expect(args.create).toEqual({ ...unique, ...saved });
-    expect(args.update).toEqual({ ...saved, deletedAt: null });
+    expect(args.create).toEqual({ ...unique, ...saved, privateNote: null });
+    // A restored wish starts without its old note.
+    expect(args.update).toEqual({ ...saved, privateNote: null, deletedAt: null });
     expect(args.select).not.toHaveProperty('ownerUserId');
+  });
+
+  it("an explicit save clears only this Customer's autosave of this wish", async () => {
+    const { draftRecovery, service } = setup();
+    await service.save('lisa', prompt, { textContent: text });
+    expect(draftRecovery.deleteMany).toHaveBeenCalledWith({
+      where: { userId: 'lisa', type: 'MY_WISHES', key: prompt.key },
+    });
   });
 
   it('Lisa and John get separate rows for the same prompt', async () => {
     const { myWishResponse, service } = setup();
-    await service.save('lisa', prompt, 'Lisa text');
-    await service.save('john', prompt, 'John text');
+    await service.save('lisa', prompt, { textContent: 'Lisa text' });
+    await service.save('john', prompt, { textContent: 'John text' });
     const [lisa, john] = myWishResponse.upsert.mock.calls.map((c) => c[0]);
     expect(lisa.where.ownerUserId_promptKey.ownerUserId).toBe('lisa');
     expect(lisa.create.ownerUserId).toBe('lisa');
@@ -368,20 +359,26 @@ describe('MyWishesService', () => {
       _count: { mediaAssets: 2 },
     };
     myWishResponse.upsert.mockResolvedValue(mediaOnly);
-    expect(await service.save('lisa', prompt, null)).toMatchObject({
+    expect(await service.save('lisa', prompt, { textContent: null })).toMatchObject({
       textContent: null,
       mediaCount: 2,
     });
-    // Omitted text = unchanged on update.
-    await service.save('lisa', prompt, undefined);
+    // Omitted text = unchanged on update of a live wish...
+    myWishResponse.count.mockResolvedValueOnce(1);
+    await service.save('lisa', prompt, { textContent: undefined });
     expect(myWishResponse.upsert.mock.calls[1][0].update.textContent).toBe(
       undefined,
+    );
+    // ...but a restored (deleted) wish never brings its old text back.
+    await service.save('lisa', prompt, { textContent: undefined });
+    expect(myWishResponse.upsert.mock.calls[2][0].update.textContent).toBe(
+      null,
     );
     myWishResponse.upsert.mockResolvedValue({
       ...mediaOnly,
       _count: { mediaAssets: 0 },
     });
-    await expect(service.save('lisa', prompt, null)).rejects.toThrow(
+    await expect(service.save('lisa', prompt, { textContent: null })).rejects.toThrow(
       new BadRequestException(EMPTY_WISH),
     );
   });
@@ -409,13 +406,13 @@ describe('MyWishesService', () => {
     myWishResponse.upsert.mockRejectedValue(boom);
     await expect(service.remove('lisa', prompt)).rejects.toBe(boom);
     await expect(service.getResponse('lisa', prompt)).rejects.toBe(boom);
-    await expect(service.save('lisa', prompt, text)).rejects.toBe(boom);
+    await expect(service.save('lisa', prompt, { textContent: text })).rejects.toBe(boom);
   });
 
   it('never creates Messages, schedules or other records (only MyWishResponse)', async () => {
     // setup() throws on any other Prisma delegate.
     const { service } = setup();
-    await service.save('lisa', prompt, text);
+    await service.save('lisa', prompt, { textContent: text });
     await service.listPrompts('lisa');
     await service.getPrompt('lisa', prompt);
     await service.getResponse('lisa', prompt);
@@ -433,9 +430,9 @@ describe('MyWishesService', () => {
     ];
     const { myWishResponse, service } = setup();
     const secret = 'A deeply personal fictional wish.';
-    await service.save('lisa', prompt, secret);
+    await service.save('lisa', prompt, { textContent: secret });
     myWishResponse.upsert.mockRejectedValue(new Error('boom'));
-    await service.save('lisa', prompt, secret).catch(() => undefined);
+    await service.save('lisa', prompt, { textContent: secret }).catch(() => undefined);
     for (const spy of spies) {
       expect(JSON.stringify(spy.mock.calls)).not.toContain(secret);
       spy.mockRestore();

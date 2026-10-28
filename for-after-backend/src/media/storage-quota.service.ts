@@ -6,6 +6,17 @@ import { PrismaService } from '../prisma/prisma.service.js';
 const GIB = 1024 ** 3;
 
 export type StorageLevel = 'NORMAL' | 'WARNING' | 'HIGH' | 'FULL';
+
+/** Where a counted file lives: one value per storage-bearing table. */
+export const STORAGE_SOURCES = [
+  'MESSAGE',
+  'MEMORY_VAULT',
+  'MY_STORY',
+  'MY_WISHES',
+  'RECIPIENT_PHOTO',
+] as const;
+export type StorageSource = (typeof STORAGE_SOURCES)[number];
+
 export type StorageUsage = {
   usedBytes: number;
   reservedBytes: number;
@@ -13,7 +24,35 @@ export type StorageUsage = {
   remainingBytes: number;
   percentage: number;
   level: StorageLevel;
+  /** READY bytes per source (Storage Manager); sums to usedBytes. */
+  breakdown: { source: StorageSource; bytes: number }[];
 };
+
+/**
+ * The five owner-scoped media tables as one row set (id, kind, size, dates,
+ * source, parent id). The single definition behind both the quota and the
+ * Storage Manager list, so their totals can never drift apart.
+ */
+export const ownedMedia = (ownerUserId: string) => Prisma.sql`
+  SELECT id, kind::text AS kind, status::text AS status, "sizeBytes", "createdAt", "deletedAt",
+         'MESSAGE' AS source, "messageId" AS "parentId"
+  FROM "MediaAsset" WHERE "ownerUserId" = ${ownerUserId}::uuid
+  UNION ALL
+  SELECT id, kind::text, status::text, "sizeBytes", "createdAt", "deletedAt",
+         'MEMORY_VAULT', "memoryVaultItemId"
+  FROM "MemoryVaultMediaAsset" WHERE "ownerUserId" = ${ownerUserId}::uuid
+  UNION ALL
+  SELECT id, kind::text, status::text, "sizeBytes", "createdAt", "deletedAt",
+         'RECIPIENT_PHOTO', "recipientId"
+  FROM "RecipientPhoto" WHERE "ownerUserId" = ${ownerUserId}::uuid
+  UNION ALL
+  SELECT id, kind::text, status::text, "sizeBytes", "createdAt", "deletedAt",
+         'MY_STORY', "myStoryResponseId"
+  FROM "MyStoryMediaAsset" WHERE "ownerUserId" = ${ownerUserId}::uuid
+  UNION ALL
+  SELECT id, kind::text, status::text, "sizeBytes", "createdAt", "deletedAt",
+         'MY_WISHES', "myWishResponseId"
+  FROM "MyWishMediaAsset" WHERE "ownerUserId" = ${ownerUserId}::uuid`;
 
 // Generic on purpose: no other Customer's data, no plan or internal detail.
 export const STORAGE_FULL =
@@ -59,33 +98,38 @@ export class StorageQuota {
     this.limitBytes = limit;
   }
 
-  // One owner-scoped SUM over the five media tables. Integers throughout:
-  // sizeBytes is an INT, sums fit a JS number exactly.
+  // One owner-scoped SUM over the five media tables, per status and source.
+  // Integers throughout: sizeBytes is an INT, sums fit a JS number exactly.
   private async totals(client: Client, ownerUserId: string) {
-    const rows = await client.$queryRaw<{ status: string; bytes: bigint }[]>`
-      SELECT status::text AS status, COALESCE(SUM("sizeBytes"), 0)::bigint AS bytes
-      FROM (
-        SELECT status, "sizeBytes", "deletedAt" FROM "MediaAsset" WHERE "ownerUserId" = ${ownerUserId}::uuid
-        UNION ALL
-        SELECT status, "sizeBytes", "deletedAt" FROM "MemoryVaultMediaAsset" WHERE "ownerUserId" = ${ownerUserId}::uuid
-        UNION ALL
-        SELECT status, "sizeBytes", "deletedAt" FROM "RecipientPhoto" WHERE "ownerUserId" = ${ownerUserId}::uuid
-        UNION ALL
-        SELECT status, "sizeBytes", "deletedAt" FROM "MyStoryMediaAsset" WHERE "ownerUserId" = ${ownerUserId}::uuid
-        UNION ALL
-        SELECT status, "sizeBytes", "deletedAt" FROM "MyWishMediaAsset" WHERE "ownerUserId" = ${ownerUserId}::uuid
-      ) owned
+    const rows = await client.$queryRaw<
+      { status: string; source: StorageSource; bytes: bigint }[]
+    >`
+      SELECT status, source, COALESCE(SUM("sizeBytes"), 0)::bigint AS bytes
+      FROM (${ownedMedia(ownerUserId)}) owned
       WHERE "deletedAt" IS NULL AND status IN ('READY', 'PENDING_UPLOAD')
-      GROUP BY status`;
-    const of = (status: string) =>
-      Number(rows.find((r) => r.status === status)?.bytes ?? 0);
-    return { ready: of('READY'), pending: of('PENDING_UPLOAD') };
+      GROUP BY status, source`;
+    const sum = (status: string, source?: StorageSource) =>
+      rows
+        .filter((r) => r.status === status && (!source || r.source === source))
+        .reduce((total, r) => total + Number(r.bytes), 0);
+    return {
+      ready: sum('READY'),
+      pending: sum('PENDING_UPLOAD'),
+      breakdown: STORAGE_SOURCES.map((source) => ({
+        source,
+        bytes: sum('READY', source),
+      })),
+    };
   }
 
   async usage(ownerUserId: string): Promise<StorageUsage> {
-    const { ready, pending } = await this.totals(this.prisma, ownerUserId);
+    const { ready, pending, breakdown } = await this.totals(
+      this.prisma,
+      ownerUserId,
+    );
     const counted = ready + pending;
     return {
+      breakdown,
       usedBytes: ready,
       reservedBytes: pending,
       limitBytes: this.limitBytes,

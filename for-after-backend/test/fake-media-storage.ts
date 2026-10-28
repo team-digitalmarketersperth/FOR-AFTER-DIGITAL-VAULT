@@ -18,6 +18,8 @@ const SIGNATURES: Record<string, number[]> = {
   'video/mp4': [0, 0, 0, 0x20, ...ascii('ftypisom')],
   'audio/webm': [0x1a, 0x45, 0xdf, 0xa3],
   'video/webm': [0x1a, 0x45, 0xdf, 0xa3],
+  // Phase 19A: death-verification evidence only.
+  'application/pdf': ascii('%PDF-1.7\n'),
 };
 export const fileStart = (mimeType: string) =>
   new Uint8Array([

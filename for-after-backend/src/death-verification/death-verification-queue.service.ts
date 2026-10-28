@@ -1,12 +1,5 @@
-import {
-  Injectable,
-  Logger,
-  OnApplicationBootstrap,
-  OnModuleDestroy,
-  OnModuleInit,
-} from '@nestjs/common';
-import { DelayedError, type Job, Queue, Worker } from 'bullmq';
-import { isUUID } from 'class-validator';
+import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import { Queue } from 'bullmq';
 import {
   DeathVerificationCaseStatus as Status,
   MessageStatus,
@@ -41,24 +34,21 @@ export interface DeathReconcileResult {
 }
 
 /**
- * Executes the death-verification workflow. PostgreSQL is the source of
- * truth; BullMQ only wakes the worker when a safeguard window ends, and the
- * reconciler (startup + every DEATH_VERIFICATION_RECONCILE_INTERVAL_SECONDS)
- * rebuilds everything from PostgreSQL:
+ * Producer side of the death-verification workflow (API and worker). PostgreSQL
+ * is the source of truth; BullMQ only wakes the worker when a safeguard window
+ * ends. reconcile() rebuilds everything from PostgreSQL; only the worker
+ * process runs it (DeathVerificationProcessor, startup + every
+ * DEATH_VERIFICATION_RECONCILE_INTERVAL_SECONDS):
  *  - PENDING cases whose safety notice was never sent (incl. Step 14 cases),
  *  - SAFEGUARD_ACTIVE cases (overdue → advanced now; otherwise job ensured),
  *  - VERIFIED cases whose death-trigger activation is missing or incomplete.
  * Message release jobs stay in the Step 12 message-release queue.
  */
 @Injectable()
-export class DeathVerificationQueue
-  implements OnModuleInit, OnApplicationBootstrap, OnModuleDestroy
-{
+export class DeathVerificationQueue implements OnModuleDestroy {
   private readonly logger = new Logger(DeathVerificationQueue.name);
   // Also used by the admin queue monitor (Step 16): counts, failed jobs, retry.
   readonly queue: Queue<SafeguardJobData>;
-  private worker?: Worker<SafeguardJobData>;
-  private timer?: NodeJS.Timeout;
   private running?: Promise<DeathReconcileResult>;
 
   constructor(
@@ -77,32 +67,7 @@ export class DeathVerificationQueue
     );
   }
 
-  onModuleInit(): void {
-    const { queueName, connection } = this.workflow.settings;
-    this.worker = new Worker<SafeguardJobData>(
-      queueName,
-      (job, token) => this.process(job, token),
-      { connection },
-    );
-    this.worker.on('error', (err) =>
-      this.logger.error(
-        `Death verification worker error (code: ${errorCode(err)})`,
-      ),
-    );
-  }
-
-  onApplicationBootstrap(): void {
-    void this.reconcile();
-    this.timer = setInterval(
-      () => void this.reconcile(),
-      this.workflow.settings.reconcileIntervalMs,
-    );
-    this.timer.unref();
-  }
-
   async onModuleDestroy(): Promise<void> {
-    clearInterval(this.timer);
-    await this.worker?.close();
     await this.queue.close();
   }
 
@@ -126,28 +91,6 @@ export class DeathVerificationQueue
         `death_trigger_activation_deferred case ${caseId} (code: ${errorCode(err)}); the reconciler will retry`,
       );
     }
-  }
-
-  async process(job: Job<SafeguardJobData>, token?: string): Promise<string> {
-    const caseId = job.data?.caseId;
-    if (typeof caseId !== 'string' || !isUUID(caseId)) {
-      this.logger.warn(
-        `death_safeguard_stale_job job ${job.id}: invalid payload`,
-      );
-      return 'stale';
-    }
-    const outcome = await this.workflow.elapseSafeguard(caseId);
-    if (outcome.result === 'not_due') {
-      // Fired early: back to delayed for the stored time.
-      await job.moveToDelayed(outcome.dueAt.getTime(), token);
-      throw new DelayedError();
-    }
-    if (outcome.result === 'stale') {
-      this.logger.log(
-        `death_safeguard_stale_job case ${caseId}: ${outcome.reason}`,
-      );
-    }
-    return outcome.result;
   }
 
   // One run at a time per instance; a call during a run joins it.
@@ -242,6 +185,14 @@ export class DeathVerificationQueue
       ),
     );
     return true;
+  }
+
+  /**
+   * Admin dead-letter retry: run the case's job now. The worker re-reads the
+   * case; not due → back to its stored time; no longer SAFEGUARD_ACTIVE → stale.
+   */
+  requeueSafeguard(caseId: string, now = new Date()) {
+    return this.ensureSafeguardJob(caseId, now, now);
   }
 
   // Keeps one delayed job that fires no later than safeguardEndsAt.

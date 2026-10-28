@@ -1,4 +1,5 @@
 import { ConfigModule } from '@nestjs/config';
+import { senderSnapshots } from './sender-snapshots.js';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import { Queue } from 'bullmq';
@@ -16,6 +17,7 @@ import { MessagesModule } from '../src/messages/messages.module.js';
 import { PrismaModule } from '../src/prisma/prisma.module.js';
 import { PrismaService } from '../src/prisma/prisma.service.js';
 import { RecipientsModule } from '../src/recipients/recipients.module.js';
+import { QueueWorkersModule } from '../src/worker.module.js';
 
 // Real HTTP, sessions (MemoryStore), PostgreSQL, local Redis (REDIS_URL) and a
 // real BullMQ worker on a queue used only by this run. Object storage is
@@ -71,6 +73,8 @@ describe('Message release (e2e, PostgreSQL + Redis + BullMQ)', () => {
     process.env.RELEASE_RECONCILE_INTERVAL_SECONDS = '3600';
     const moduleRef = await Test.createTestingModule({
       imports: [
+        // Phase 17B: the worker process's consumers, started explicitly.
+        QueueWorkersModule,
         ConfigModule.forRoot({ isGlobal: true }),
         PrismaModule,
         AuthModule,
@@ -329,4 +333,17 @@ describe('Message release (e2e, PostgreSQL + Redis + BullMQ)', () => {
     expect(await statusOf(id)).toBe('SCHEDULED');
     expect(await releases(id)).toEqual([]);
   }, 30_000);
+
+  // Phase 18: every grant this suite released carries its sender's display
+  // name, snapshotted inside the release transaction, for each trigger path.
+  it('every access grant snapshots the sender display name (FIXED_DATE)', async () => {
+    const rows = await senderSnapshots(prisma, emails);
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row.snapshot, row.trigger).toBe(row.current);
+      expect(row.snapshot, row.trigger).not.toBeNull();
+    }
+    const triggers = new Set(rows.map((r) => r.trigger));
+    for (const t of ['FIXED_DATE']) expect(triggers, t).toContain(t);
+  });
 });

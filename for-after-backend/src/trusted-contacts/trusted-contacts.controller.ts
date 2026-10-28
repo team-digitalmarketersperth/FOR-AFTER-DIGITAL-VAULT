@@ -21,6 +21,7 @@ import { CustomerGuard } from '../auth/guards/customer.guard.js';
 import { SessionAuthGuard } from '../auth/guards/session-auth.guard.js';
 import type { SafeUser } from '../users/users.service.js';
 import { CreateTrustedContactDto } from './dto/create-trusted-contact.dto.js';
+import { SendInvitationDto } from './dto/send-invitation.dto.js';
 import { UpdateTrustedContactDto } from './dto/update-trusted-contact.dto.js';
 import {
   type InvitationView,
@@ -49,8 +50,9 @@ export class TrustedContactsController {
     private readonly invitations: TrustedContactInvitationsService,
   ) {}
 
-  // 409 once two active contacts exist (Phase 10). With an email, the
-  // invitation is sent too; see `invitation.status` in the response.
+  // 409 once two active contacts exist (Phase 10). With an email, the email
+  // invitation is sent too; see `invitation.status` in the response. An SMS
+  // invitation is only ever sent when the Customer asks (it costs money).
   @Post()
   create(
     @CurrentUser() user: SafeUser,
@@ -60,16 +62,19 @@ export class TrustedContactsController {
     return this.trustedContacts.create(user.id, dto, meta(req));
   }
 
-  // Send or resend the email invitation (supersedes any pending link). At most
-  // 3 per contact per hour (429). No email → 409; already accepted → 409.
+  // Send or resend the invitation by `channel` (EMAIL default, or SMS) to the
+  // contact's stored address; supersedes any pending link. At most 3 per
+  // contact per hour, and 6 SMS per Customer per day (429). Channel address
+  // missing → 409 (no fallback); already accepted → 409; send failed → 503.
   @Post(':id/invitation')
   @HttpCode(200)
   async invite(
     @CurrentUser() user: SafeUser,
     @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SendInvitationDto,
     @Req() req: Request,
   ): Promise<TrustedContactResponse> {
-    const sent = await this.invitations.send(user.id, id, meta(req));
+    const sent = await this.invitations.send(user.id, id, dto.channel, meta(req));
     if (!sent) throw new ServiceUnavailableException(SEND_FAILED);
     return this.trustedContacts.findOwnedById(user.id, id);
   }

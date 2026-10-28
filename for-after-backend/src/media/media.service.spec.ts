@@ -180,6 +180,8 @@ describe('CreateMediaUploadDto', () => {
     ['mimeType', { mimeType: 'image/*' }],
     ['mimeType', { mimeType: 'audio/ogg' }],
     ['mimeType', { mimeType: 'video/quicktime' }],
+    // Phase 19A: PDF is evidence-only, never message/Memory Vault media.
+    ['mimeType', { mimeType: 'application/pdf' }],
     ['sizeBytes', { sizeBytes: 0 }],
     ['sizeBytes', { sizeBytes: -1 }],
     ['sizeBytes', { sizeBytes: 1.5 }],
@@ -670,11 +672,21 @@ describe('upload checks', () => {
     'audio/wav',
     'video/mp4',
     'video/webm',
+    'application/pdf',
   ])('%s: its own signature passes, others fail', (mime) => {
     expect(hasFileSignature(mime, fileStart(mime))).toBe(true);
     const other = mime.startsWith('image') ? 'audio/mpeg' : 'image/png';
     expect(hasFileSignature(mime, fileStart(other))).toBe(false);
     expect(hasFileSignature(mime, new Uint8Array())).toBe(false);
+  });
+
+  // Phase 19A: the header must open the file; a JPEG named .pdf is not a PDF.
+  it('PDF: leading bytes before %PDF- or another type are refused', () => {
+    const pdf = fileStart('application/pdf');
+    expect(hasFileSignature('application/pdf', new Uint8Array([0x20, ...pdf]))).toBe(false);
+    expect(hasFileSignature('application/pdf', fileStart('image/jpeg'))).toBe(false);
+    expect(hasFileSignature('application/pdf', Buffer.from('%PDF'))).toBe(false);
+    expect(hasFileSignature('image/jpeg', pdf)).toBe(false);
   });
 
   it('a WAV is not a WebP (same RIFF header)', () => {

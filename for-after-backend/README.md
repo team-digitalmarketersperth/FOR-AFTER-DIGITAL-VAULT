@@ -88,8 +88,12 @@ npm install
 cp .env.example .env       # then fill in the secrets (see below)
 npx prisma migrate dev     # apply migrations
 npx prisma generate        # generate the client into src/generated/prisma
-npm run start:dev          # http://localhost:4000
+npm run start:dev          # API, http://localhost:4000
+npm run worker:dev         # second terminal: BullMQ worker (releases, emails, death safeguards)
 ```
+
+The API only queues background work; the worker process consumes it (Phase 17B, `docs/message-release.md` §3). Without
+it nothing is released or emailed.
 
 Check it is up:
 
@@ -123,9 +127,9 @@ Copy `.env.example` to `.env`. **Never commit `.env`.**
 | `TRUSTED_CONTACT_OTP_PEPPER` | ✅ | random, at least 32 characters, **different** from the Recipient pepper |
 | `TRUSTED_CONTACT_OTP_*`, `TRUSTED_CONTACT_SESSION_TTL_SECONDS`, `TRUSTED_CONTACT_COOKIE_DOMAIN` | no | same settings for Trusted Contacts ([trusted contact auth](docs/trusted-contact-auth.md)) |
 | `DEATH_VERIFICATION_SAFEGUARD_SECONDS` | no | `1209600` (14 days); local testing may use `60`; stored per case when it starts |
-| `EMAIL_PROVIDER` | ✅ in production | `brevo` (selected; production requires `brevo` or the optional `resend`), `console` (`NODE_ENV=development` only) or `disabled` (default elsewhere). Sign-in codes, release and safety emails ([email setup](docs/email-production-setup.md)) |
-| `BREVO_API_KEY`, `EMAIL_FROM_ADDRESS`, `EMAIL_FROM_NAME`, `APP_BASE_URL` | with `brevo` | server-side Brevo v3 API key, a sender verified in Brevo, display name, app origin for links |
-| `RESEND_API_KEY` | with `resend` only | optional, inactive Resend adapter; never required for Brevo |
+| `EMAIL_PROVIDER` | ✅ in production | `microsoft` (selected; production requires `microsoft` or the optional `resend`), `console` (`NODE_ENV=development` only) or `disabled` (default elsewhere). Sign-in codes, release and safety emails ([email setup](docs/email-production-setup.md)) |
+| `MS_TENANT_ID`, `MS_CLIENT_ID`, `MS_CLIENT_SECRET`, `MS_SENDER_MAILBOX`, `EMAIL_FROM`, `EMAIL_FROM_NAME`, `APP_BASE_URL` | with `microsoft` | Entra ID app registration (Mail.Send application permission), sender mailbox, From address, display name, app origin for links ([email setup](docs/email-production-setup.md) §7) |
+| `RESEND_API_KEY`, `EMAIL_FROM_ADDRESS` | with `resend` only | optional, inactive Resend adapter and its verified sender |
 | `EMAIL_SEND_TIMEOUT_MS`, `EMAIL_QUEUE_NAME`, `EMAIL_JOB_*`, `EMAIL_RECONCILE_INTERVAL_SECONDS` | no | email timeout and the `email-delivery` queue |
 | `DEATH_VERIFICATION_QUEUE_NAME`, `DEATH_VERIFICATION_RECONCILE_INTERVAL_SECONDS`, `DEATH_VERIFICATION_JOB_*` | no | safeguard queue settings ([death verification](docs/death-verification.md)) |
 | `ADMIN_TOTP_ENCRYPTION_KEY` | ✅ | 32 random bytes, **base64** (`openssl rand -base64 32`); encrypts admin TOTP secrets. Dedicated key |
@@ -147,8 +151,9 @@ PostgreSQL or Redis is unreachable.
 
 | Command | What it does |
 |---|---|
-| `npm run start:dev` | Run with hot reload |
-| `npm run build` / `npm run start:prod` | Compile to `dist/` and run it |
+| `npm run start:dev` | Run the API with hot reload |
+| `npm run worker:dev` | Run the BullMQ worker with hot reload (own build dir `dist-worker/`) |
+| `npm run build` / `npm run start:prod` / `npm run worker:prod` | Compile to `dist/`, run the API (`dist/main.js`) / the worker (`dist/worker.js`) |
 | `npm run lint` | oxlint (type-aware) |
 | `npm run format` | Prettier |
 | `npm test` | Unit tests (no database needed) |
@@ -245,6 +250,7 @@ requests from the docs origin, which the CSRF Origin check refuses for POST/PATC
 | POST | `/api/v1/admin/users/:userId/suspend`, `…/reactivate` | ADMIN (Customers) / SUPER_ADMIN (also admins); never `PASSED` |
 | GET | `/api/v1/admin/audit-logs`, `/api/v1/admin/audit-logs/:auditLogId` | ADMIN / SUPER_ADMIN (+MFA); read-only |
 | GET/POST | `/api/v1/admin/system/queues`, `…/:queueName/failed`, `…/:queueName/jobs/:jobId/retry` | ADMIN / SUPER_ADMIN (+MFA); allowlisted queues |
+| GET/POST | `/api/v1/admin/system/dead-letters`, `…/:deadLetterId`, `…/:deadLetterId/retry` | ADMIN / SUPER_ADMIN (+MFA); Phase 17A durable dead letters |
 
 There is no admin sign-up (an operator sets `User.role`); an admin enrolls TOTP on first sign-in. Admin sessions end
 after 30 minutes idle. Full guide: [docs/admin.md](docs/admin.md).

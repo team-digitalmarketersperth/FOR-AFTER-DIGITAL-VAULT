@@ -83,7 +83,11 @@ const setup = () => {
     deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
     createMany: vi.fn().mockResolvedValue({ count: 0 }),
   };
-  const tx = { myStoryResponse, memoryVaultItem, myStoryMemoryLink };
+  // Recent changes (customer activity): recorded, not asserted here.
+  const customerActivity = { create: vi.fn(async () => ({})) };
+  // An explicit save clears the answer's autosave (draft recovery).
+  const draftRecovery = { deleteMany: vi.fn(async () => ({ count: 0 })) };
+  const tx = { myStoryResponse, memoryVaultItem, myStoryMemoryLink, customerActivity, draftRecovery };
   const $transaction = vi.fn((fn: (t: typeof tx) => unknown) => fn(tx));
   const cleanup = {
     purge: vi.fn().mockResolvedValue({ purged: 0, failed: 0 }),
@@ -92,6 +96,7 @@ const setup = () => {
     myStoryResponse,
     memoryVaultItem,
     myStoryMemoryLink,
+    draftRecovery,
     cleanup,
     service: new MyStoryService(
       { ...tx, $transaction } as unknown as PrismaService,
@@ -431,6 +436,14 @@ describe('MyStoryService', () => {
       expect(myStoryResponse.upsert).not.toHaveBeenCalled();
     });
 
+    it("an explicit save clears only this Customer's autosave of this answer", async () => {
+      const { draftRecovery, service } = setup();
+      await service.save('lisa', prompt, { textContent: 'Edited.' });
+      expect(draftRecovery.deleteMany).toHaveBeenCalledWith({
+        where: { userId: 'lisa', type: 'MY_STORY', key: prompt.key },
+      });
+    });
+
     it('an edit after a wording change (v2) still keeps the original v1 snapshot', async () => {
       const { myStoryResponse, service } = setup();
       const reworded: MyStoryPrompt = {
@@ -475,6 +488,7 @@ describe('MyStoryService', () => {
         promptTextSnapshot: 'How do you hope to be remembered?',
         promptVersion: 2,
         textContent: text,
+        privateNote: null,
       };
       expect(args.create).toEqual({ ...unique, ...answer });
       // The same row is restored (one answer per prompt), never a second one.

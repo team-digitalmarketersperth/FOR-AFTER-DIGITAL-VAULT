@@ -103,6 +103,9 @@ All `SessionAuthGuard` + `AdminGuard` (role + MFA). Lists return `{items, pagina
 | `GET` | `/admin/system/queues` | `message-release`, `death-verification` job counts |
 | `GET` | `/admin/system/queues/:queueName/failed` | `?page&limit`; sanitized reason, id-only payload; unknown queue `404` |
 | `POST` | `/admin/system/queues/:queueName/jobs/:jobId/retry` | Failed jobs only (`409` otherwise); worker re-checks PostgreSQL. Audited |
+| `GET` | `/admin/system/dead-letters` | Phase 17A durable dead letters: `?queue&status&from&to&page&limit`; ids + sanitized error only |
+| `GET` | `/admin/system/dead-letters/:deadLetterId` | One dead letter (incl. operator alert status); `404` unknown |
+| `POST` | `/admin/system/dead-letters/:deadLetterId/retry` | `OPEN` only (`409` otherwise); re-queued from the entity id, worker re-checks PostgreSQL. Audited `DEAD_LETTER_RETRY_REQUESTED` |
 
 ### Recipient Auth (OTP)
 | Method | Endpoint | Description |
@@ -150,7 +153,7 @@ Responses never include `ownerUserId` or `deletedAt`.
 | `GET` | `/trusted-contacts/:id` | Get trusted contact |
 | `PATCH` | `/trusted-contacts/:id` | Update trusted contact |
 | `DELETE`| `/trusted-contacts/:id` | Remove trusted contact (soft delete, 204); a pending invitation is cancelled |
-| `POST` | `/trusted-contacts/:id/invitation` | Phase 10: send/resend the email invitation → `200` contact. No email `409`, already accepted `409`, 3/hour per contact `429`, send failed `503` |
+| `POST` | `/trusted-contacts/:id/invitation` | Phase 10: send/resend the invitation → `200` contact. Body `{ "channel": "EMAIL" \| "SMS" }` (omitted = `EMAIL`); always to the contact's stored address. Channel's address missing `409` (no fallback), already accepted `409`, 3/hour per contact or 6 SMS/day per Customer `429`, send failed `503` |
 
 Same rules as Recipients: all five routes require a session **and** the `CUSTOMER` role (others get 403).
 Every query is scoped to the session user's id, which is never accepted from the body.
@@ -161,8 +164,8 @@ Body fields: `firstName` (required), `lastName`, `relationship`, `email`, `mobil
 A trusted contact is not a User and gets no access to the owner's content. Since Step 14 the contact can sign in by email OTP
 to report a death (see "Trusted Contact Auth & Portal" below).
 **Phase 10:** at most **2 active** Trusted Contacts per Customer (removed ones do not count; concurrent creates are
-serialised by a lock on the Customer row). Every response carries `invitation: {status, sentAt}` with status
-`PENDING | ACCEPTED | DECLINED | EXPIRED | NOT_SENT | UNAVAILABLE` (no email: SMS invitations are deferred). Details:
+serialised by a lock on the Customer row). Every response carries `invitation: {status, sentAt, channel}` with status
+`PENDING | ACCEPTED | DECLINED | EXPIRED | NOT_SENT` and `channel` `EMAIL | SMS | null` (SMS invitations 2026-10-17). Details:
 [trusted-contact-auth.md](trusted-contact-auth.md) §9–11.
 
 ### Messages
@@ -173,6 +176,13 @@ serialised by a lock on the Customer row). Every response carries `invitation: {
 | `GET` | `/messages/:id` | Get own message |
 | `PATCH` | `/messages/:id` | Update own DRAFT (`title`, `textContent`, `recipientIds`) |
 | `DELETE`| `/messages/:id` | Soft delete own DRAFT (204) and its media: rows soft-deleted in the same write, objects removed after commit (best effort) |
+| `GET` | `/messages/:id/versions` | Version history (2026-10-14): metadata only, newest first, paginated |
+| `GET` | `/messages/:id/versions/:versionId` | One version's title, type and text |
+| `POST` | `/messages/:id/versions/:versionId/restore` | DRAFT only (409 otherwise); restores title/type/text, keeps the replaced content as a version |
+
+Version history and server-side autosave (`/users/me/drafts/...`): see `docs/draft-recovery.md`. `GET /messages/:id`
+includes `version` (current version number). `POST /messages` accepts an optional `recoveryDraftKey` (the
+new-message autosave it clears).
 
 Implemented in Step 5. All five routes require a session **and** the `CUSTOMER` role (admins get 403; any future admin access needs separate audited APIs).
 `ownerUserId` always comes from the session. `status` is server-controlled: every message is created `DRAFT`, and neither field is accepted in a body (400).
@@ -201,20 +211,30 @@ Implemented in Step 6. Since Step 12 a `FIXED_DATE` schedule is **executed**: at
 `docs/death-verification.md`). See `docs/scheduling.md` and `docs/message-release.md`.
 All four routes require a session **and** the `CUSTOMER` role (others get 403). A non-UUID `:messageId` returns 400.
 Scoped through the message owner: a message that is missing, deleted or someone else's gives `404 Message not found.`; an own message without a schedule gives `404 Schedule not found.`
-Body: `triggerType` (required on POST) is one of `FIXED_DATE`, `ON_DEATH`, `AFTER_DEATH`. `NOW`, `BIRTHDAY`, `ANNIVERSARY`, `CUSTOM_EVENT`, `ANNUAL_AFTER_DEATH` return 400 (reserved).
+Body: `triggerType` (required on POST) is one of `NOW`, `FIXED_DATE`, `BIRTHDAY`, `ANNIVERSARY`, `CUSTOM_EVENT`,
+`ON_DEATH`, `AFTER_DEATH`, `ANNUAL_AFTER_DEATH` (Phase 16; semantics in `docs/scheduling.md` §10). Each takes exactly
+these fields; any other non-null field is a 400.
 
-| triggerType | `scheduledFor` | `afterDeathDays` |
-| :--- | :--- | :--- |
-| `FIXED_DATE` | required: ISO 8601 date-time **with offset** (`Z` or `+08:00`), in the future; returned in UTC | not allowed |
-| `ON_DEATH` | not allowed | not allowed |
-| `AFTER_DEATH` | not allowed | required integer 0-36,500 (0 is kept as `AFTER_DEATH`) |
+| triggerType | Required fields |
+| :--- | :--- |
+| `NOW` | none (released right after it is scheduled) |
+| `FIXED_DATE` | `scheduledFor`: ISO 8601 date-time **with offset** (`Z` or `+08:00`), in the future; returned in UTC |
+| `BIRTHDAY` | `timezone` (IANA, e.g. `Australia/Perth`), `localTime` (`HH:mm`); every live assigned Recipient needs a birthday (409) |
+| `ANNIVERSARY` | `timezone`, `localTime`, `annualMonth` 1–12, `annualDay` 1–31 (a real date; 29 Feb allowed) |
+| `CUSTOM_EVENT` | `timezone`, `localTime`, `eventDate` (`YYYY-MM-DD`), `eventLabel` (plain text 1–100, no `<`/`>`); must be in the future. `scheduledFor` is derived, never sent |
+| `ON_DEATH` | none |
+| `AFTER_DEATH` | `afterDeathDays`: integer 0-36,500 (0 is kept as `AFTER_DEATH`) |
+| `ANNUAL_AFTER_DEATH` | `timezone`, `localTime` |
 
 `null` counts as "not set". Contradictory fields return 400; they are never silently dropped.
-`PATCH` takes any of the three fields, merges them with the stored schedule and validates the complete result. Changing `triggerType` clears fields the new type does not use unless they are sent again.
+`PATCH` takes any of the fields, merges them with the stored schedule and validates the complete result. Changing `triggerType` clears fields the new type does not use unless they are sent again.
 Errors: `POST` on an already scheduled message 409; `POST` on a non-DRAFT message 409; a message with no live (non-deleted) recipient 400;
 `POST` on an incomplete composition 409 with the reason (e.g. `PHOTO messages require at least one ready photo.`, see `docs/message-composition.md`);
-`PATCH`/`DELETE` on a `RELEASED`/`CANCELLED` message 409. `status` is never accepted in any body (nor `releasedAt`, `release`, `releaseId` or job fields: 400).
-Response: `{ id, triggerType, scheduledFor, afterDeathDays, createdAt, updatedAt }` (no `messageId`, no message fields).
+`PATCH`/`DELETE` on a `RELEASED`/`CANCELLED` message 409; `PATCH`/`DELETE` of a repeating schedule that has already
+been released to any Recipient 409. `status` is never accepted in any body (nor `releasedAt`, `release`, `releaseId` or job fields: 400).
+Response: `{ id, triggerType, scheduledFor, afterDeathDays, timezone, localTime, annualMonth, annualDay, eventDate,
+eventLabel, releasedRecipientCount, createdAt, updatedAt }` (no `messageId`, no message fields). `releasedRecipientCount`
+= Recipients a repeating schedule has already been shared with (the message stays `SCHEDULED`).
 
 ### Message release (internal, Step 12)
 There is **no** release endpoint: customers cannot release or bypass timing. The worker releases a due `FIXED_DATE` message after
@@ -251,6 +271,17 @@ The fields fix the path, privacy (private), no overwrite and the maximum size; t
 asset's own path. Not uploaded yet (or another path): 409. Size, privacy, provider type or file signature (magic bytes) differs: 400 and the
 asset becomes `FAILED` (request a new upload). Already `READY`: returns it unchanged. No `PROCESSING` state (videos are served as uploaded).
 Media response: `{ id, kind, status, originalFileName, mimeType, sizeBytes, uploadedAt, createdAt, updatedAt }`; never `storageKey`, `storageProvider`, `providerFileId`, `ownerUserId` or `deletedAt`.
+
+### Storage (Customer)
+| Method | Path | Description |
+| :--- | :--- | :--- |
+| `GET` | `/users/me/storage` | Own usage: `{ usedBytes, reservedBytes, limitBytes, remainingBytes, percentage, level, breakdown }` (`breakdown` = READY bytes per source) |
+| `GET` | `/users/me/storage/items` | Storage Manager list: `?page&limit` (max 100), `type` (`PHOTO`/`AUDIO`/`VIDEO`), `source` (`MESSAGE`, `MEMORY_VAULT`, `MY_STORY`, `MY_WISHES`, `RECIPIENT_PHOTO`), `sort` (`size_desc` default, `created_desc`, `created_asc`) → `{ items, pagination }` |
+
+Customer session only (401 otherwise); the caller's own files only. Items carry `{ id, type, sizeBytes, source, sourceId,
+displayName, createdAt, canDelete, deleteRestriction }`: no URL, storage key, provider id or owner. There is no delete
+here: a file is deleted through its own feature's endpoint (message media only while the message is `DRAFT`). A full
+quota never blocks listing or deleting. See `docs/media-storage.md` §5a.
 Access response: `{ url, expiresAt }` (default 300 s); only for `READY` media (otherwise 409).
 Message state: upload, complete and delete need a **DRAFT** message (`SCHEDULED`/`RELEASED`/`CANCELLED` give 409; unschedule first). List and access-url work in any state.
 Uploads do not depend on the message's `contentType` (a TEXT draft may upload a photo before switching to MIXED); scheduling checks the final composition.
@@ -311,11 +342,11 @@ There is no separate `/my-story/responses` list: `GET /my-story/prompts` already
 | `GET` | `/my-wishes/prompts/:promptKey` | One prompt with the customer's answer (or `response: null`) |
 | `GET` | `/my-wishes/prompts/:promptKey/response` | The customer's answer (404 if not answered) |
 | `PUT` | `/my-wishes/prompts/:promptKey/response` | Create, update or restore the answer (always 200). Body `{ textContent? }` (null clears; Phase 15B); never empty |
-| `GET` | `/my-wishes/disclaimer` | Phase 15A: the current My Wishes notice `{ version, text, requiresAcknowledgement, acknowledged, acknowledgedAt }` |
-| `POST` | `/my-wishes/disclaimer/acknowledgement` | Body `{ version }`: acknowledge the current version (idempotent; 409 if outdated). `PUT` of a wish is 409 until done |
+| `GET` | `/my-wishes/disclaimer` | Phase 15A: the current My Wishes notice `{ version, text, requiresAcknowledgement: false, acknowledged, acknowledgedAt }`; informational only (2026-10-14) |
+| `POST` | `/my-wishes/disclaimer/acknowledgement` | Legacy, older clients only: body `{ version }` records a historical acknowledgement (idempotent; 409 if outdated). Nothing requires it |
 | `DELETE`| `/my-wishes/prompts/:promptKey/response` | Soft delete (204) with its files; the prompt can be answered again. Messages made from it stay |
 | `POST` | `/my-wishes/prompts/:promptKey/response/messages` | Phase 15B: new independent DRAFT Message from chosen parts `{ title, contentType, includeText, mediaAssetIds, recipientIds }` (201); the wish stays private. After-death sharing = the Message's `ON_DEATH` / `AFTER_DEATH` schedule |
-| `POST` | `/my-wishes/prompts/:promptKey/response/media/upload-url` | Phase 15B: authorize a PHOTO/AUDIO/VIDEO upload (201); quota checked; 409 until the notice is acknowledged |
+| `POST` | `/my-wishes/prompts/:promptKey/response/media/upload-url` | Phase 15B: authorize a PHOTO/AUDIO/VIDEO upload (201); quota checked |
 | `POST` | `/my-wishes/prompts/:promptKey/response/media/:mediaAssetId/complete` | Verify + scan the upload; `READY` (200) |
 | `GET` | `/my-wishes/prompts/:promptKey/response/media` | The wish's files |
 | `GET` | `/my-wishes/prompts/:promptKey/response/media/:mediaAssetId/access-url` | Short-lived signed URL (READY only) |
@@ -381,7 +412,7 @@ injected fields (`status`, `ownerUserId`, `verifiedByUserId`, `deathTriggersActi
 
 Verify/reject also write `DEATH_VERIFICATION_VERIFIED` / `_REJECTED` to the generic `AuditLog` (same transaction).
 
-**Still planned (not built):** evidence upload, second-contact confirmation (`/death-verifications/:id/confirm`). The original `/admin/death-verifications/:id/approve` is built as `…/verify`. Full workflow:
+**Built in Phase 19A:** supporting evidence: `POST /trusted-contact/accounts/:trustedContactId/death-verification/evidence/upload-url`, `POST …/evidence/:evidenceId/complete`, `GET …/evidence`, `GET …/evidence/:evidenceId/access-url`, and `GET /admin/death-verifications/:caseId/evidence/:evidenceId/access-url` ([death-verification.md §2A](death-verification.md#2a-supporting-evidence-phase-19a)). **Still planned (not built):** second-contact confirmation (`/death-verifications/:id/confirm`). The original `/admin/death-verifications/:id/approve` is built as `…/verify`. Full workflow:
 `docs/death-verification.md`.
 
 ### Subscriptions

@@ -59,7 +59,9 @@ job is only a reminder to check; the worker always re-reads PostgreSQL and never
 | `FIXED_DATE` | ✅ Executed at `scheduledFor` (UTC instant), unchanged since Step 12 |
 | `ON_DEATH` | ✅ Step 15: executed at the activation `dueAt` = `verifiedAt`, only while the case is `VERIFIED` |
 | `AFTER_DEATH` | ✅ Step 15: executed at the activation `dueAt` = `verifiedDeathAt + afterDeathDays`, only while the case is `VERIFIED` |
-| Others | ❌ Not accepted by the API (Step 6); never executed |
+| `NOW` | ✅ Phase 16: due at the moment it was scheduled; queued with no delay after the schedule commits |
+| `CUSTOM_EVENT` | ✅ Phase 16: executed once at its derived UTC `scheduledFor`, like `FIXED_DATE` |
+| `BIRTHDAY`, `ANNIVERSARY`, `ANNUAL_AFTER_DEATH` | ✅ Phase 16: released **per Recipient** through `MessageRecipientRelease` occurrences (`releaseOccurrence`); the Message stays `SCHEDULED`. See [scheduling.md §10](scheduling.md#10-phase-16-every-trigger-approved-2026-10-09) |
 
 The worker never invents a death: without a `DeathTriggeredMessageActivation` linked to a `VERIFIED` case, an
 `ON_DEATH`/`AFTER_DEATH` job is **stale** and does nothing. `MessageSchedule.scheduledFor` stays `FIXED_DATE`-only.
@@ -77,7 +79,39 @@ The worker never invents a death: without a `DeathTriggeredMessageActivation` li
 | `MessageReleaseProcessor` | BullMQ worker: calls the service, logs the outcome, re-delays early jobs, rethrows errors for retry |
 | `MessageReleaseReconciler` | At startup and every 60 s: queues every due-soon `FIXED_DATE` schedule that lacks a healthy job |
 
-No controller: there is **no release endpoint** and no development trigger endpoint. The worker runs inside the API process.
+No controller: there is **no release endpoint** and no development trigger endpoint.
+
+### API process and worker process (Phase 17B)
+
+Two entrypoints, two composition roots, one codebase. Business logic (`MessageReleaseService`, the death workflow,
+`DeadLetterService`, the email provider) is shared, never copied.
+
+| Process | Entrypoint → root | Runs | Never runs |
+|---|---|---|---|
+| API | `src/main.ts` → `AppModule` | HTTP, sessions, guards, Swagger; **producers**: `MessageReleaseQueue`, `ReleaseNotificationQueue`, `DeathVerificationQueue` (add/move/remove jobs, admin queue view and retry) | BullMQ `Worker`s, reconcilers |
+| Worker | `src/worker.ts` → `WorkerModule` (`QueueWorkersModule`) | Nest application context, **no HTTP server**: `MessageReleaseProcessor` + `MessageReleaseReconciler`, `ReleaseNotificationProcessor` (+ its reconciler), `DeathVerificationProcessor` (+ the death reconciler), dead-letter hooks and ops alerts | controllers, sessions, Swagger, auth |
+
+- The API's module graph has no consumer at all, so starting only the API consumes nothing and reconciles nothing;
+  jobs wait in Redis until a worker runs (`test/worker-process.e2e-spec.ts`, `src/worker.module.spec.ts`).
+- Worker boot: PostgreSQL → each BullMQ worker connects (`waitUntilReady`, 5 s timeout; unreachable queue Redis = exit
+  1) → reconcilers start (`onApplicationBootstrap`, after every worker is ready) → interval ticks.
+- Shutdown (SIGTERM/SIGINT, `enableShutdownHooks`): reconciler timers cleared → `Worker.close()` waits for the active
+  job → a running reconcile is awaited → queues close → PostgreSQL disconnects → the signal is re-raised.
+- Several worker instances are safe: deterministic job ids, row locks and unique keys (`MessageRelease`,
+  `MessageRecipientRelease`, `ReleaseNotification`, `DeadLetterJob`) make every reconciler and job idempotent. No leader
+  election.
+- `MediaCleanup` (Phase 12) is not a BullMQ job and still runs in the API process.
+
+Local development (three terminals):
+
+```bash
+cd for-after-backend && npm run start:dev    # API, http://localhost:4000
+cd for-after-backend && npm run worker:dev   # worker (builds to dist-worker/, so both watchers can run)
+cd for-after-frontend && npm run dev         # http://localhost:3000
+```
+
+Production: `npm run build`, then `npm run start:prod` (API, `dist/main.js`) and `npm run worker:prod` (worker,
+`dist/worker.js`) as two services sharing PostgreSQL and Redis. Without a running worker nothing is released.
 
 ---
 
@@ -109,6 +143,7 @@ producer uses `enableOfflineQueue: false` plus a 5 s timeout so a Redis outage n
 | **Delay** | `scheduledFor − now`, or `0` if due or overdue. Beyond the lookahead nothing is queued |
 | **Retries** | 5 attempts, exponential backoff 5 s base |
 | **Cleanup** | Completed jobs kept 24 h (max 1000), failed jobs 7 days (max 1000) |
+| **Dead letter** | After the last attempt: one durable `DeadLetterJob` row (ids + sanitized error) and one operator alert; a later successful run (reconciler, admin retry) resolves it. Phase 17A, [admin.md §8](admin.md#8-queue-monitoring-and-failed-job-retry) |
 | **Timers** | Never `setTimeout` for a release; the reconciliation timer only re-scans PostgreSQL |
 
 ---
@@ -139,7 +174,7 @@ never execute on the old time while a reschedule commits.
 
 ## 7. Reconciliation
 
-Every 60 s and once at startup, per instance, for schedules matching:
+Every 60 s and once at startup, in each worker process, for schedules matching:
 
 ```text
 MessageSchedule.triggerType = FIXED_DATE
@@ -316,8 +351,11 @@ then restart NestJS.
 
 ## 16. Not in Step 12
 
-Delivery (email/SMS/push), read/delivery receipts, dead-letter queue and alerting, a separate worker process, metrics
-platform, `ANNUAL_AFTER_DEATH` and other recurring triggers.
+Delivery (email/SMS/push), read/delivery receipts, dead-letter queue and alerting (added in Phase 17A), a separate
+worker process (added in Phase 17B), metrics
+platform.
 
 > ✅ Added later: Recipient OTP + Portal (Step 13); Trusted Contact sign-in + death report intake (Step 14, releases
-> nothing); death verification + `ON_DEATH`/`AFTER_DEATH` execution after an admin-verified death (Step 15).
+> nothing); death verification + `ON_DEATH`/`AFTER_DEATH` execution after an admin-verified death (Step 15); release
+> emails (Step 24); `NOW`, `CUSTOM_EVENT` and the per-Recipient recurring triggers `BIRTHDAY`, `ANNIVERSARY`,
+> `ANNUAL_AFTER_DEATH` with `MessageRecipientRelease` (Phase 16).

@@ -8,13 +8,21 @@ import { paginate } from '../audit/audit-log.service.js';
 import {
   MessageContentType,
   MessageStatus,
+  MessageVersionReason,
   Prisma,
 } from '../generated/prisma/client.js';
 import { MediaCleanup } from '../media/media-cleanup.service.js';
 import { storedRefSelect } from '../media/media.service.js';
+import { noteActivity } from '../activity/customer-activity.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateMessageDto } from './dto/create-message.dto.js';
 import { UpdateMessageDto } from './dto/update-message.dto.js';
+import {
+  firstVersion,
+  lockOwnedDraft,
+  NOT_DRAFT,
+  recordVersion,
+} from './message-versions.js';
 
 // Recipients deleted after assignment are hidden.
 const recipientsSelect = {
@@ -33,15 +41,20 @@ const recipientsSelect = {
 } satisfies Prisma.Message$recipientsArgs;
 
 // ownerUserId, deletedAt and join-table ids never leave the API.
-const messageSelect = {
+export const messageSelect = {
   id: true,
   title: true,
   contentType: true,
   textContent: true,
+  // Owner-only; this select serves only the owner's routes. Never in
+  // summaries, versions, snapshots or any Recipient/TC/admin read.
+  privateNote: true,
   status: true,
   createdAt: true,
   updatedAt: true,
   recipients: recipientsSelect,
+  // The current version number (0 before the first save with history).
+  versions: { select: { version: true }, orderBy: { version: 'desc' }, take: 1 },
 } satisfies Prisma.MessageSelect;
 
 // The list shows only what the Messages page renders: no full text (a short
@@ -57,15 +70,16 @@ const summarySelect = {
 } satisfies Prisma.MessageSelect;
 
 type MessageRow = Prisma.MessageGetPayload<{ select: typeof messageSelect }>;
-export type MessageResponse = Omit<MessageRow, 'recipients'> & {
+export type MessageResponse = Omit<MessageRow, 'recipients' | 'versions'> & {
   recipients: MessageRow['recipients'][number]['recipient'][];
+  version: number;
 };
 
 // Same message whether the row is missing, deleted or someone else's.
 const NOT_FOUND = 'Message not found.';
 // Same message whether a recipient is missing, deleted or someone else's.
 export const INVALID_RECIPIENTS = 'One or more recipients are invalid.';
-export const NOT_DRAFT = 'Only draft messages can be changed or deleted.';
+export { NOT_DRAFT };
 
 type SummaryRow = Prisma.MessageGetPayload<{ select: typeof summarySelect }>;
 export type MessageSummary = Omit<SummaryRow, 'textContent' | 'recipients'> & {
@@ -89,9 +103,14 @@ export const textPreview = (text: string | null): string | null => {
     : `${chars.slice(0, TEXT_PREVIEW_MAX).join('').trimEnd()}…`;
 };
 
-const toResponse = ({ recipients, ...row }: MessageRow): MessageResponse => ({
+export const toResponse = ({
+  recipients,
+  versions,
+  ...row
+}: MessageRow): MessageResponse => ({
   ...row,
   recipients: recipients.map((r) => r.recipient),
+  version: versions[0]?.version ?? 0,
 });
 
 const assign = (recipientIds: string[]) =>
@@ -117,17 +136,34 @@ export class MessagesService {
     dto: CreateMessageDto,
   ): Promise<MessageResponse> {
     await this.assertOwnedRecipients(ownerUserId, dto.recipientIds);
-    const row = await this.prisma.message.create({
-      data: {
-        ownerUserId,
-        title: dto.title,
-        textContent: dto.textContent ?? null,
-        contentType: dto.contentType ?? MessageContentType.TEXT,
-        status: MessageStatus.DRAFT,
-        recipients: { create: assign(dto.recipientIds) },
-      },
-      select: messageSelect,
-    });
+    const content = {
+      title: dto.title,
+      textContent: dto.textContent ?? null,
+      contentType: dto.contentType ?? MessageContentType.TEXT,
+    };
+    // The message, its first version and (when given) the cleared new-message
+    // autosave commit together.
+    const [row] = await this.prisma.$transaction([
+      this.prisma.message.create({
+        data: {
+          ownerUserId,
+          ...content,
+          privateNote: dto.privateNote ?? null,
+          status: MessageStatus.DRAFT,
+          recipients: { create: assign(dto.recipientIds) },
+          versions: firstVersion(content),
+        },
+        select: messageSelect,
+      }),
+      this.prisma.draftRecovery.deleteMany({
+        where: {
+          userId: ownerUserId,
+          type: 'NEW_MESSAGE',
+          key: dto.recoveryDraftKey ?? '',
+        },
+      }),
+    ]);
+    await noteActivity(this.prisma, { userId: ownerUserId, type: 'MESSAGE_CREATED', entityId: row.id });
     return toResponse(row);
   }
 
@@ -175,8 +211,9 @@ export class MessagesService {
     return toResponse(row);
   }
 
-  // One nested write: the draft check, field changes and the full replacement
-  // of assignments commit together, or nothing changes.
+  // One transaction under the message row lock: the draft check, field
+  // changes, full replacement of assignments, the version checkpoint (only if
+  // title/type/text changed) and clearing this message's autosave.
   async update(
     ownerUserId: string,
     id: string,
@@ -185,16 +222,32 @@ export class MessagesService {
     if (dto.recipientIds) {
       await this.assertOwnedRecipients(ownerUserId, dto.recipientIds);
     }
-    const row = await this.updateOwnedDraft(ownerUserId, id, {
-      // undefined = unchanged, null = clear.
-      title: dto.title,
-      contentType: dto.contentType,
-      textContent: dto.textContent,
-      recipients: dto.recipientIds && {
-        deleteMany: {},
-        create: assign(dto.recipientIds),
-      },
+    const row = await this.prisma.$transaction(async (tx) => {
+      const before = await lockOwnedDraft(tx, ownerUserId, id);
+      const saved = await tx.message.update({
+        where: { id },
+        data: {
+          // undefined = unchanged, null = clear.
+          title: dto.title,
+          contentType: dto.contentType,
+          textContent: dto.textContent,
+          // Not versioned: recordVersion compares title/type/text only.
+          privateNote: dto.privateNote,
+          recipients: dto.recipientIds && {
+            deleteMany: {},
+            create: assign(dto.recipientIds),
+          },
+        },
+        select: { id: true, title: true, contentType: true, textContent: true },
+      });
+      await recordVersion(tx, id, before, saved, MessageVersionReason.EDITED);
+      await tx.draftRecovery.deleteMany({
+        where: { userId: ownerUserId, type: 'MESSAGE', key: id },
+      });
+      // Re-read so `version` includes the checkpoint just written.
+      return tx.message.findUniqueOrThrow({ where: { id }, select: messageSelect });
     });
+    await noteActivity(this.prisma, { userId: ownerUserId, type: 'MESSAGE_UPDATED', entityId: id });
     return toResponse(row);
   }
 
@@ -221,6 +274,12 @@ export class MessagesService {
       // Read after the write: exactly the assets this delete just hid.
       { mediaAssets: { where: { deletedAt }, select: storedRefSelect } },
     );
+    // Its unsaved autosave goes with it (versions cascade only on a hard delete;
+    // a deleted message's history is unreachable through every route).
+    await this.prisma.draftRecovery.deleteMany({
+      where: { userId: ownerUserId, type: 'MESSAGE', key: id },
+    });
+    await noteActivity(this.prisma, { userId: ownerUserId, type: 'MESSAGE_DELETED', entityId: id });
     await this.cleanup.purge('mediaAsset', mediaAssets);
   }
 

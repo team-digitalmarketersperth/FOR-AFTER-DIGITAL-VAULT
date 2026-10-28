@@ -40,6 +40,7 @@ describe('My Wishes (e2e, PostgreSQL)', () => {
   const styleAnswer = `${style}/response`;
   const musicAnswer = `${root}/music-and-readings.music/response`;
   const rememberAnswer = `${root}/personal-message.remember/response`;
+  const feelingAnswer = `${root}/atmosphere.feeling/response`;
   const notice = '/api/v1/my-wishes/disclaimer';
   const acknowledge = `${notice}/acknowledgement`;
   const APPROVED_V1 =
@@ -163,33 +164,43 @@ describe('My Wishes (e2e, PostgreSQL)', () => {
     expect(await rowsFor(emails[0], 'ceremony.style')).toEqual([]);
   });
 
-  // Phase 15A (approved 2026-10-08): the API serves the notice; a Customer
-  // acknowledges its current version once before writing wishes.
-  it('the notice comes from the API; saving waits for an acknowledgement of the current version', async () => {
+  // Phase 15A: the API serves the notice. Since 2026-10-14 it is
+  // informational only: no acknowledgement is needed to read, write or delete.
+  it('the notice comes from the API and never gates My Wishes', async () => {
     const before = await lisa.get(notice).expect(200);
     expect(before.body).toEqual({
       version: 1,
       text: APPROVED_V1,
-      requiresAcknowledgement: true,
+      requiresAcknowledgement: false,
       acknowledged: false,
       acknowledgedAt: null,
     });
-    // No backfill: a new (or existing) Customer starts unacknowledged.
-    expect(
-      await prisma.myWishesDisclaimerAcknowledgement.count({
-        where: { user: { email: emails[0] } },
-      }),
-    ).toBe(0);
-    const blocked = await lisa
-      .put(styleAnswer)
-      .send({ textContent: 'A quiet ceremony.' })
-      .expect(409);
-    expect(blocked.body.message).toBe(
-      'Please acknowledge the current My Wishes notice before saving.',
-    );
-    expect(await rowsFor(emails[0], 'ceremony.style')).toEqual([]);
-    // Reading never needs it.
+    const noAcks = async () =>
+      expect(
+        await prisma.myWishesDisclaimerAcknowledgement.count({
+          where: { user: { email: emails[0] } },
+        }),
+      ).toBe(0);
+    await noAcks();
+    // Without any acknowledgement: read, create, update, delete all work,
+    // and none of them creates an acknowledgement row.
     await lisa.get(root).expect(200);
+    await lisa
+      .put(feelingAnswer)
+      .send({ textContent: 'A quiet ceremony.' })
+      .expect(200);
+    const edited = await lisa
+      .put(feelingAnswer)
+      .send({ textContent: 'A quiet, warm ceremony.' })
+      .expect(200);
+    expect(edited.body.textContent).toBe('A quiet, warm ceremony.');
+    expect((await lisa.get(feelingAnswer).expect(200)).body.id).toBe(
+      edited.body.id,
+    );
+    await lisa.delete(feelingAnswer).expect(204);
+    await noAcks();
+
+    // The legacy acknowledgement route still works for older clients.
 
     for (const body of [
       {},
@@ -234,6 +245,12 @@ describe('My Wishes (e2e, PostgreSQL)', () => {
     const after = await lisa.get(notice).expect(200);
     expect(after.body.acknowledged).toBe(true);
     expect(after.body.acknowledgedAt).toEqual(results[0].body.acknowledgedAt);
+    // A historical row changes nothing about access.
+    await lisa
+      .put(feelingAnswer)
+      .send({ textContent: 'Again.' })
+      .expect(200);
+    await lisa.delete(feelingAnswer).expect(204);
   });
 
   it('saves, updates, deletes and restores one logical answer', async () => {
@@ -252,6 +269,7 @@ describe('My Wishes (e2e, PostgreSQL)', () => {
       'createdAt',
       'id',
       'mediaCount',
+      'privateNote',
       'promptKey',
       'textContent',
       'updatedAt',
@@ -321,10 +339,8 @@ describe('My Wishes (e2e, PostgreSQL)', () => {
     await lisa.post('/api/v1/auth/logout').expect(200);
 
     const john = await signIn(emails[1]);
-    // John's acknowledgement is his own: Lisa's does not count for him.
+    // Lisa's acknowledgement history is her own.
     expect((await john.get(notice).expect(200)).body.acknowledged).toBe(false);
-    await john.put(rememberAnswer).send({ textContent: johnText }).expect(409);
-    await john.post(acknowledge).send({ version: 1 }).expect(200);
     await john.get(rememberAnswer).expect(404);
     await john.delete(rememberAnswer).expect(404);
     const johnList = await john.get(root).expect(200);
@@ -347,7 +363,7 @@ describe('My Wishes (e2e, PostgreSQL)', () => {
     );
   });
 
-  it('a new notice version: reading and deleting still work, writing waits for the new acknowledgement', async () => {
+  it('a new notice version never blocks reading, writing or deleting', async () => {
     // Test-only: swap the current notice (the version lives in code, not the DB).
     const current = app.get(MyWishesDisclaimer) as {
       version: number;
@@ -363,32 +379,22 @@ describe('My Wishes (e2e, PostgreSQL)', () => {
         text: 'A test-only second version of the notice.',
         acknowledged: false,
       });
-      // Existing wishes stay readable; a v1 acknowledgement does not let writes through.
       await lisa.get(rememberAnswer).expect(200);
-      await lisa
-        .put(rememberAnswer)
-        .send({ textContent: 'Edited.' })
-        .expect(409);
-      await lisa.post(acknowledge).send({ version: 1 }).expect(409);
-      await lisa.post(acknowledge).send({ version: 2 }).expect(200);
       await lisa
         .put(rememberAnswer)
         .send({ textContent: 'Edited.' })
         .expect(200);
-      // Both acknowledgements are kept as history.
+      // The v1 row stays as history; the stale version is still refused.
+      await lisa.post(acknowledge).send({ version: 1 }).expect(409);
       const rows = await prisma.myWishesDisclaimerAcknowledgement.findMany({
         where: { user: { email: emails[0] } },
-        orderBy: { disclaimerVersion: 'asc' },
       });
-      expect(rows.map((r) => r.disclaimerVersion)).toEqual([1, 2]);
-      // Version 3, not acknowledged: deleting still works.
-      current.version = 3;
-      await lisa.get(rememberAnswer).expect(200);
+      expect(rows.map((r) => r.disclaimerVersion)).toEqual([1]);
       await lisa.delete(rememberAnswer).expect(204);
       await lisa
         .put(rememberAnswer)
         .send({ textContent: 'Again.' })
-        .expect(409);
+        .expect(200);
     } finally {
       Object.assign(current, original);
     }

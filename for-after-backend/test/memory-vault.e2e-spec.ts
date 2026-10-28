@@ -171,6 +171,7 @@ describe('Memory Vault (e2e, PostgreSQL, mocked storage)', () => {
       'category',
       'createdAt',
       'id',
+      'privateNote',
       'tags',
       'textContent',
       'title',

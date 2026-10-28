@@ -100,12 +100,13 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 | Task | Command |
 |---|---|
-| Development (hot reload, port 4000) | `npm run start:dev` |
+| Development API (hot reload, port 4000) | `npm run start:dev` |
+| Development worker (releases, emails, death safeguards) | `npm run worker:dev` |
 | Unit tests (Vitest, no database) | `npm test` |
 | E2E tests (real PostgreSQL + Redis) | `npm run test:e2e` |
 | Lint | `npm run lint` |
 | Format | `npm run format` |
-| Build / production | `npm run build` / `npm run start:prod` |
+| Build / production | `npm run build` / `npm run start:prod` (API) + `npm run worker:prod` (worker) |
 | Access-grant backfill (Step 13, one-off) | `npm run build && npm run backfill:access-grants` (dry run; add `-- --apply` to write) |
 
 **Postman:**
@@ -117,7 +118,7 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ## 6. Local OTP testing
 
 Recipient and Trusted Contact sign-in, released-message and safety emails go through `EMAIL_PROVIDER` (Step 24,
-[email setup](email-production-setup.md)). For local testing without Brevo credentials, set in `.env`:
+[email setup](email-production-setup.md)). For local testing without Microsoft credentials, set in `.env`:
 
 ```env
 NODE_ENV=development
@@ -131,14 +132,9 @@ Every email then appears in the API terminal instead of being sent:
 [DEV ONLY] Email (recipient-otp) to s***@example.com | Your For After sign-in code | … Your sign-in code is 123456 …
 ```
 
-> 🔒 `console` is refused at startup unless `NODE_ENV=development`; production requires `brevo` (or the optional `resend`).
+> 🔒 `console` is refused at startup unless `NODE_ENV=development`; production requires `microsoft` (or the optional `resend`).
 
-To receive real emails locally instead, set `EMAIL_PROVIDER=brevo`, `BREVO_API_KEY` and a Brevo-verified
-`EMAIL_FROM_ADDRESS` (no custom domain needed), then restart the API. Codes then arrive by email only, not in the
-terminal. If the log shows `email_send_failed … (code: unauthorized)`, Brevo is refusing the key, usually because of
-its authorised-IP check: add your IP or turn IP blocking off for development. See
-[email setup](email-production-setup.md) §4 (troubleshooting) and §5. Frontend Playwright OTP tests still need
-`EMAIL_PROVIDER=console`.
+To receive real emails locally instead, set `EMAIL_PROVIDER=microsoft` and the five `MS_*` / `EMAIL_FROM` values ([email setup](email-production-setup.md) §7), restart the API and the worker, and check one send with `npm run build && npm run email:send-test -- --to <your address>`. Codes then arrive by email only, not in the terminal. If the log shows `email_send_failed … (code: auth_rejected)` or `forbidden_…`, the app registration or its permissions are wrong (§4 troubleshooting).
 
 ### Death verification (Step 15)
 
@@ -196,7 +192,7 @@ TRUSTED_CONTACT_OTP_PEPPER="<32+ random characters, different from the Recipient
 DEATH_VERIFICATION_SAFEGUARD_SECONDS=60          # local testing only; production default 1209600 (14 days)
 
 # Email (Step 24)
-EMAIL_PROVIDER=console                     # brevo | resend (optional) | console (development only) | disabled
+EMAIL_PROVIDER=console                     # microsoft | resend (optional) | console (development only) | disabled
 APP_BASE_URL=http://localhost:3000
 
 # Admin backend (Step 16): required, the app refuses to start without it

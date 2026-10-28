@@ -1,6 +1,7 @@
 import { Transform, Type } from 'class-transformer';
 import {
   IsEnum,
+  IsIn,
   IsInt,
   IsISO8601,
   IsNotEmpty,
@@ -13,8 +14,10 @@ import {
   Min,
 } from 'class-validator';
 import { trim } from '../../auth/dto/register.dto.js';
+import { DEAD_LETTER_QUEUES } from '../../dead-letters/dead-letter.service.js';
 import {
   AuditEventType,
+  DeadLetterStatus,
   UserRole,
   UserStatus,
 } from '../../generated/prisma/client.js';
@@ -95,6 +98,28 @@ export class AuditLogQueryDto extends PageQueryDto {
   @IsString()
   @MaxLength(200)
   subjectId?: string;
+
+  @IsOptional()
+  @IsISO8601({ strict: true })
+  from?: string;
+
+  @IsOptional()
+  @IsISO8601({ strict: true })
+  to?: string;
+}
+
+export class DeadLetterQueryDto extends PageQueryDto {
+  @IsOptional()
+  @IsIn(DEAD_LETTER_QUEUES, {
+    message: `queue must be one of: ${DEAD_LETTER_QUEUES.join(', ')}`,
+  })
+  queue?: (typeof DEAD_LETTER_QUEUES)[number];
+
+  @IsOptional()
+  @IsEnum(DeadLetterStatus, {
+    message: enumMessage('status', DeadLetterStatus),
+  })
+  status?: DeadLetterStatus;
 
   @IsOptional()
   @IsISO8601({ strict: true })

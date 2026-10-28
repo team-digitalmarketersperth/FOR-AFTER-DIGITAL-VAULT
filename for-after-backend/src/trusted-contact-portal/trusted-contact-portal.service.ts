@@ -1,9 +1,12 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { maskEmail } from '../auth/dto/register.dto.js';
 import type { DeathVerificationCaseStatus } from '../generated/prisma/client.js';
 import type { Reporter } from '../death-verification/death-verification.service.js';
+import { maskPrincipal } from '../otp-auth/otp-auth.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { activeRelationship } from '../trusted-contact-auth/trusted-contact-auth.service.js';
+import {
+  activeRelationship,
+  type TrustedContactPrincipal,
+} from '../trusted-contact-auth/trusted-contact-auth.service.js';
 
 // Same message for missing, deleted and someone else's relationship: never
 // 403, which would confirm the id exists.
@@ -22,7 +25,7 @@ const anyActive = { where: { deletedAt: null }, select: { id: true }, take: 1 };
 
 /**
  * What a signed-in Trusted Contact may see: the Customers who currently list
- * their email, a display name, a content-exists flag and the case status.
+ * their email (or mobile, after SMS sign-in), a display name, a content-exists flag and the case status.
  * Never the Customer's email/mobile, recipients or any content.
  */
 @Injectable()
@@ -31,9 +34,11 @@ export class TrustedContactPortalService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  async findAccounts(emailNormalized: string): Promise<TrustedAccount[]> {
+  async findAccounts(
+    contact: TrustedContactPrincipal,
+  ): Promise<TrustedAccount[]> {
     const rows = await this.prisma.trustedContact.findMany({
-      where: activeRelationship(emailNormalized),
+      where: activeRelationship(contact),
       orderBy: { createdAt: 'asc' },
       select: {
         id: true,
@@ -57,7 +62,7 @@ export class TrustedContactPortalService {
       },
     });
     this.logger.log(
-      `trusted_contact_accounts_viewed ${maskEmail(emailNormalized)} accounts ${rows.length}`,
+      `trusted_contact_accounts_viewed ${maskPrincipal(contact)} accounts ${rows.length}`,
     );
     return rows.map(({ id, relationship, owner }) => ({
       trustedContactId: id,
@@ -77,13 +82,13 @@ export class TrustedContactPortalService {
     }));
   }
 
-  /** The route's relationship, only if it belongs to the signed-in email. */
+  /** The route's relationship, only if it belongs to the signed-in contact. */
   async findRelationship(
-    emailNormalized: string,
+    contact: TrustedContactPrincipal,
     trustedContactId: string,
   ): Promise<Reporter> {
     const row = await this.prisma.trustedContact.findFirst({
-      where: { id: trustedContactId, ...activeRelationship(emailNormalized) },
+      where: { id: trustedContactId, ...activeRelationship(contact) },
       select: {
         id: true,
         ownerUserId: true,

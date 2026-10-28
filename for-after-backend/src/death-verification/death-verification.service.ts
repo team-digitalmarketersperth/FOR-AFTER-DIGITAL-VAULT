@@ -17,6 +17,13 @@ import {
   paginate,
   writeAuditLog,
 } from '../audit/audit-log.service.js';
+import { emailKey } from '../auth/dto/register.dto.js';
+import { stripPhone } from '../recipients/dto/create-recipient.dto.js';
+import {
+  invitationState,
+  latestInvitation,
+} from '../trusted-contacts/trusted-contact-invitations.service.js';
+import { MAX_TRUSTED_CONTACTS } from '../trusted-contacts/trusted-contacts.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { DeathVerificationQueue } from './death-verification-queue.service.js';
 import { audit, OPEN_STATUSES } from './death-verification-workflow.service.js';
@@ -46,7 +53,7 @@ export const REOPENABLE_STATUSES: Status[] = [
 ];
 
 /** A Customer's current case: the newest. At most one is open or VERIFIED. */
-const LATEST = [
+export const LATEST = [
   { openedAt: 'desc' },
   { id: 'desc' },
 ] satisfies Prisma.DeathVerificationCaseOrderByWithRelationInput[];
@@ -72,12 +79,94 @@ export type DeathVerificationStatus = {
   openedAt: Date | null;
   // Whether this contact may file a report now (submitReport stays authoritative).
   canReport: boolean;
+  // Phase 19A: open case + their own report (the upload route stays authoritative).
+  canUploadEvidence: boolean;
 };
 
 export type CustomerDeathVerificationStatus = {
   status: DeathVerificationCaseStatus | null;
   safeguardEndsAt: Date | null;
   canConfirmAlive: boolean;
+};
+
+export const CONFIRMATION_REQUIRED =
+  'Another independent Trusted Contact confirmation is required before this case can be verified.';
+export const NO_CONFIRMATION_REQUIREMENT =
+  'This case has no recorded confirmation requirement and cannot be verified.';
+
+/**
+ * Who a contact or reporter is for confirmations: their email (emailKey), or
+ * their E.164 mobile when they have no email (mobile-only contacts sign in by
+ * SMS). Two rows with one email, or one mobile and no email, are one person.
+ * ponytail: rows linked only by a shared mobile where one also has an email
+ * count as two people; merge rows sharing either value if that ever matters.
+ */
+export const personKey = (
+  email: string | null | undefined,
+  mobile: string | null | undefined,
+) => (email ? emailKey(email) : stripPhone(mobile ?? '') || null);
+
+type ReporterSnapshot = {
+  reporterEmailNormalized: string | null;
+  reporterMobileNormalized: string | null;
+};
+
+/**
+ * Phase 19B: the one confirmation rule. A confirmation is a death report; the
+ * reports count by DISTINCT reporter (personKey of the snapshot), so two
+ * contact rows for one person never make two people. Evidence never counts.
+ * Meeting the requirement verifies nothing by itself.
+ */
+export const confirmationState = (
+  requiredConfirmations: number | null,
+  reports: ReporterSnapshot[],
+) => {
+  const receivedConfirmations = new Set(
+    reports
+      .map((r) => personKey(r.reporterEmailNormalized, r.reporterMobileNormalized))
+      .filter(Boolean),
+  ).size;
+  return {
+    requiredConfirmations,
+    receivedConfirmations,
+    confirmationRequirementMet:
+      requiredConfirmations !== null &&
+      receivedConfirmations >= requiredConfirmations,
+  };
+};
+
+/**
+ * Phase 19B: confirmations a NEW case needs, snapshotted at opening and never
+ * recalculated. Counts distinct people (personKey) among the Customer's
+ * contacts who can actually confirm (not removed, reachable by email or
+ * mobile, invitation not declined), plus the reporter, who always counts.
+ * 1 or 2 (product maximum: two contacts).
+ */
+const requiredConfirmationsFor = async (
+  tx: Prisma.TransactionClient,
+  reporter: Reporter,
+) => {
+  const contacts = await tx.trustedContact.findMany({
+    where: {
+      ownerUserId: reporter.ownerUserId,
+      deletedAt: null,
+      OR: [{ email: { not: null } }, { mobile: { not: null } }],
+    },
+    select: { email: true, mobile: true, invitations: latestInvitation },
+  });
+  const people = new Set(
+    [
+      personKey(reporter.email, reporter.mobile),
+      ...contacts
+        .filter(
+          (c) => invitationState(c, c.invitations[0]).status !== 'DECLINED',
+        )
+        .map((c) => personKey(c.email, c.mobile)),
+    ].filter(Boolean),
+  );
+  // Unreachable (the reporter signed in by email or mobile); fail closed, never 0.
+  if (!people.size) throw new Error('death_case_confirmations_unsized');
+  return Math.min(people.size, MAX_TRUSTED_CONTACTS);
 };
 
 const isUniqueViolation = (err: unknown) =>
@@ -149,10 +238,15 @@ export class DeathVerificationService {
         } else {
           // No case yet, or the last one closed without a death (CANCELLED /
           // REJECTED): a NEW case. The closed one stays untouched as history.
+          // Under the User lock above: contacts cannot change while sizing.
           found = await tx.deathVerificationCase.create({
             data: {
               ownerUserId: reporter.ownerUserId,
               reopenedFromCaseId: current?.id ?? null,
+              requiredConfirmations: await requiredConfirmationsFor(
+                tx,
+                reporter,
+              ),
             },
             select: { id: true, status: true },
           });
@@ -172,7 +266,7 @@ export class DeathVerificationService {
             reporterFirstNameSnapshot: reporter.firstName,
             reporterLastNameSnapshot: reporter.lastName,
             reporterEmailNormalized: reporter.email,
-            reporterMobileNormalized: reporter.mobile?.trim() || null,
+            reporterMobileNormalized: stripPhone(reporter.mobile ?? '') || null,
             reportedDateOfDeath: dto.reportedDateOfDeath
               ? new Date(dto.reportedDateOfDeath)
               : null,
@@ -244,6 +338,8 @@ export class DeathVerificationService {
         !found ||
         REOPENABLE_STATUSES.includes(found.status) ||
         (OPEN_STATUSES.includes(found.status) && !reportedByYou),
+      canUploadEvidence:
+        !!found && OPEN_STATUSES.includes(found.status) && reportedByYou,
     };
   }
 
@@ -380,6 +476,7 @@ export class DeathVerificationService {
         cancelledAt: true,
         adminDecisionNote: true,
         deathTriggersActivatedAt: true,
+        requiredConfirmations: true,
         owner: {
           select: {
             id: true,
@@ -422,13 +519,32 @@ export class DeathVerificationService {
             message: { select: { status: true } },
           },
         },
+        // Phase 19A: metadata only (cleaned name, type, size, state). Files
+        // are opened one at a time through the audited access-url route.
+        evidence: {
+          where: { deletedAt: null },
+          orderBy: { createdAt: 'asc' },
+          select: {
+            id: true,
+            deathReportId: true,
+            originalFileName: true,
+            mimeType: true,
+            sizeBytes: true,
+            status: true,
+            uploadedAt: true,
+            createdAt: true,
+          },
+        },
       },
     });
     if (!found) throw new NotFoundException(CASE_NOT_FOUND);
-    const { id, owner, reports, activations, ...rest } = found;
+    const { id, owner, reports, activations, requiredConfirmations, ...rest } =
+      found;
     return {
       caseId: id,
       ...rest,
+      // Phase 19B: admin-only summary (never sent to contacts or Customers).
+      ...confirmationState(requiredConfirmations, reports),
       accountHolder: {
         userId: owner.id,
         email: owner.email,
@@ -449,8 +565,9 @@ export class DeathVerificationService {
   }
 
   /**
-   * READY_FOR_REVIEW → VERIFIED, only after the safety notice was sent and the
-   * safeguard ended; no override. In the same transaction the account holder
+   * READY_FOR_REVIEW → VERIFIED, only after the safety notice was sent, the
+   * safeguard ended and (Phase 19B) the case's distinct confirmations are in;
+   * no override. In the same transaction the account holder
    * becomes PASSED (existing lifecycle field), which blocks their login and
    * every existing Customer session. Death triggers are activated after commit.
    */
@@ -459,6 +576,29 @@ export class DeathVerificationService {
     const now = new Date();
     const verifiedDeathAt = new Date(dto.verifiedDeathAt);
     const won = await this.prisma.$transaction(async (tx) => {
+      // Phase 19B: row-locked like submitReport, so a report arriving now is
+      // either counted here or waits; the count is never stale.
+      const [locked] = await tx.$queryRaw<
+        { status: Status; requiredConfirmations: number | null }[]
+      >`SELECT status, "requiredConfirmations" FROM "DeathVerificationCase"
+        WHERE id = ${caseId}::uuid FOR UPDATE`;
+      if (locked?.status === Status.READY_FOR_REVIEW) {
+        const reports = await tx.deathReport.findMany({
+          where: { deathVerificationCaseId: caseId },
+          select: {
+            reporterEmailNormalized: true,
+            reporterMobileNormalized: true,
+          },
+        });
+        const state = confirmationState(locked.requiredConfirmations, reports);
+        if (!state.confirmationRequirementMet) {
+          throw new ConflictException(
+            locked.requiredConfirmations === null
+              ? NO_CONFIRMATION_REQUIREMENT
+              : CONFIRMATION_REQUIRED,
+          );
+        }
+      }
       const { count } = await tx.deathVerificationCase.updateMany({
         where: {
           id: caseId,

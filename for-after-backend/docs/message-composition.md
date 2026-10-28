@@ -67,6 +67,11 @@ transaction. Message edits and media upload/complete/delete require `DRAFT` thro
 so they either finish before the schedule reads the composition or fail with 409 afterwards. The provider verification in `complete`
 runs before its locked write, so a message scheduled in between makes that `complete` fail (409) rather than change a scheduled message.
 
+## Version history
+Explicit saves keep versions of `title`, `contentType` and `textContent` (never media). Restoring is DRAFT-only and
+never touches attached media: a restored `contentType` is still checked here at scheduling. See
+`docs/draft-recovery.md`.
+
 ## Not built
 Thumbnails, waveforms, transcoding, adaptive streaming, external URL import. A message made from a memory (Phase 13B,
 `docs/memory-vault.md`) is an ordinary draft: its explicit `contentType` and copied text/media go through the same check

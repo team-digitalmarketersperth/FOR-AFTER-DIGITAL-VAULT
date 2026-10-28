@@ -224,7 +224,7 @@ Passwordless 6-digit email code for **Recipients** ("People I Love"). Full desig
 | **Flow** | `POST /recipient-auth/request-otp` → `POST /recipient-auth/verify-otp` → `for_after_recipient_session` |
 | **Eligible email** | has a `RecipientMessageAccessGrant` for a `RELEASED`, non-deleted Message |
 | **Channel** | email only; SMS is deferred, so mobile-only Recipients cannot sign in yet |
-| **Delivery** | email through `EMAIL_PROVIDER` (Step 24, Brevo; [email setup](email-production-setup.md)); sent directly, never queued, so the plaintext code never sits in Redis |
+| **Delivery** | email through `EMAIL_PROVIDER` (Step 24; Microsoft Graph since 2026-10-21; [email setup](email-production-setup.md)); sent directly, never queued, so the plaintext code never sits in Redis |
 | **Authorization** | the session holds only the verified email; access is decided per request from the release-time grant snapshot, never from a recipient id or the live `Recipient.email` |
 
 ---
@@ -310,7 +310,7 @@ dashboard's `GET /auth/me`.
 - Postman or curl against `http://localhost:4000/api/v1` still work.
 - For OTP testing, set `EMAIL_PROVIDER=console` with `NODE_ENV=development`: every email appears in the API terminal
   as `[DEV ONLY] Email (recipient-otp) to s***@example.com | Your For After sign-in code | … Your sign-in code is 123456 …`.
-  With `EMAIL_PROVIDER=brevo` the code arrives in the inbox instead (only for an eligible email); see
+  With `EMAIL_PROVIDER=microsoft` the code arrives in the inbox instead (only for an eligible email); see
   [email setup](email-production-setup.md) for the `unauthorized` troubleshooting.
 
 ---

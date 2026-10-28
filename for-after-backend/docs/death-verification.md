@@ -8,7 +8,8 @@
 | **Built** | Report intake (Step 14) · safety notice, safeguard window, confirm-alive, admin verify/reject, death-trigger activation and release (Step 15) |
 | **Frontend** | Step 19 (`for-after-frontend`): Trusted Contact report form and status page; Customer safety banner with "I'm still alive" (confirm-alive) on every dashboard page. Admin review UI is not built |
 | **Phase 10** | A Customer has a history of cases: a report after `CANCELLED`/`REJECTED` opens a NEW case (§1.1); at most one open case; `VERIFIED` never reopens |
-| **Not built** | Evidence upload, second-contact confirmation |
+| **Phase 19A** | Supporting evidence (death certificate etc.): PDF/JPEG/PNG to private storage, malware-scanned, admin secure view; never verifies or releases anything (§2A) |
+| **Phase 19B** | Second Trusted Contact confirmation: a case opened with two contacts needs two distinct reporters before admin verify; never verifies or releases anything (§2B) |
 | **Related** | [Trusted Contact auth](trusted-contact-auth.md) · [Scheduling](scheduling.md) · [Message release](message-release.md) · [Threat model](../threat-model.md) |
 
 > ⚠️ **REPORT ≠ VERIFICATION ≠ RELEASE.** A Trusted Contact report never marks anyone dead. Two reports never verify
@@ -18,7 +19,7 @@
 ## 🧭 Contents
 
 1. [Lifecycle](#1-lifecycle)
-2. [Report intake (Step 14)](#2-report-intake-step-14)
+2. [Report intake (Step 14)](#2-report-intake-step-14) · [2A. Supporting evidence (Phase 19A)](#2a-supporting-evidence-phase-19a) · [2B. Second confirmation (Phase 19B)](#2b-second-trusted-contact-confirmation-phase-19b)
 3. [Safety notice and safeguard window](#3-safety-notice-and-safeguard-window)
 4. [Customer: confirm alive](#4-customer-confirm-alive)
 5. [Admin decision](#5-admin-decision)
@@ -116,13 +117,99 @@ Case 2: PENDING_VERIFICATION (reopenedFromCaseId = case 1) → safety notice →
 - At most one open `DeathVerificationCase` per Customer (Phase 10, §1.1; earlier: one case ever); each Trusted Contact
   files at most one `DeathReport` per case (`409 A report has already been submitted for this account.`).
 - Reports are accepted while the case is **open** (`PENDING_VERIFICATION`, `SAFEGUARD_ACTIVE`, `READY_FOR_REVIEW`):
-  a second contact's report is supporting information for the admin. After `CANCELLED`/`REJECTED` a report opens a new
-  case; after `VERIFIED` it is refused (`409`).
+  a second contact's report is that contact's independent **confirmation** (Phase 19B, §2B). After
+  `CANCELLED`/`REJECTED` a report opens a new case; after `VERIFIED` it is refused (`409`).
 - `reportedDateOfDeath` is reporter-provided information only (date-only, not in the future). It is **never** used as
   the verified time of death.
 - `confirmReport: true` is a deliberate-action safeguard, not a legal attestation. `note` ≤ 2000 chars, never logged.
 - Reporter details are snapshotted (`reporterFirstNameSnapshot`, …), so later contact edits never change a report.
 - `201 {caseId, reportId, status, reportedAt, message}`; the first report then triggers the safety notice (§3).
+
+---
+
+## 2A. Supporting evidence (Phase 19A)
+
+> ⚠️ **EVIDENCE ≠ VERIFICATION ≠ RELEASE.** Uploading, completing or viewing evidence never changes the case status,
+> the account (`User.status`), Messages, schedules, activations, releases, grants or notifications. Only the existing
+> admin verify (§5) decides, with the same rules as before: evidence is **not** a precondition for verify.
+
+Policy approved by the product owner on 2026-10-13 (accepted-evidence part of the open "evidence / confirmations /
+review rules" decision; the number of confirmations and other review rules stay open):
+
+| Rule | V1 |
+|---|---|
+| Required? | **Optional.** A case proceeds exactly as before without evidence |
+| Who uploads | A signed-in Trusted Contact with an active relationship, on the Customer's **open** case (`PENDING_VERIFICATION`, `SAFEGUARD_ACTIVE`, `READY_FOR_REVIEW`), who has **their own report** in it. Evidence is not a report or a confirmation |
+| Types | **PDF, JPEG, PNG** (`application/pdf`, `image/jpeg`, `image/png`), proven by file signature, never by name or declared type |
+| Limits | 20 MB per file (`DEATH_EVIDENCE_MAX_BYTES`), 5 pending/ready files per reporter per case (`DEATH_EVIDENCE_MAX_FILES`) |
+| Admin | Sees metadata (cleaned file name, type, size, state, which report) and opens READY files through a short-lived signed URL |
+| Uploader | Sees their own READY files (type, size, date; no file name) and may re-view them through a short-lived signed URL |
+| Other Trusted Contact, Customer, Recipient | Nothing: no content, metadata or existence |
+| Quota | **Not** Customer content: never counted in the storage quota, never in the Storage Manager, never deletable by the Customer |
+| Deletion / retention | No delete feature in V1. Failed or abandoned uploads are removed by media cleanup; READY files stay with the case (and go with it if the account is deleted). **A retention period is unresolved** (legal/product decision) |
+| Automated checks | None of the content: no OCR, no extraction, no AI or automatic judgement |
+
+**Flow** (same pipeline as all media, [media-storage.md](media-storage.md)):
+
+```
+TC → POST /trusted-contact/accounts/:trustedContactId/death-verification/evidence/upload-url
+       {originalFileName, mimeType, sizeBytes}         (case, report, account derived on the server)
+     → case share-locked + open? own report (row-locked)? < 5 files? ≤ 20 MB? → PENDING_UPLOAD row + signed upload
+browser → ImageKit (private file, server-chosen key /for-after/users/<ownerId>/death-verification/<caseId>/evidence/<id>.pdf)
+TC → POST …/evidence/:evidenceId/complete {providerFileId}
+     → case still open? → provider check (path, private, exact size, type) → %PDF- / JPEG / PNG signature → ClamAV
+     → READY + EVIDENCE_UPLOADED audit event, in one transaction that re-checks the case under a share lock
+```
+
+- **Race safety:** if the case closes (confirm-alive, verify, reject) between upload-url and complete, complete returns
+  `409` and the upload is discarded (soft-deleted, file removed); it is never attached to a closed case. A closed case
+  accepts no new evidence (`409`).
+- **Failures:** type mismatch or malware → `400`, row `FAILED`, file removed (never viewable). Missing provider file →
+  `409`, still pending. Scanner down → `503`, still pending (retry). Duplicate complete → the READY file, no second event.
+- **Routes:** `GET …/evidence` (own READY files of the current case), `GET …/evidence/:evidenceId/access-url` (own READY
+  file), `GET /admin/death-verifications/:caseId/evidence/:evidenceId/access-url` (admin, MFA session; records
+  `EVIDENCE_VIEWED_BY_ADMIN` on the case timeline before the URL is issued). The admin case detail includes `evidence`
+  (metadata only). The Trusted Contact status adds `canUploadEvidence`.
+- **Never returned or logged:** storage key, provider file id, signed URLs (only returned to the authorized caller,
+  never stored, logged or audited). Logs carry ids only.
+- **Second contact:** a second Trusted Contact's report is their independent confirmation; see §2B for the
+  confirmation rules. A second contact cannot see the first one's evidence.
+
+---
+
+## 2B. Second Trusted Contact confirmation (Phase 19B)
+
+> ⚠️ **FIRST REPORT ≠ SECOND CONFIRMATION ≠ ADMIN VERIFICATION ≠ RELEASE.** A confirmation only unlocks the admin's
+> verify. It never sets `VERIFIED`, never makes the account `PASSED`, never activates `ON_DEATH`/`AFTER_DEATH` and never
+> releases, grants or notifies. Only the explicit admin verify (§5) does, exactly as before.
+
+Policy approved by the product owner on 2026-10-13 (the number-of-confirmations part of the open "evidence /
+confirmations / review rules" decision):
+
+| Rule | V1 |
+|---|---|
+| A confirmation | A `DeathReport` (each is an explicit `confirmReport: true` by one signed-in Trusted Contact). No separate confirmation model or route: the second contact uses the existing report action |
+| Required | `DeathVerificationCase.requiredConfirmations`, **snapshotted when the case opens** (same transaction, under the Customer row lock): **1** if one contact identity can confirm, **2** if two. DB CHECK: 1 or 2 |
+| Who counts toward the requirement | The Customer's contacts who can actually confirm: not removed, **with an email** (sign-in is by email), invitation **not declined** (same rule as the Customer's invitation status), deduplicated by email, plus the reporter (who always counts), capped at 2 |
+| Never recalculated | Adding or removing a contact later never changes an open (or any) case's number |
+| Received | Distinct `reporterEmailNormalized` among the case's reports (`emailKey`: trim + lowercase). Two contact rows with one email count **once** (this does not decide whether duplicate contacts are allowed; it only stops one person confirming twice). Evidence (§2A) never counts |
+| Who may provide the missing confirmation | Any **current** Trusted Contact of the Customer with a distinct email, while the case is open: only the **number** is snapshotted, not the people. A removed contact can no longer report |
+| Admin verify | Additionally requires `received ≥ required`, checked inside the verify transaction after a row lock on the case (the same lock a report takes), so a verify never uses a stale count. Otherwise `409` (§5). Safety notice, safeguard and `READY_FOR_REVIEW` are still required. **No override** |
+| Admin reject, confirm-alive | Unchanged: reject is available from `READY_FOR_REVIEW` whatever the count; the Customer can confirm alive while the case is open |
+| No new status | `READY_FOR_REVIEW` + "requirement not met" covers waiting for the second confirmation |
+| Who sees counts | Admins only (`requiredConfirmations`, `receivedConfirmations`, `confirmationRequirementMet` in the case detail). Trusted Contacts, the Customer and Recipients see nothing new |
+
+**Edge cases**
+
+- **Second person never confirms:** a case needing 2 cannot be verified on 1. Safe exits: the Customer confirms alive,
+  an admin rejects, or a future manual procedure. There is deliberately no force-verify.
+- **Report after a closed case:** a stale second contact reporting after confirm-alive or reject opens a **new** case
+  (Phase 10 reopen rule, with its own safety notice and its own snapshot). The closed case is never changed.
+- **Cases opened before 19B** (migration `add_death_verification_confirmation_requirement`): open cases were backfilled
+  from stored history: the distinct emails of the contacts that existed when the case opened (created before
+  `openedAt`, not removed before it) plus the first reporter's snapshot email, capped at 2. Emails edited since and
+  declined invitations could not be reconstructed for those older cases. Closed cases stay `NULL` (never verified again).
+  A `NULL` open case is refused by verify (`409 This case has no recorded confirmation requirement…`); it never means 1.
 
 ---
 
@@ -196,6 +283,9 @@ as an admin: an operator sets `User.role`.
 - `confirmVerification` must be `true`; `decisionNote` optional, ≤ 2000, admin-only, never logged.
 - Requires `status = READY_FOR_REVIEW`, `safetyNoticeSentAt` set and `safeguardEndsAt ≤ now`. During
   `PENDING_VERIFICATION`/`SAFEGUARD_ACTIVE` → `409`. **There is no force/override.**
+- Phase 19B: also requires the case's distinct confirmations (§2B), counted under a row lock in the same transaction:
+  `409 Another independent Trusted Contact confirmation is required before this case can be verified.` (or `409 This
+  case has no recorded confirmation requirement and cannot be verified.` for an older case without one).
 - One transaction sets `VERIFIED`, `verifiedAt = now`, `verifiedDeathAt`, `verifiedByUserId`, `adminDecisionNote`,
   `resolvedAt`, sets the account holder to `PASSED` (§7) and writes `ADMIN_VERIFIED`. Death triggers are activated
   after commit (§6).
@@ -236,7 +326,8 @@ Only `DeathVerificationCase.status = VERIFIED` authorizes activation. A `DeathRe
 | `ON_DEATH` | `verifiedAt` (release as soon as verification succeeds, never at the historical time of death) | verified 2026-09-29T05:00Z → due then |
 | `AFTER_DEATH` | `verifiedDeathAt + afterDeathDays` (UTC days) | died 2026-09-20T10:00Z, 30 days → 2026-10-20T10:00Z |
 | `AFTER_DEATH`, 0 days | `verifiedDeathAt` | usually due immediately |
-| `ANNUAL_AFTER_DEATH`, `BIRTHDAY`, `ANNIVERSARY`, `CUSTOM_EVENT` | not activated (deferred) | |
+| `ANNUAL_AFTER_DEATH` (Phase 16) | first anniversary of `verifiedDeathAt` (local date in the schedule's zone, at its local time); one `MessageRecipientRelease` per live Recipient created in the same transaction, then yearly | died 2026-09-20 18:00 Perth, 09:00 Perth → 2027-09-20T01:00Z |
+| `BIRTHDAY`, `ANNIVERSARY`, `CUSTOM_EVENT` | not death triggers | |
 
 - **Activation** (after commit, and by the reconciler): for every `SCHEDULED`, non-deleted Message of the Customer with an
   `ON_DEATH`/`AFTER_DEATH` schedule and no activation yet → one row (`createMany … skipDuplicates`), under a row lock on
@@ -280,6 +371,10 @@ PostgreSQL is the source of truth; Redis/BullMQ only accelerates execution.
 | Safeguard worker | Re-reads PostgreSQL. Due → `READY_FOR_REVIEW`. Early → moved back to delayed for the stored `safeguardEndsAt`. Cancelled/rejected/verified/advanced → no-op |
 | Death reconciler (startup + every `DEATH_VERIFICATION_RECONCILE_INTERVAL_SECONDS`) | ① `PENDING` cases with a report and no notice → send notice (retry). ② `SAFEGUARD_ACTIVE` → overdue ones advance now, others get their job ensured. ③ `VERIFIED` cases with `deathTriggersActivatedAt = null` or a death-trigger Message missing an activation → activate + queue |
 | Release reconciler (Step 12, extended) | Also queues every `VERIFIED`, still-`SCHEDULED` activation due within the lookahead |
+
+The safeguard worker and the death reconciler run only in the worker process (`DeathVerificationProcessor`, Phase 17B);
+the API sends the safety notice right after a report and queues the safeguard job, and the reconciler retries anything
+that step missed.
 
 | Failure | Behaviour |
 |---|---|
@@ -337,8 +432,10 @@ My Story, My Wishes, OTPs, session ids, secrets or presigned URLs. There is no `
 | Case status | ✅ own | ✅ (minimal) | ❌ | ✅ |
 | `safeguardEndsAt` | ✅ | ❌ | ❌ | ✅ |
 | Reporter identity, report notes, report count | ❌ | ❌ (not even other reporters) | ❌ | ✅ |
+| Confirmations required / received (Phase 19B) | ❌ | ❌ | ❌ | ✅ |
 | `verifiedDeathAt`, admin name, decision note | ❌ | ❌ | ❌ | ✅ |
 | Audit trail | ❌ | ❌ | ❌ | ✅ |
+| Evidence (Phase 19A) | ❌ | own files only (no name) + re-view | ❌ | ✅ metadata + secure view |
 | Message / vault content | own | ❌ | released + granted only | ❌ |
 
 ---
@@ -353,6 +450,13 @@ My Story, My Wishes, OTPs, session ids, secrets or presigned URLs. There is no `
 | `DEATH_VERIFICATION_JOB_ATTEMPTS` | `5` | Safeguard job attempts |
 | `DEATH_VERIFICATION_JOB_BACKOFF_MS` | `5000` | Exponential backoff base |
 | `QUEUE_REDIS_URL` / `REDIS_URL` | | Same Redis as the release queue |
+| `DEATH_EVIDENCE_MAX_BYTES` | `20971520` (20 MB) | Phase 19A, per evidence file |
+| `DEATH_EVIDENCE_MAX_FILES` | `5` | Phase 19A, pending + ready files per reporter per case |
+
+A safeguard job that exhausts its attempts becomes a durable dead letter (entity `DeathVerificationCase`, ids only:
+never notes or reporter data) with one operator alert (Phase 17A, [admin.md §8](admin.md#8-queue-monitoring-and-failed-job-retry)).
+An admin retry only queues the job again: the worker re-reads the case, so a `CANCELLED`, `REJECTED` or `VERIFIED`
+case is never advanced (outcome `stale`) and a not-yet-due one goes back to its stored time.
 
 ---
 
@@ -371,9 +475,15 @@ My Story, My Wishes, OTPs, session ids, secrets or presigned URLs. There is no `
 
 ## 14. Not built / open decisions
 
-**Not built:** evidence upload (certificates, identity or medical documents), second-contact confirmation logic,
+**Built in Phase 19A:** supporting evidence (§2A). **Unresolved:** evidence retention period; whether evidence should
+ever be mandatory; identity/medical document types beyond PDF/JPEG/PNG.
+
+**Built in Phase 19B:** second-contact confirmation (§2B). **Still open:** other admin review rules; whether duplicate
+same-email Trusted Contacts should be allowed at all (19B only stops one email counting twice).
+
+**Not built:**
 automatic/consensus verification (deliberately never), production email/SMS notice (Step 17), full admin backend and
-admin 2FA (Step 16), recovery/reversal of a wrong decision, `ANNUAL_AFTER_DEATH`.
+admin 2FA (Step 16), recovery/reversal of a wrong decision.
 
 **Resolved (Phase 10):** reopening. A closed `CANCELLED`/`REJECTED` case stays as history and a later report opens a
 new case (§1.1).
@@ -398,12 +508,13 @@ The original plan (before Steps 14–15) used different names. Mapping:
 | `REPORTED` | `PENDING_VERIFICATION` |
 | `WAITING` (cooling-off) | `SAFEGUARD_ACTIVE` |
 | `AWAITING_ADMIN_REVIEW` | `READY_FOR_REVIEW` |
-| `AWAITING_SECOND_CONFIRMATION` | not built (a second report is supporting information only) |
+| `AWAITING_SECOND_CONFIRMATION` | not a status: `READY_FOR_REVIEW` + `confirmationRequirementMet = false` (Phase 19B, §2B) |
 | `APPROVED` | `VERIFIED` |
 | `REJECTED`, `CANCELLED` | same |
 | `AuditLog` entry | `DeathVerificationAuditEvent` |
 | "BullMQ jobs dispatched with delay offsets" | `DeathTriggeredMessageActivation` + the Step 12 release queue |
-| `DeathDocument`, `DeathConfirmation` | not built (evidence and confirmations are later steps) |
+| `DeathDocument` | `DeathVerificationEvidence` (Phase 19A, §2A) |
+| `DeathConfirmation` | a `DeathReport` (Phase 19B, §2B) + `DeathVerificationCase.requiredConfirmations` |
 
-Original security considerations still apply: evidence (when built) in private storage only; every status change
+Original security considerations still apply: evidence in private storage only (done, §2A); every status change
 audited (done); admin actions to require 2FA (Step 16).
