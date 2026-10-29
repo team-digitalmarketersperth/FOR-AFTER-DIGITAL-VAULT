@@ -11,6 +11,7 @@ import { toast } from 'sonner';
 import { MediaManager } from '@/components/media/media-manager';
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import { Pager, SearchBox, useFilterNav } from '@/components/shared/list-controls';
+import { HelpMeWrite } from '@/components/companion/companion';
 import { ChoiceGroup, FilterChips, FormError, TextAreaField, TextField } from '@/components/shared/form-field';
 import { PageHeader } from '@/components/shared/page-header';
 import { PrivateNoteField, PrivateNoteView } from '@/components/shared/private-note';
@@ -441,6 +442,17 @@ function MemoryForm({
           registration={form.register('category')}
           error={errors.category?.message}
         />
+        <div className="grid gap-2">
+        {/* Only the memory text: never the title, tags, private note or files. */}
+        <HelpMeWrite
+          targetKey={`memory:${initial?.id ?? 'new'}:textContent`}
+          question={form.getValues('title').trim() || 'Your memory'}
+          field="The memory"
+          save={submitLabel}
+          read={() => form.getValues('textContent')}
+          write={(v) => form.setValue('textContent', v, { shouldDirty: true, shouldValidate: form.formState.isSubmitted })}
+          className="justify-self-end"
+        />
         <TextAreaField
           id="textContent"
           label="The memory"
@@ -451,6 +463,7 @@ function MemoryForm({
           error={errors.textContent?.message}
           {...form.register('textContent')}
         />
+        </div>
         <TagInput value={tags} onChange={(next) => form.setValue('tags', next, { shouldDirty: true })} />
         <PrivateNoteField
           id="privateNote"

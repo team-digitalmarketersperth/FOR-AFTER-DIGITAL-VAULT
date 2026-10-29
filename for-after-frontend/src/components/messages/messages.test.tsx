@@ -1,6 +1,7 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
+import { CompanionProvider } from '@/components/companion/companion';
 import type { Message, MessageSummary } from '@/lib/api/messages';
 import { json, renderWithClient, routeFetch, router, page } from '@/test/utils';
 import { MessageDetail } from './message-detail';
@@ -68,6 +69,31 @@ describe('Messages', () => {
     expect(api.called('GET', '/messages')).toHaveLength(2);
     expect(within(screen.getByRole('region', { name: 'Scheduled' })).getByText('Our song')).toBeInTheDocument();
     expect(screen.queryByRole('region', { name: 'Released' })).not.toBeInTheDocument();
+  });
+
+  it('Help me write: only the Message text is offered and replaced, after Use this draft; nothing is saved', async () => {
+    const api = routeFetch({
+      'GET /recipients': json(200, page([person('r1', 'Sofia')])),
+      'POST /assistant/reply': json(200, { reply: 'Dear Sofia, I am proud of you.', truncated: false, draft: true }),
+    });
+    renderWithClient(<CompanionProvider><NewMessage /></CompanionProvider>);
+    await userEvent.type(await screen.findByLabelText('Title'), 'For Sofia');
+    await userEvent.type(screen.getByLabelText(/^Message/), 'proud notes');
+    await userEvent.type(screen.getByLabelText(/^Private note to yourself/), 'Synthetic private reason');
+    await userEvent.click(screen.getByRole('button', { name: 'Help me write' }));
+    const p = await screen.findByRole('dialog', { name: /For After AI companion/ });
+    expect(p).toHaveTextContent('For: For Sofia');
+    await userEvent.click(within(p).getByRole('checkbox', { name: /Include the text in “Message”/ }));
+    expect(within(p).getByLabelText('Text that will be included')).toHaveTextContent('proud notes');
+    await userEvent.click(within(p).getByRole('button', { name: 'Polish my text' }));
+    expect(api.called('POST', '/assistant/reply')[0].body).toEqual({ page: 'messages', action: 'improve', source: 'proud notes', history: [] });
+    expect(JSON.stringify(api.calls)).not.toContain('Synthetic private reason');
+    await userEvent.click(await within(p).findByRole('button', { name: 'Use this draft' }));
+    expect(within(p).getByRole('status')).toHaveTextContent('The draft is in “Message”. It isn’t saved: review it, then choose Save draft.');
+    await userEvent.keyboard('{Escape}');
+    expect(screen.getByLabelText(/^Message/)).toHaveValue('Dear Sofia, I am proud of you.');
+    expect(screen.getByLabelText('Title')).toHaveValue('For Sofia');
+    expect(api.called('POST', '/messages')).toHaveLength(0);
   });
 
   it('creates a draft with the chosen type and people; VIDEO is offered (Phase 12)', async () => {

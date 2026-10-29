@@ -1,12 +1,12 @@
 'use client';
 
-import { BookOpen, Check, ChevronDown, ChevronLeft, ChevronRight, ImagePlus, Send, Sparkles, X } from 'lucide-react';
+import { BookOpen, Check, ChevronDown, ChevronLeft, ChevronRight, ImagePlus, Send, X } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Tabs } from 'radix-ui';
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import { toast } from 'sonner';
-import { useCompanion } from '@/components/companion/companion';
+import { HelpMeWrite } from '@/components/companion/companion';
 import { KIND_LABEL, MediaTile, UploadFailed, UploadProgress } from '@/components/media/media-manager';
 import { EarlierWording, EXTRAS, LinkedMemories, MemorySearch } from '@/components/prompts/prompts';
 import { chaptersOf } from '@/components/prompts/story-book';
@@ -326,15 +326,11 @@ function FocusedEditor({
   const [status, setStatus] = useState('');
   // Remounts the autosave after each explicit Save (the server drops the draft then).
   const [saves, setSaves] = useState(0);
-  const companion = useCompanion();
   // The companion reads the answer when the Customer includes it or uses a draft, never on its own.
   const latest = useRef(text);
   useEffect(() => {
     latest.current = text;
   }, [text]);
-  // Leaving this question takes its text out of the companion.
-  const { release } = companion;
-  useEffect(() => () => release(p.key), [release, p.key]);
   const dirty = text !== saved.text || note !== saved.note;
   const done = group.filter((x) => x.answered).length;
   const label = humanize(p.category);
@@ -405,16 +401,15 @@ function FocusedEditor({
           >
             <FormError error={mutation.error} />
             <div className="relative">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => companion.openFor({ key: p.key, question: p.prompt, read: () => latest.current, write: setText })}
-                className="absolute top-0 right-0 border-brand-maroon text-brand-maroon"
-              >
-                <Sparkles aria-hidden strokeWidth={1.5} />
-                Help me write
-              </Button>
+              <HelpMeWrite
+                targetKey={p.key}
+                question={p.prompt}
+                field="Your answer"
+                save="Save answer"
+                read={() => latest.current}
+                write={setText}
+                className="absolute top-0 right-0"
+              />
               <TextAreaField
                 id="story-answer"
                 label="Your answer"

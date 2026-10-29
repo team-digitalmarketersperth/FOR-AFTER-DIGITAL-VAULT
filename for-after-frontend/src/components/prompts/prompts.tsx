@@ -10,6 +10,7 @@ import { toast } from 'sonner';
 import { MediaManager } from '@/components/media/media-manager';
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import { AutosaveStatus, RecoveryNotice } from '@/components/shared/draft-recovery';
+import { HelpMeWrite } from '@/components/companion/companion';
 import { FilterChips, FormError, TextAreaField } from '@/components/shared/form-field';
 import { PageHeader } from '@/components/shared/page-header';
 import { PrivateNoteField } from '@/components/shared/private-note';
@@ -260,6 +261,17 @@ function AnswerForm({ area, prompt: p }: { area: PromptArea; prompt: Prompt }) {
     >
       <FormError error={mutation.error} />
       <fieldset disabled={mutation.isPending} className="grid gap-6">
+        <div className="grid gap-2">
+        {/* My Story sends this key as its question id; the answer only, never the private note. */}
+        <HelpMeWrite
+          targetKey={p.key}
+          question={p.prompt}
+          field="Your answer"
+          save="Save answer"
+          read={() => form.getValues('textContent')}
+          write={(v) => form.setValue('textContent', v, { shouldDirty: true, shouldValidate: form.formState.isSubmitted })}
+          className="justify-self-end"
+        />
         <TextAreaField
           id="answer"
           label="Your answer"
@@ -270,6 +282,7 @@ function AnswerForm({ area, prompt: p }: { area: PromptArea; prompt: Prompt }) {
           error={errors.textContent?.message}
           {...form.register('textContent')}
         />
+        </div>
         {/* Not part of the answer: never shared or autosaved. */}
         <PrivateNoteField
           id="privateNote"

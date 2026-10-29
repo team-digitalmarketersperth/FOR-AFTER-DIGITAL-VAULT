@@ -22,11 +22,14 @@ export type AssistantRequest = {
   history?: AssistantTurn[];
 };
 
+/** `draft`: the reply is text for the editor; `open`: a section the server approved to link to. */
+export type AssistantReply = { reply: string; truncated: boolean; draft?: boolean; open?: AssistantPage };
+
 export const ASSISTANT_LIMITS = { message: 2_000, source: 6_000, turn: 3_000, history: 6, total: 12_000 } as const;
 
 export const assistantApi = {
   reply: (body: AssistantRequest, signal?: AbortSignal) =>
-    apiRequest<{ reply: string; truncated: boolean }>('/assistant/reply', { method: 'POST', body, signal }),
+    apiRequest<AssistantReply>('/assistant/reply', { method: 'POST', body, signal }),
 };
 
 /** The newest turns that fit the request's remaining character budget. */

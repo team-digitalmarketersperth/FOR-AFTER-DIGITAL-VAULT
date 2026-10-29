@@ -212,18 +212,18 @@ describe('My Story workspace (approved design)', () => {
   });
 
   it('Help me write opens the shared companion for this question; the answer is sent only when included; a draft is not saved', async () => {
-    const api = routes({ 'POST /assistant/reply': json(200, { reply: 'A polished school memory.', truncated: false }) });
+    const api = routes({ 'POST /assistant/reply': json(200, { reply: 'A polished school memory.', truncated: false, draft: true }) });
     renderWithClient(<CompanionProvider><StoryWorkspace /></CompanionProvider>);
     await userEvent.type(await screen.findByLabelText('Your answer'), 'My notes.');
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument(); // closed by default
     expect(screen.getAllByRole('button', { name: 'Open AI companion' })).toHaveLength(1);
 
     await userEvent.click(screen.getByRole('button', { name: 'Help me write' }));
-    const panel = await screen.findByRole('dialog', { name: /For After companion/ });
+    const panel = await screen.findByRole('dialog', { name: /For After AI companion/ });
     expect(panel).toHaveTextContent('For: What do you remember about school?');
-    expect(panel).toHaveTextContent('Your private note, files and linked memories are never included.');
+    expect(panel).toHaveTextContent('Your private note, other fields, files and linked memories are never included.');
     expect(api.called('POST', '/assistant/reply')).toHaveLength(0); // opening sends nothing
-    await userEvent.click(within(panel).getByRole('checkbox', { name: /Include the text in my answer box/ }));
+    await userEvent.click(within(panel).getByRole('checkbox', { name: /Include the text in “Your answer”/ }));
     expect(within(panel).getByRole('blockquote')).toHaveTextContent('My notes.');
     await userEvent.click(within(panel).getByRole('button', { name: 'Polish my answer' }));
     expect(api.called('POST', '/assistant/reply')[0].body).toEqual({
@@ -247,7 +247,7 @@ describe('My Story workspace (approved design)', () => {
     await userEvent.click(screen.getByRole('button', { name: /Previous question/ }));
     await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Discard changes' }));
     await userEvent.click(screen.getByRole('button', { name: 'Open AI companion' }));
-    const again = await screen.findByRole('dialog', { name: /For After companion/ });
+    const again = await screen.findByRole('dialog', { name: /For After AI companion/ });
     expect(again).not.toHaveTextContent('A polished school memory.');
     expect(within(again).queryByRole('checkbox')).toBeNull();
   });

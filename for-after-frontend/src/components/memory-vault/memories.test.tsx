@@ -2,6 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { fakeStorage, json, renderWithClient, routeFetch, router } from '@/test/utils';
+import { CompanionProvider } from '@/components/companion/companion';
 import { MEMORY_CATEGORIES } from '@/lib/api/memory-vault';
 import { EditMemory, MemoryDetail, MemoryList, NewMemory } from './memories';
 
@@ -172,6 +173,27 @@ describe('Memory Vault', () => {
       privateNote: null,
       tags: ['Family', 'Sunday lunch'],
     });
+  });
+
+  it('Help me write: the memory text only; Use this draft fills it, the rest stays, nothing is saved', async () => {
+    const api = routeFetch({
+      'GET /memory-vault/v1': json(200, memory),
+      'GET /memory-vault/tags': json(200, tagList),
+      'POST /assistant/reply': json(200, { reply: 'Nana cooked it low and slow on Sundays.', truncated: false, draft: true }),
+    });
+    renderWithClient(<CompanionProvider><EditMemory id="v1" /></CompanionProvider>);
+    await userEvent.click(await screen.findByRole('button', { name: 'Help me write' }));
+    const p = await screen.findByRole('dialog', { name: /For After AI companion/ });
+    expect(p).toHaveTextContent('For: Nana’s roast');
+    await userEvent.click(within(p).getByRole('checkbox', { name: /Include the text in “The memory”/ }));
+    await userEvent.click(within(p).getByRole('button', { name: 'Help describe a memory' }));
+    expect(api.called('POST', '/assistant/reply')[0].body).toEqual({ page: 'memory-vault', action: 'expand', source: 'Low and slow.', history: [] });
+    await userEvent.click(await within(p).findByRole('button', { name: 'Use this draft' }));
+    expect(within(p).getByRole('status')).toHaveTextContent('then choose Save changes.');
+    await userEvent.keyboard('{Escape}');
+    expect(screen.getByLabelText(/^The memory/)).toHaveValue('Nana cooked it low and slow on Sundays.');
+    expect(screen.getByLabelText('Title')).toHaveValue('Nana’s roast');
+    expect(api.called('PATCH', '/memory-vault/v1')).toHaveLength(0);
   });
 
   it('edits with PATCH, sending the whole tag set (remove one, add one)', async () => {

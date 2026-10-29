@@ -10,6 +10,7 @@ import { toast } from 'sonner';
 import { CONTENT_TYPE_INFO } from '@/components/messages/message-bits';
 import { PersonAvatar } from '@/components/people/person-card';
 import { AutosaveStatus, RecoveryNotice } from '@/components/shared/draft-recovery';
+import { HelpMeWrite } from '@/components/companion/companion';
 import { ChoiceGroup, FormError, TextAreaField, TextField } from '@/components/shared/form-field';
 import { PageHeader } from '@/components/shared/page-header';
 import { PrivateNoteField } from '@/components/shared/private-note';
@@ -253,6 +254,17 @@ function MessageForm({
         <Section title="Your words">
           <TextField id="title" label="Title" placeholder="e.g. For your 18th birthday" error={errors.title?.message} {...form.register('title')} />
           {wantsText || text.trim() ? (
+            <div className="grid gap-2">
+            {/* Only the message text: never the title, people, private note or files. */}
+            <HelpMeWrite
+              targetKey={`message:${initial?.id ?? 'new'}:textContent`}
+              question={title.trim() || 'Your message'}
+              field="Message"
+              save={submitLabel}
+              read={() => form.getValues('textContent')}
+              write={(v) => form.setValue('textContent', v, { shouldDirty: true, shouldValidate: form.formState.isSubmitted })}
+              className="justify-self-end"
+            />
             <TextAreaField
               id="textContent"
               label="Message"
@@ -267,6 +279,7 @@ function MessageForm({
               error={errors.textContent?.message}
               {...form.register('textContent')}
             />
+            </div>
           ) : (
             <p className="text-sm text-foreground-muted">
               You&apos;ll add {contentType === 'PHOTO' ? 'photos' : contentType === 'VIDEO' ? 'your video' : 'your recording'}{' '}

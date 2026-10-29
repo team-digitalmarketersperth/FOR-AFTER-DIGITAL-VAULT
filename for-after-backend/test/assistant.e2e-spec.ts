@@ -91,7 +91,7 @@ describe('Assistant (e2e, Groq mocked)', () => {
       .post(url)
       .send({ page: 'my-story', action: 'improve', promptKey: 'childhood.earliest-memory', source: 'Fictional notes.' })
       .expect(200);
-    expect(res.body).toEqual({ reply: 'A fictional suggestion.', truncated: false });
+    expect(res.body).toEqual({ reply: 'A fictional suggestion.', truncated: false, draft: false });
     expect(groq.at(-1)!.auth).toBe('Bearer e2e-fake-key');
     expect(groq.at(-1)!.body.messages[0].role).toBe('system');
     expect(JSON.stringify(groq.at(-1)!.body)).not.toContain(users.lisa);

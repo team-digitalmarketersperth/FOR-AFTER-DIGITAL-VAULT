@@ -1,7 +1,7 @@
 import { HttpException, Logger } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import type { RedisService } from '../redis/redis.service.js';
-import { AssistantService, DEFAULT_GROQ_MODEL, LIMITS, type AssistantRequest } from './assistant.service.js';
+import { AssistantService, DEFAULT_GROQ_MODEL, LIMITS, readMarkers, type AssistantRequest } from './assistant.service.js';
 
 // Just the Redis commands the assistant uses, in memory (no TTL clock needed here).
 const memoryRedis = () => {
@@ -78,7 +78,7 @@ describe('AssistantService (Groq, mocked)', () => {
   it('returns a small reply; instructions are built server-side, private material wrapped and bounded', async () => {
     const { service, fetch, logs, redis } = setup();
     fetch.mockResolvedValue(ok());
-    await expect(service.reply('user-1', story)).resolves.toEqual({ reply: 'A gentle suggestion.', truncated: false });
+    await expect(service.reply('user-1', story)).resolves.toEqual({ reply: 'A gentle suggestion.', truncated: false, draft: false });
 
     const [url, init] = fetch.mock.calls[0];
     expect(url).toBe('https://api.groq.com/openai/v1/chat/completions');
@@ -98,11 +98,83 @@ describe('AssistantService (Groq, mocked)', () => {
     expect(redis.inflight()).toBe(0);
   });
 
+  it('follow-ups: history goes before the one current turn; instructions carry real button names and conversation rules', async () => {
+    const { service, fetch } = setup();
+    fetch.mockResolvedValue(ok());
+    const history = [
+      { role: 'user' as const, content: 'How do I write my first message?' },
+      { role: 'assistant' as const, content: 'Go to Messages, then Write a message.' },
+    ];
+    await service.reply('u', { page: 'dashboard', action: 'ask', message: 'Can you help me start it?', history });
+    const { messages } = sent(fetch) as { messages: { role: string; content: string }[] };
+    expect(messages.map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'user']);
+    expect(messages.slice(1, 3)).toEqual(history);
+    expect(messages[3].content).toContain('Their message: Can you help me start it?');
+    expect(messages.filter((m) => m.content.includes('Can you help me start it?'))).toHaveLength(1);
+    const system = messages[0].content;
+    expect(system).toContain('do not repeat what you already said');
+    expect(system).toContain('one manageable next step, worded conditionally');
+    // From the live evaluation (2026-10-29): Markdown bold, several questions per reply, no draft after a detail.
+    expect(system).toContain('Never use asterisks');
+    expect(system).toContain('Ask at most one question per reply');
+    expect(system).toContain('Once they give at least one detail, write a short draft');
+    expect(system).toContain('Never ask about the title, date, delivery or who it is for');
+    expect(system).toContain('Do not end with "Let me know if..."');
+    expect(system).toContain('cannot manage or change the account'); // other sections' facts come too
+    expect(system).not.toContain('[DRAFT]'); // no editor drafts on the dashboard
+    expect(system).toContain('"Write a message"');
+    expect(system).toContain('external AI service');
+    expect(system).toContain('You cannot see their account or progress.');
+  });
+
   it('GROQ_MODEL overrides the default; a truncated reply says so', async () => {
     const { service, fetch } = setup({ GROQ_MODEL: 'llama-3.1-8b-instant' });
     fetch.mockResolvedValue(ok('Cut off', 'length'));
-    await expect(service.reply('u', ask)).resolves.toEqual({ reply: 'Cut off', truncated: true });
+    await expect(service.reply('u', ask)).resolves.toEqual({ reply: 'Cut off', truncated: true, draft: false });
     expect(sent(fetch).model).toBe('llama-3.1-8b-instant');
+  });
+
+  it('markers become checked metadata: [DRAFT] only where editor text is allowed, [OPEN] only for an approved other section', async () => {
+    const { service, fetch } = setup();
+    fetch.mockResolvedValue(ok('[DRAFT]\nDear Mia, I am proud of you.\n[OPEN: people]'));
+    await expect(service.reply('u', { page: 'messages', action: 'ask', message: 'Help me start it' })).resolves.toEqual({
+      reply: 'Dear Mia, I am proud of you.',
+      truncated: false,
+      draft: true,
+      open: 'people',
+    });
+    expect(sent(fetch).messages[0].content).toContain('[DRAFT]');
+
+    const mark = (content: string, page: AssistantRequest['page'], action: AssistantRequest['action'], truncated = false) =>
+      readMarkers(content, { page, action }, truncated);
+    expect(mark('[DRAFT] Text', 'dashboard', 'ask')).toEqual({ reply: 'Text', truncated: false, draft: false });
+    expect(mark('[DRAFT] Half a', 'messages', 'draft', true)).toMatchObject({ draft: false, truncated: true });
+    expect(mark('Here is a draft:\n[DRAFT]\nText', 'messages', 'draft')).toMatchObject({ reply: 'Here is a draft:\n\nText', draft: false });
+    for (const bad of ['[OPEN: https://evil.example]', '[OPEN: admin]', '[OPEN: javascript:alert(1)]', '[OPEN: messages]'])
+      expect(mark(`Go there.\n${bad}`, 'messages', 'ask')).toEqual({ reply: 'Go there.', truncated: false, draft: false });
+    expect(mark('[OPEN: people] first, then more.', 'dashboard', 'ask')).toEqual({ reply: 'first, then more.', truncated: false, draft: false });
+  });
+
+  it('paired **bold** markers from the model are removed (seen live); a lone asterisk is kept', () => {
+    const live = 'If you haven’t added anyone yet, start by opening **"People I Love"** and tap **"Add someone you love"**.';
+    expect(readMarkers(live, { page: 'dashboard', action: 'ask' }, false).reply).toBe(
+      'If you haven’t added anyone yet, start by opening "People I Love" and tap "Add someone you love".',
+    );
+    expect(readMarkers('Rated 5* by me', { page: 'dashboard', action: 'ask' }, false).reply).toBe('Rated 5* by me');
+  });
+
+  it('the ask task drafts once a detail is given instead of asking again (seen live)', async () => {
+    const { service, fetch } = setup();
+    fetch.mockResolvedValue(ok());
+    await service.reply('u', { page: 'messages', action: 'ask', message: 'She loves painting.' });
+    const last = sent(fetch).messages.at(-1).content as string;
+    expect(last).toContain('once they have given any detail, reply with a short draft built only from their details, not another question');
+  });
+
+  it('a reply that is only markers is a failure, not an empty answer', async () => {
+    const { service, fetch } = setup();
+    fetch.mockResolvedValue(ok('[OPEN: people]'));
+    expect(await statusOf(service.reply('u', ask))).toBe(502);
   });
 
   it.each([

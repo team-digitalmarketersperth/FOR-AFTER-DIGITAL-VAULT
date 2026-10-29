@@ -2,6 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { CreateMessageFromPrompt } from '@/components/memory-vault/memory-to-message';
+import { CompanionProvider } from '@/components/companion/companion';
 import type { Prompt } from '@/lib/api/prompts';
 import { FAKE_PROVIDER_FILE_ID, fakeStorage, json, renderWithClient, routeFetch, router } from '@/test/utils';
 import { PromptEditor, PromptList } from './prompts';
@@ -73,9 +74,31 @@ describe('My Wishes editor: rich wishes (Phase 15B)', () => {
     // Not answered yet: no sharing offered. Never a memory picker here.
     expect(screen.queryByRole('link', { name: 'Create message for loved ones' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Linked memories' })).not.toBeInTheDocument();
-    // AI help is deferred post-MVP: nothing suggests, generates or rewrites.
+    // Outside the Customer shell there is no companion: the editor itself never suggests, generates or rewrites.
     expect(screen.queryByRole('button', { name: /\bAI\b|suggest|generate|rewrite|improve/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/\bAI\b/)).not.toBeInTheDocument();
+  });
+
+  it('Help me write (companion): only the answer is offered and replaced after Use this draft; nothing is saved', async () => {
+    const api = routeFetch(routes(answered(), { 'POST /assistant/reply': json(200, { reply: 'I would like calm music by the sea.', truncated: false, draft: true }) }));
+    renderWithClient(<CompanionProvider><PromptEditor area="my-wishes" promptKey={KEY} /></CompanionProvider>);
+    await userEvent.click(await screen.findByRole('button', { name: 'Help me write' }));
+    const p = await screen.findByRole('dialog', { name: /For After AI companion/ });
+    await userEvent.click(within(p).getByRole('checkbox', { name: /Include the text in “Your answer”/ }));
+    await userEvent.type(within(p).getByRole('textbox', { name: 'Message the AI companion' }), 'calm music');
+    await userEvent.click(within(p).getByRole('button', { name: 'Help me express a preference' }));
+    // No promptKey outside My Story; the page is the only context.
+    expect(api.called('POST', '/assistant/reply')[0].body).toEqual({
+      page: 'my-wishes',
+      action: 'draft',
+      message: 'calm music',
+      source: 'Something gentle by the sea.',
+      history: [],
+    });
+    await userEvent.click(await within(p).findByRole('button', { name: 'Use this draft' }));
+    await userEvent.keyboard('{Escape}');
+    expect(screen.getByLabelText(/^Your answer/)).toHaveValue('I would like calm music by the sea.');
+    expect(api.calls.filter((c) => c.method !== 'GET' && c.path.startsWith('/my-wishes'))).toHaveLength(0); // the answer is not saved
   });
 
   it('files can be added without any notice acknowledgement', async () => {
