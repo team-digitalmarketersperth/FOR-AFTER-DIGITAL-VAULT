@@ -2,7 +2,7 @@
 
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
-import { Copy, KeyRound, ShieldCheck, Smartphone } from 'lucide-react';
+import { KeyRound, ShieldCheck, Smartphone } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { QRCodeSVG } from 'qrcode.react';
@@ -12,6 +12,7 @@ import { toast } from 'sonner';
 import { ADMIN_HOME, ADMIN_LOGIN } from '@/components/admin/admin-shell';
 import { linkClass } from '@/components/admin/admin-ui';
 import { CodeField } from '@/components/shared/code-field';
+import { CopyButton } from '@/components/shared/copy-button';
 import { FormError, PasswordField, TextField } from '@/components/shared/form-field';
 import { Spinner } from '@/components/shared/states';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -319,26 +320,6 @@ function RecoveryCodes({ codes }: { codes: string[] }) {
         </Button>
       </div>
     </div>
-  );
-}
-
-function CopyButton({ value, label }: { value: string; label: string }) {
-  return (
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      className="w-fit"
-      onClick={() =>
-        navigator.clipboard.writeText(value).then(
-          () => toast('Copied'),
-          () => toast("Couldn't copy. Select the text instead."),
-        )
-      }
-    >
-      <Copy aria-hidden strokeWidth={1.5} className="size-4" />
-      {label}
-    </Button>
   );
 }
 
