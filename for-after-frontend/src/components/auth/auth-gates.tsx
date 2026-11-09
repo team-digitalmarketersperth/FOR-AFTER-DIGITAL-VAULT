@@ -72,7 +72,7 @@ function NotACustomer() {
   );
 }
 
-const LINK_PAGES = new Set(['/verify-email', '/settings/verify-email-change']);
+const LINK_PAGES = new Set(['/verify-email', '/settings/verify-email-change', '/unsubscribe']);
 
 /** Wraps sign-in pages: a signed-in Customer goes straight to the dashboard. */
 export function GuestGate({ children }: { children: ReactNode }) {

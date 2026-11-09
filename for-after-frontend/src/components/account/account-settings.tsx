@@ -6,6 +6,9 @@ import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 import { FormError, PasswordField, TextField } from '@/components/shared/form-field';
+import Link from 'next/link';
+import { DEVICE_SETUP_HREF } from '@/components/account/device-setup';
+import { PlanSummary } from '@/components/account/plan';
 import { StorageUsageSection } from '@/components/account/storage-usage';
 import { PageHeader } from '@/components/shared/page-header';
 import { Spinner } from '@/components/shared/states';
@@ -26,6 +29,8 @@ import {
   useRequestEmailChange,
   useResendEmailChange,
   useUpdateProfile,
+  useCommunicationPreferences,
+  useSetProductNews,
 } from '@/hooks/use-auth';
 import { useUnsavedChanges } from '@/hooks/use-unsaved-changes';
 import type { CurrentUser } from '@/lib/api/auth';
@@ -66,6 +71,22 @@ export function AccountSettings() {
       </div>
 
       <StorageUsageSection />
+
+      <PlanSummary />
+
+      <EmailPreferencesSection />
+
+      <section aria-labelledby="devices-settings-heading" className="mt-16 border-t border-border pt-12 lg:mt-20 lg:pt-14">
+        <div className="mb-8 grid gap-2">
+          <h2 id="devices-settings-heading" className="text-[32px] leading-tight">
+            Devices
+          </h2>
+          <p className="max-w-xl text-foreground-muted">Check your camera, microphone and sound in this browser.</p>
+        </div>
+        <Button asChild variant="outline">
+          <Link href={DEVICE_SETUP_HREF}>Check your devices</Link>
+        </Button>
+      </section>
 
       <section aria-labelledby="security-heading" className="mt-16 border-t border-border pt-12 lg:mt-20 lg:pt-14">
         <div className="mb-8 grid gap-2">
@@ -208,8 +229,15 @@ function ProfileSummary({ user }: { user: CurrentUser }) {
 
 const EMPTY_PASSWORDS: ChangePasswordValues = { currentPassword: '', newPassword: '', confirmNewPassword: '' };
 
-function ChangePasswordDialog() {
-  const change = useChangePassword();
+type PasswordMutation = ReturnType<typeof useChangePassword>;
+
+/**
+ * Also used by the admin portal's own account settings, which passes its own
+ * mutation (POST /admin/account/password); the Customer page uses the default.
+ */
+export function ChangePasswordDialog({ change: given }: { change?: PasswordMutation } = {}) {
+  const own = useChangePassword();
+  const change = given ?? own;
   const [open, setOpen] = useState(false);
   const form = useForm<ChangePasswordValues>({
     resolver: zodResolver(changePasswordSchema),
@@ -441,5 +469,56 @@ function ChangeEmailDialog() {
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * Step 7: the Customer's own opt-in to optional product news. Off until they
+ * choose it (signing up is not consent); every announcement email also has an
+ * unsubscribe link. Account, sign-in and delivery emails are not affected.
+ */
+function EmailPreferencesSection() {
+  const prefs = useCommunicationPreferences();
+  const set = useSetProductNews();
+  const on = !!prefs.data?.productNews;
+  return (
+    <section aria-labelledby="email-preferences-heading" className="mt-16 border-t border-border pt-12 lg:mt-20 lg:pt-14">
+      <div className="mb-8 grid gap-2">
+        <h2 id="email-preferences-heading" className="text-[32px] leading-tight">
+          Email preferences
+        </h2>
+        <p className="max-w-xl text-foreground-muted">
+          Important emails about your account, sign-in and messages are always sent. News is optional.
+        </p>
+      </div>
+      {prefs.isPending ? (
+        <p className="flex items-center gap-2 text-foreground-muted">
+          <Spinner /> Loading your preferences…
+        </p>
+      ) : prefs.isError ? (
+        <FormError error={prefs.error} />
+      ) : (
+        <div className="grid gap-3 rounded-xl border border-border bg-surface p-6 sm:p-8">
+          <label className="flex items-start gap-3">
+            <input
+              type="checkbox"
+              checked={on}
+              disabled={set.isPending}
+              onChange={(e) => set.mutate(e.target.checked, { onSuccess: (p) => toast.success(p.productNews ? 'You will get news from For After.' : 'You will no longer get news from For After.') })}
+              aria-describedby="product-news-hint"
+              className="mt-1 size-4 shrink-0 accent-primary"
+            />
+            <span className="grid gap-1">
+              <span className="font-semibold">Product news and updates from For After</span>
+              <span id="product-news-hint" className="text-[15px] text-foreground-muted">
+                Occasional emails about new features and improvements. You can change this at any time, or use the unsubscribe link in any of
+                these emails.
+              </span>
+            </span>
+          </label>
+          <FormError error={set.error} />
+        </div>
+      )}
+    </section>
   );
 }

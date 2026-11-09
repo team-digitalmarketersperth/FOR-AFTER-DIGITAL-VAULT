@@ -43,6 +43,15 @@ async function fillPasswords(current: string, next: string, confirm = next) {
   if (confirm) await userEvent.type(security().getByLabelText('Confirm new password'), confirm);
 }
 
+describe('Account settings: devices', () => {
+  it('links to the device checks, with no browser-notification setting', async () => {
+    await renderPage();
+    const devices = within(screen.getByRole('region', { name: 'Devices' }));
+    expect(devices.getByRole('link', { name: 'Check your devices' })).toHaveAttribute('href', '/settings/devices');
+    expect(screen.queryByText(/browser notification|enable notifications/i)).toBeNull();
+  });
+});
+
 describe('Account settings: profile', () => {
   it('loads the real profile into the form, with email read-only', async () => {
     await renderPage();
@@ -368,5 +377,26 @@ describe('Account menu', () => {
     await renderPage();
     await userEvent.click(await screen.findByRole('button', { name: 'Account: Ada Lovelace' }));
     expect(await screen.findByRole('menuitem', { name: 'Account settings' })).toHaveAttribute('href', '/settings');
+  });
+});
+
+describe('Account settings: email preferences (Step 7)', () => {
+  it('product news is off by default and only changes when the Customer ticks it; the choice is sent as a boolean only', async () => {
+    let productNews = false;
+    const { api } = await renderPage({
+      'GET /users/me/communication-preferences': () => json(200, { productNews, since: null }),
+      'PUT /users/me/communication-preferences': (b) => {
+        productNews = (b as { productNews: boolean }).productNews;
+        return json(200, { productNews, since: productNews ? '2026-11-03T00:00:00.000Z' : null });
+      },
+    });
+    const section = within(await screen.findByRole('region', { name: 'Email preferences' }));
+    const box = await section.findByRole('checkbox', { name: /Product news and updates from For After/ });
+    expect(box).not.toBeChecked();
+    expect(api.called('PUT', '/users/me/communication-preferences')).toHaveLength(0); // never on page load
+    await userEvent.click(box);
+    await waitFor(() => expect(box).toBeChecked());
+    expect(api.called('PUT', '/users/me/communication-preferences')[0]!.body).toEqual({ productNews: true });
+    expect(screen.getByText(/Important emails about your account, sign-in and messages are always sent/)).toBeInTheDocument();
   });
 });

@@ -31,6 +31,7 @@ export type RegisterInput = LoginInput & { firstName: string; lastName: string }
 // Step 22: the only editable profile fields. Email is read-only (no verified change flow yet).
 export type ProfileInput = { firstName: string; lastName: string };
 export type ChangePasswordInput = { currentPassword: string; newPassword: string };
+export type CommunicationPreferences = { productNews: boolean; since: string | null };
 export type ResetPasswordInput = { token: string; newPassword: string };
 export type ChangeEmailInput = { newEmail: string; currentPassword: string };
 
@@ -58,6 +59,13 @@ export const authApi = {
   /** PATCH /users/me: returns the same user as /auth/me. Customer only. */
   updateProfile: (input: ProfileInput) =>
     apiRequest<CurrentUser>('/users/me', { method: 'PATCH', body: input }),
+  // Step 7: optional product news (consent). Service and security email are not optional.
+  communicationPreferences: (signal?: AbortSignal) =>
+    apiRequest<CommunicationPreferences>('/users/me/communication-preferences', { signal }),
+  setProductNews: (productNews: boolean) =>
+    apiRequest<CommunicationPreferences>('/users/me/communication-preferences', { method: 'PUT', body: { productNews } }),
+  // Public: the link in every announcement email (POST only; opening the page changes nothing).
+  unsubscribe: (token: string) => apiRequest<{ unsubscribed: true }>('/communications/unsubscribe', { method: 'POST', body: { token } }),
 
   /**
    * Re-authenticates with the current password. This browser stays signed in
@@ -100,4 +108,7 @@ export const authApi = {
   /** Ends every session of the account; signs nobody in. */
   resetPassword: (input: ResetPasswordInput) =>
     apiRequest<{ success: true }>('/auth/reset-password', { method: 'POST', body: input }),
+  // An invited ADMIN's first password (same password rule); no session is created.
+  acceptAdminInvitation: (input: ResetPasswordInput) =>
+    apiRequest<{ success: true }>('/auth/admin-invitation/accept', { method: 'POST', body: input }),
 };

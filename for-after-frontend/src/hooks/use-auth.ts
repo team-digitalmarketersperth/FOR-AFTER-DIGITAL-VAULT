@@ -11,6 +11,7 @@ import {
   isAdminMfaChallenge,
   type ChangeEmailInput,
   type ChangePasswordInput,
+  type CommunicationPreferences,
   type CurrentUser,
   type LoginInput,
   type ProfileInput,
@@ -134,9 +135,9 @@ export function useForgotPassword() {
 }
 
 // gcTime 0: the variables hold the new password.
-export function useResetPassword() {
+export function useResetPassword(admin = false) {
   return useMutation<{ success: true }, ApiError, ResetPasswordInput>({
-    mutationFn: authApi.resetPassword,
+    mutationFn: admin ? authApi.acceptAdminInvitation : authApi.resetPassword,
     gcTime: 0,
   });
 }
@@ -170,3 +171,18 @@ export function useConfirmEmailChange() {
     onSuccess: () => switchSession(queryClient, null),
   });
 }
+
+// Step 7: the Customer's own consent to optional product news.
+const commsKey = ['account', 'communication-preferences'] as const;
+export const useCommunicationPreferences = () =>
+  useQuery<CommunicationPreferences, ApiError>({ queryKey: commsKey, queryFn: ({ signal }) => authApi.communicationPreferences(signal) });
+
+export function useSetProductNews() {
+  const qc = useQueryClient();
+  return useMutation<CommunicationPreferences, ApiError, boolean>({
+    mutationFn: authApi.setProductNews,
+    onSuccess: (prefs) => qc.setQueryData(commsKey, prefs),
+  });
+}
+
+export const useUnsubscribe = () => useMutation<{ unsubscribed: true }, ApiError, string>({ mutationFn: authApi.unsubscribe });
