@@ -5,12 +5,121 @@
 
 |                              |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Last updated**             | 2026-10-28                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| **Latest backend step**      | 2026-10-22: **Microsoft Graph email delivery live-verified locally** from the `info@forafter.com.au` mailbox (user-confirmed manual checks, not automated tests: Recipient email OTP, Trusted Contact email OTP, Trusted Contact email invitations, password reset and email verification, one scheduled notification sent by the local worker). The earlier Graph `403 ErrorAccessDenied` is resolved (Exchange RBAC for Applications, Application Mail.Send scoped to that mailbox; `Test-ServicePrincipalAuthorization` → `InScope=True`). Production credentials, SPF/DKIM/DMARC and a Railway worker remain open ([`email-production-setup.md`](email-production-setup.md) §7). 2026-10-21: **Brevo removed; Microsoft Graph is the email provider** (adapter, API + worker wiring, load harness, docs; local `.env` switched; mocked tests only at the time; live verification followed 2026-10-22). 2026-10-21: **Phase 24 complete locally (7/7)**: §50 security matrix (11 applicable cases pass; Stripe replay waits for phase 21) and a delivery-worker load harness (7 profiles pass; ≈ 9 emails/s per worker process at 80 ms fake latency; external exactly-once not guaranteed); e2e moved to a dedicated test database + Redis; e2e dead-letter leak fixed. Staging/production not tested ([`testing/phase-24-results.md`](testing/phase-24-results.md)). 2026-10-17: **Phase 17 complete (10/10)**: dead-letter ops-alert reconciler (worker only, bounded, cooldown, graceful shutdown); one real synthetic alert delivered to `OPS_ALERT_EMAIL` through Brevo. 2026-10-17: **Phase 10 complete (13/13)**: Trusted Contact SMS OTP sign-in **real SMS verified** (India, mobile-only contact, one OTP: delivered, approved, Trusted Contact session created, portal opened). 2026-10-17: Trusted Contact **SMS invitations** (product scope change): same `TrustedContactInvitation` model, token and `/trusted-contact/invitation` page; Customer picks EMAIL or SMS on `POST /trusted-contacts/:id/invitation`; sent through Twilio Programmable Messaging (`SmsSender`, Messaging Service, never Verify); mobile change kills an SMS link; 6 SMS per Customer per day. Unit, e2e and Playwright (console provider) pass; **real SMS not run: `TWILIO_MESSAGING_SERVICE_SID` not configured**. 2026-10-17: Phase 18 complete: sender display-name snapshot on access grants (migration `add_grant_sender_display_name_snapshot`), grant revocation and read receipts post-MVP. 2026-10-16: Recipient SMS sign-in through Twilio Verify, **real SMS verified** (India, one OTP: delivered, approved, Recipient session created). 2026-10-13: Phase 19A death-verification evidence, Phase 19B second-contact confirmation, Delivery Timeline, Customer "Recent changes" activity, setup readiness score. Before: Step 24: transactional email through Brevo (provider-neutral `EmailProvider`; migrated from Resend 2026-10-05): sign-in codes, "a message is waiting" release emails (durable `ReleaseNotification` + `email-delivery` queue), account-holder safety notice. Step 24.1: per-Recipient release emails verified for all three triggers. Brevo key accepted (dev IP blocking off, 2026-10-05); first real OTP to an inbox was pending then (Brevo, the previous provider; real-inbox OTPs confirmed through Microsoft Graph 2026-10-22) ([`email-production-setup.md`](email-production-setup.md)) |
-| **Latest frontend step**     | 2026-10-28: companion panel scroll layout (fixed header and composer, one scroll area), then a conversational companion (suggested questions sent to the AI endpoint, static quick answers removed). 2026-10-27: My Story page redesigned to the approved focused writing layout, then media, memories, private note and sharing inline in the focused editor, then a compact mobile chapter selector, then one For After companion in the Customer shell with AI replies through Groq (Phase 14 notes; Groq verified with mocks only). 2026-10-21: message media layout fix (attachment cards on `/messages/[id]` no longer overflow; see Part 6 C). 2026-10-13: dashboard readiness card + "Coming up" preview, `/messages/timeline`, `/settings/activity`; Trusted Contact evidence upload; admin evidence view + confirmation counts (Step 24 before: admin queues show `email-delivery` jobs)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| **Last updated**             | 2026-11-03 (see the [Status board](#-status-board--2026-11-03)) |
+| **Latest backend step**      | 2026-11-03: Notification centre Steps 4–5 (customer broadcast runs + worker, verified with a fake provider; sending blocked by the feature gate and open policy decisions). 2026-10-30–31: admin operations Steps 1–9, billing (disabled), admin invitations, funeral songs. 2026-10-22: Microsoft Graph email live-verified locally |
+| **Latest frontend step**     | 2026-11-03: Notification centre four-step wizard + send progress view. 2026-10-30–31: admin operations pages, Help & Support, billing screens, song dialog. 2026-10-28: companion panel |
 | **Backend**                  | Steps 1–16 + 22–24.1 + Phases 03, 04, 08 and 09 built and tested                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| **Frontend**                 | **27 of 30 tasks** built and verified (FE-1–19, FE-21–28); 204 unit/component tests; Playwright 36 passing, 0 failing, 0 skipped against the real local API (console email provider), PostgreSQL, Redis and the development bucket (Step 24, 2026-10-03). Frontend tracker: `for-after-frontend/docs/tasks.md`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| **Frontend**                 | **27 of 30 tasks** built and verified (FE-1–19, FE-21–28); 676 unit/component tests (2026-11-03; 204 at Step 24); Playwright 36 passing, 0 failing, 0 skipped against the real local API (console email provider), PostgreSQL, Redis and the development bucket (Step 24, 2026-10-03). Frontend tracker: `for-after-frontend/docs/tasks.md`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | **Checklist (phases 02–27)** | **189 of 221** items done (recounted from the checkboxes 2026-10-22 after Microsoft Graph live verification: 189 `[x]`, 29 `[ ]`, 3 `[~]`; 188 recounted 2026-10-21 after Phase 24: 188 `[x]`, 31 `[ ]`, 2 `[~]`; 186 after Phase 17 (2026-10-17); 185 after the Trusted Contact real SMS test; 184 after Phase 18; 183 after Recipient SMS sign-in 2026-10-16; 182 recounted 2026-10-13 after Phase 19B: 182 `[x]`, 36 `[ ]`, 3 `[~]`; 181 after Phase 19A; the recount before 19A found 180, the earlier figure missed one later item; 179 recounted 2026-10-09 after Phase 16; before: 178 after Phase 15B; earlier history: 176 of 227 recounted 2026-10-05; +2 Phase 11, +1 Phase 11 VIDEO and +3 Phase 12, 2026-10-07; +1 Phase 12B malware scanning, +1 Phase 13A search/tags/pagination, +1 Phase 13B create a message from a memory, +1 Phase 12C storage quota, +1 Phase 14A My Story catalogue, +1 Phase 14B rich answers + sharing, +1 Phase 15A My Wishes notice, 2026-10-08; +1 Phase 15B My Wishes media + after-death sharing, 2026-10-09)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+
+---
+
+## 🗓️ Status board — 2026-11-03
+
+Snapshot of the working tree on **2026-11-03**: last commit `345ad28` (2026-11-02); **170 paths uncommitted**
+(everything below marked "uncommitted"). Dev DB `for_after` and the isolated test DB `for_after_p24` both have all
+**45 migrations** applied (`prisma migrate status`: up to date). Details live in each feature's section further down.
+
+### ✅ Completed (built and tested locally; uncommitted)
+
+| Date       | Feature                                                                                       | Where                                   |
+| ---------- | --------------------------------------------------------------------------------------------- | --------------------------------------- |
+| 2026-10-30 | Funeral songs on My Wishes (add/edit/order, safe song links)                                  | Phase 15 · `my-wishes.md`               |
+| 2026-10-30 | Admin operations 1–4: Overview, Release monitoring, Delivery monitoring, System health + worker heartbeat | Phase 22 · `admin.md` §14–19 |
+| 2026-10-31 | Admin operations 5–9: Security activity, Storage & scans, Support requests, AI operations, Admin access (read-only) | Phase 22 · `admin.md`, `support.md` |
+| 2026-10-31 | SUPER_ADMIN bootstrap, Create admin + admin invitations                                       | Phase 22 · `admin.md` §22a              |
+| 2026-10-31 | Free trial + billing (Stripe), **disabled by default**                                        | Phase 21 · `billing.md`                 |
+| 2026-11-02 | Device setup (camera, mic, sound); browser notifications removed                              | New features                            |
+| 2026-11-02 | Notification centre 1–3: drafts + preview, test email to self, audience review               | `notification-centre.md`               |
+| 2026-11-03 | Notification centre 4: broadcast runs, worker, progress, stop (**sending blocked**)          | `notification-centre.md`               |
+| 2026-11-03 | Notification centre wizard: Write → Preview & test → Audience → Review & send                 | `notification-centre.md`               |
+| 2026-11-03 | Notification centre 5: end-to-end verification, 5 defects fixed, operator runbook             | `notification-centre.md`               |
+| 2026-11-03 | Admin account settings: top-right menu, Profile · Security · Sessions (own account)           | Phase 22 · this file                    |
+| 2026-11-03 | Notification centre 7: consent, unsubscribe, suppression, pilot audience (mocked)            | `notification-centre.md`               |
+| 2026-11-09 | Security activity redesign (cards, graph, IP controls) + temporary IP blocks, **unavailable until attribution verified** | Phase 22 · `admin.md` §20–20a |
+
+### 🟡 In progress
+
+- [x] **Notification centre live test email (Step 6)** — accepted by Microsoft 2026-11-03 10:30 UTC; inbox receipt user-confirmed 2026-11-03 10:35 UTC
+- [~] **Customer announcement email** — policy implemented (consent, unsubscribe, suppression, death-report rule) and a
+      pilot audience (Step 7, 2026-11-03, mocked); gate off; first pilot send awaits content + owner approval
+- [~] **Billing** — built and disabled; needs Stripe products/prices, keys, live webhook and the §50 replay test
+- [~] **Email (Microsoft Graph)** — live-verified locally 2026-10-22; production credential + SPF/DKIM/DMARC open
+- [~] **Media** — production ImageKit keys and retiring the legacy B2 bucket open
+- [~] **Staging** — Railway demo live; worker service, CI, separate secrets and QA open
+
+### ⏳ Pending (waiting on a decision or external input)
+
+- [ ] Complaint feed / async bounce processing for announcements (before any wide, all-eligible rollout)
+- [ ] Phase 01 product decisions still open (death-verification edge cases, limits, retention, account deletion)
+- [ ] Twilio Messaging sender (`TWILIO_MESSAGING_SERVICE_SID`) for a real SMS invitation test
+- [ ] Admin write actions (role change, MFA reset) need a step-up re-auth and role-grant policy first
+- [ ] Subscription-after-death behaviour (billing decision)
+
+### ⬜ To do
+
+- [ ] Commit the 170 uncommitted paths (in reviewable groups)
+- [ ] Browser/Playwright checks against the real API for the admin operations pages and the Notification centre wizard
+- [ ] Controlled live announcement smoke test (checklist only: `notification-centre.md` §13; needs explicit approval)
+- [ ] "Sign out all devices" (Phase 05)
+- [ ] Data export, account deletion workflow, dependency scanning, threat-model review (Phase 23)
+- [ ] WordPress login/signup integration (Phase 25, FE-29/30)
+- [ ] Production: infrastructure, secrets manager, backups with restore test, monitoring, legal pages (Phase 27)
+- [ ] Housekeeping: Postman plain-text passwords, `jiya@gmail.com` reset, Prisma install-script approval
+
+### 🗺️ Architecture and status
+
+```mermaid
+flowchart TB
+  subgraph Clients["Browser apps (Next.js)"]
+    C[Customer app<br/>vault · billing · support]
+    R[Recipient portal]
+    T[Trusted Contact portal]
+    A[Admin portal<br/>operations · Notification centre]
+  end
+  subgraph API["NestJS API (auth, sessions, admin MFA, Origin check)"]
+    VAULT[Vault<br/>messages · media · story · wishes]
+    DV[Death verification]
+    ADM[Admin operations]
+    NC[Notification centre<br/>drafts · review · runs]
+    BILL[Billing<br/>disabled]
+  end
+  subgraph Data["State"]
+    PG[(PostgreSQL<br/>45 migrations)]
+    RQ[(Redis<br/>sessions · BullMQ)]
+  end
+  subgraph Worker["Worker process"]
+    W1[Release + death-verification]
+    W2[email-delivery]
+    W3[announcement-test]
+    W4[announcement-broadcast<br/>gate off · policy blocked]
+  end
+  subgraph Ext["Providers"]
+    MS[Microsoft Graph email]
+    TW[Twilio SMS]
+    IK[ImageKit + ClamAV]
+    GQ[Groq AI]
+    ST[Stripe]
+  end
+  Clients --> API
+  API --> Data
+  RQ --> Worker
+  Worker --> PG
+  W2 & W3 --> MS
+  W4 -. blocked .-> MS
+  API --> TW & IK & GQ
+  BILL -. disabled .-> ST
+
+  classDef done fill:#e6f4ea,stroke:#2e7d32,color:#1b3d1f
+  classDef partial fill:#fff4e0,stroke:#c77700,color:#4a2d00
+  classDef blocked fill:#fdecea,stroke:#c62828,color:#4a1010
+  class C,R,T,A,VAULT,DV,ADM,PG,RQ,W1,W2,W3,TW,IK,GQ done
+  class NC,MS partial
+  class W4,BILL,ST blocked
+```
+
+Green = built and verified locally · amber = built, production setup or live check open · red = built but disabled or
+blocked by an open decision.
 
 ---
 
@@ -29,6 +138,7 @@ Each phase lists **Done** items first, then **To do**. "Backend ready" means the
 
 ## 🧭 Contents
 
+1. [Status board — 2026-11-03](#-status-board--2026-11-03) (completed · in progress · pending · to do + diagram)
 1. [At a glance](#-at-a-glance)
 2. [Part 1 — Product decisions](#-part-1--product-decisions) (phase 01)
 3. [Part 2 — Backend foundation](#-part-2--backend-foundation) (phases 02–06)
@@ -66,9 +176,9 @@ Each phase lists **Done** items first, then **To do**. "Backend ready" means the
 |  17   | Redis + BullMQ             | ✅ Release, death-verification and `email-delivery` queues, admin failed-job view/retry, separate worker process, durable DLQ + ops alerts (real alert verified 2026-10-17)                                                                                                                                                                                                                                                                                                                                                             |      10 / 10       |
 |  18   | Recipient portal           | ✅ Backend (Step 13) + UI (Step 19) + email sign-in codes and release emails (Step 24) + SMS sign-in via Twilio Verify (real SMS verified 2026-10-16) + sender display-name snapshot (2026-10-17); grant revocation and read receipts post-MVP                                                                                                                                                                                                                                                                                          |       7 / 7        |
 |  19   | Death verification         | ✅ Workflow (Steps 14–15) + Trusted Contact portal, Customer safety UI (Step 19), admin review UI (Step 20), supporting evidence (Phase 19A) and second-contact confirmation (Phase 19B)                                                                                                                                                                                                                                                                                                                                                |      15 / 15       |
-|  20   | Notifications              | 🟡 Email (Microsoft Graph since 2026-10-21; Brevo before): codes, release, safety, verify/reset (Phase 04), invitations (Phase 10); live delivery user-confirmed locally 2026-10-22; **production credential + SPF/DKIM/DMARC pending**; SMS deferred                                                                                                                                                                                                                                                                                   | 3 (+1 partly) / 5  |
-|  21   | Stripe billing             | ⬜ Not started                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |       0 / 6        |
-|  22   | Admin portal               | 🟡 Admin backend (Step 16) + Admin Portal UI (Step 20) done; subscriptions/deliveries wait for Stripe/delivery                                                                                                                                                                                                                                                                                                                                                                                                                          | 6 (+1 partly) / 7  |
+|  20   | Notifications              | 🟡 Email via Microsoft Graph (live-verified locally 2026-10-22); announcements to customers built but blocked (gate off + policy decisions, 2026-11-03); production credential + SPF/DKIM/DMARC open | 3 (+1 partly) / 5  |
+|  21   | Stripe billing             | 🟡 Free trial + Stripe billing built locally, **disabled by default** (2026-10-31); Stripe products, keys, live webhook open |       0 / 6        |
+|  22   | Admin portal               | 🟡 Admin backend + UI; operations Steps 1–9 (2026-10-30–31); Create admin/invitations; Notification centre (2026-11-03); admin write actions need step-up re-auth | 6 (+1 partly) / 7  |
 |  23   | Audit + security           | 🟡 `AuditLog` + admin events (Step 16) + `PASSWORD_CHANGED` (Step 22); full app audit (Step 23); other customer events, export, deletion open                                                                                                                                                                                                                                                                                                                                                                                           | 2 (+1 partly) / 7  |
 |  24   | Testing                    | ✅ Local: unit 1,280 + e2e 563 on dedicated test DB/Redis; §50 matrix (Stripe replay waits for phase 21); worker load harness, 7 profiles pass (2026-10-21). Staging/production not tested                                                                                                                                                                                                                                                                                                                                              |       7 / 7        |
 |  25   | WordPress integration      | ⬜ Not started                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |       0 / 3        |
@@ -836,6 +946,32 @@ without a migration. Product work to scope, not done.
       Playwright (real uploads + real verified-death release); real ImageKit + clamd check (20/20)
 - [x] Frontend: My Wishes pages with the exact non-legal disclaimer → **FE-19** (Step 18) (Playwright verified, Step 21)
 
+> **Funeral songs, "Music I’d like remembered" (2026-10-30, `docs/my-wishes.md` → Songs).** On the My Wishes page (All and
+> Music and readings filter): add / edit / remove / Move up–Move down songs. Fields: song title (required, 200), optional
+> YouTube/Spotify link (500; `youtube.com`/`youtu.be`/`music.youtube.com` watch links and `open.spotify.com/track/…`, HTTPS,
+> exact host allowlist, canonicalised, never fetched), optional timing (Arrival / Reflection / Farewell / Other + 100-char
+> detail), optional note (1,000); **no Artist field**, no music account, OAuth, API, upload or player; max 50 songs.
+> `MyWishSong` + migration `20261030090000_add_my_wish_songs` (additive; applied and drift-checked only on the isolated
+> `for_after_p24` DB, **not** on the dev DB). `/my-wishes/songs` GET/POST/PATCH/DELETE + `PUT /order` (exact own set,
+> one transaction, 409 on stale/foreign). Owner-only: saving sends, schedules, releases or shares nothing and needs no
+> Recipient; no Recipient, Trusted Contact or admin access. **Gap:** no after-death viewing of songs by loved ones (not in
+> "Create message for loved ones"); not counted in readiness, the Trusted Contact content flag or Recent changes.
+> Companion My Wishes knowledge updated. Verified: backend `song-link.spec.ts` (42) and `my-wish-songs.e2e-spec.ts` +
+> `my-wishes.e2e-spec.ts` (17, isolated env) pass; backend unit suite 1364/1365 (the 1 failure is the separate local
+> `app.setup.spec.ts` timeout); backend tsc + oxlint clean; frontend `wish-songs.test.tsx` (18), full suite 242/242,
+> typecheck + eslint clean, `next build` passes. Not run: Playwright browser e2e (needs the migration on the dev DB), backend `npm run build`
+> (would stop the :4000 watch API).
+
+> **Song dialog redesign (2026-10-30).** "Add a song" / "Edit song" is now two steps in one dialog (Your song → Personal
+> details) with a stepper, fixed footer and one internal scroll region; same fields, validation, API payload and privacy.
+> Continue/Enter never saves; Back keeps values; "Skip and save" only when adding with no optional details; a double click
+> sends one request (synchronous guard); focus starts on the title. No API, schema or backend change. Verified: frontend
+> `wish-songs.test.tsx` 19/19; browser check on the local app (synthetic user, private API on :4001 with email/SMS
+> disabled, user deleted afterwards) at 320, 375, 768, 1440, 375×480 and 640×400 (≈200% zoom): no horizontal overflow,
+> dialog and footer in view, last field above the footer, Escape returns focus, keyboard-only add saves once (201)
+> (run before the final lint-driven move of the double-submit guard, which the component tests cover). Frontend full
+> Vitest 560/560, typecheck, eslint and `next build` pass.
+
 ---
 
 ## ⏰ Part 4 — Scheduling and release engine
@@ -1207,6 +1343,45 @@ Frontend testing (component + Playwright E2E) is tracked in phase 24 and applies
 - [ ] Plan limits (storage, recipients, trusted contacts)
 - [ ] Subscription-after-death behaviour (per product decision)
 
+> **Free trial, billing and subscriptions, Step 10 (2026-10-31, `docs/billing.md`), built locally and disabled by
+> default.** Decided by the product owner: Stripe; app-run card-free trial; 7 days; at the end the Customer is sent to
+> buy a plan. Done: `stripe@23.1.0`; migration `20261031120000_add_billing` (additive: `CustomerTrial` unique per
+> account, `BillingAccount` with the server-created Stripe customer mapping, `StripeEvent` idempotency, audit
+> `TRIAL_STARTED`/`SUBSCRIPTION_SYNCED`, actor `SYSTEM`), applied and drift-checked **only on the isolated
+> `for_after_p24` DB**. One access-state function (§3) used by a global gate (402 on Customer content writes, uploads and
+> AI; reads, deletes, settings, billing, support, safety answers and all release work never gated; expiry at request
+> time, no scheduler), `/billing` status/trial/checkout/portal, a signature-verified, livemode-checked, idempotent
+> webhook that re-reads the subscription from Stripe, `/settings/plan` (start trial, real dates, plans, bounded
+> "Confirming your subscription", payment issue, cancellation), a shell redirect to the plan page, Account settings
+> "Plan" card, and SUPER_ADMIN-only "Subscriptions & payments" + Users billing summary. Pre-enforcement accounts are
+> never restricted. **Verified (Stripe mocked; no Stripe call, no charge):** backend billing unit 20/20 (state matrix
+> and boundaries, gate paths, launch gate off, env mode); billing e2e 9/9 on the isolated DB/Redis (402 before trial,
+> concurrent/forged/retried trial, expiry without scheduler, rollout rule, allowlisted checkout and fixed URLs, success
+> URL grants nothing, unsigned/forged/wrong-mode/foreign/duplicate/concurrent/late events, Stripe outage → 500 and no
+> access, cancellation scheduled/payment issue/ended, nothing deleted, SUPER_ADMIN-only admin + Users summary,
+> `no-store`); admin e2e 32/32; frontend plan, shell, billing and affected tests 207/207, typecheck, eslint.
+> **Not done:** any real Stripe (test-mode) run, launch decisions in `billing.md` §1, `next build`, Playwright.
+
+> **SUPER_ADMIN bootstrap, Create admin and billing access (2026-10-31, `docs/admin.md` §22a).** Migration
+> `20261031150000_add_admin_invitations` (additive enum values: `AuthTokenPurpose.ADMIN_INVITATION`, audit
+> `ADMIN_CREATED`, `ADMIN_INVITATION_SENT`, `ADMIN_INVITATION_ACCEPTED`, `SUPER_ADMIN_BOOTSTRAPPED`) applied to the
+> isolated `for_after_p24` DB and to the **local development DB** (verified local, `NODE_ENV=development`; the dev DB
+> already had every earlier migration). Local maintenance command `scripts/dev-promote-super-admin.ts` (local-only,
+> exact id + email of an ACTIVE ADMIN, idempotent, audited, ends sessions via `passwordChangedAt`). **Executed once on the
+> local dev DB for the requested account: stored role SUPER_ADMIN, ACTIVE, MFA enrolment kept, one
+> `SUPER_ADMIN_BOOTSTRAPPED` audit row (actor SYSTEM); re-run reported "Already SUPER_ADMIN"; it is the only SUPER_ADMIN.**
+> A bug found by the e2e before that run was fixed: writing a JS `Date` through `pg` stored local time in the
+> UTC timestamp column (hours in the future), which would have revoked every new session. Create admin: SUPER_ADMIN
+> with two-factor in the last 15 min, ADMIN only, email collision never elevates, invitation link (existing token
+> table, single use, 72 h) → `/admin/invitation` sets the password → normal sign-in with TOTP setup. Billing:
+> Management → "Subscriptions & payments" (`/admin/billing`, SUPER_ADMIN only, unchanged). **Verified:** onboarding e2e
+> 6/6 (promotion matching/refusals/idempotency/audit/session end/fresh role, billing allowed for SUPER_ADMIN and denied to
+> ADMIN/Customer/anonymous with `no-store`, create-admin permission/forged fields/collisions/concurrency, invitation
+> supersede/expiry/single use/password rule/TOTP required, provider failure → `not_sent`), admin e2e 32/32, billing e2e
+> 9/9, account-recovery e2e, backend unit, oxlint, tsc; frontend Create admin/invitation tests 5/5 and admin/auth/
+> account/layout 184/184, typecheck, eslint. **Not run:** `next build`, backend `npm run build`, Playwright, a manual
+> sign-in as the promoted account.
+
 ### 22 · Admin portal — 🟡 6 (+1 partly) of 7
 
 - [x] Death-verification review + decision API (Step 15): `/admin/death-verifications` list, detail, verify, reject;
@@ -1224,6 +1399,234 @@ Frontend testing (component + Playwright E2E) is tracked in phase 24 and applies
 
 Open (not checklist items yet): admin MFA reset / recovery-code regeneration API, re-authentication for sensitive
 actions, role management (deliberately no API).
+
+> **Admin Overview, Step 1 of the admin operations plan (2026-10-30, `docs/admin.md` §14–15).** Done and verified:
+> `GET /admin/dashboard` extended in place (same guards: admin role + completed MFA; read-only; counts and statuses
+> only). Customers are now `role = CUSTOMER` only (it previously counted every role) plus new in the last 168 h; open
+> death cases by state; releases past due and not yet released (the reconciler's due rules at `now`, incl. blocked
+> ones); release emails retrying / failed for good; BullMQ waiting/active/delayed/failed over the allowlisted queues;
+> open dead letters; PostgreSQL and Redis checks (reused `HealthService`). Each source fails on its own → `null` →
+> "Unavailable", never 0. UI: "Attention required" (non-zero signals only, no false all-clear), customer / case /
+> release / job panels, service status, Refresh with server "Last updated". No schema change, no new sidebar items.
+> Tests: backend admin unit 45/45 (definitions, 168 h boundary, null vs 0, partial failure, no private fields), admin
+> e2e 23/23 on the isolated DB (incl. reading the dashboard creates no release or notification), full unit 1368/1368,
+> oxlint, tsc; frontend admin component tests incl. zero vs unavailable, partial failure, refresh, links only to
+> existing pages; full Vitest 564/564, typecheck, eslint, `next build`; browser check at 320/375/768/1440 px with a
+> synthetic admin (real TOTP) on the isolated DB: no overflow, keyboard refresh, Redis-down and request-failed views.
+> **Gaps (later steps, `docs/admin.md` §15):** no worker heartbeat or scanner health check ("Not monitored"); no
+> release or delivery monitoring page (those counts are not linked); no scan state on media; no "held release" state;
+> no delivered/uncertain email tracking. Backend `npm run build` not run (it stops the local :4000 watch API).
+
+> **Release monitoring, Step 2 of the admin operations plan (2026-10-30, `docs/admin.md` §16).** Done and verified:
+> Operations → Releases (`/admin/releases`, detail `/admin/releases/:reference`) over new read-only
+> `GET /admin/releases[/:reference]` (admin role + MFA, PostgreSQL only, `Cache-Control: no-store`). One row per
+> SCHEDULED/RELEASED/CANCELLED message: ids, trigger, stored times and a current assessment computed per request
+> (released, cancelled, past due, scheduled, recurring, waiting for a verified death, no schedule) reusing the release
+> service's `releaseDueAt()`; never titles, content, recipient details, payloads or provider text. Filters: status,
+> trigger, scheduled range, exact reference, exact account, past due; allowlisted sort with an id tie-breaker; bounded
+> pages. Detail: schedule, release record, death activation and case (links to the case and its audit events), yearly
+> occurrence and release-email counts, dead letters (error category only) and history from stored timestamps only.
+> Past due is one shared definition (`pastDueWhere`): the Overview now counts Messages (was due items) and links to
+> `?pastDue=true`; the e2e test checks both totals match. No schema change. Tests: backend admin unit (assessment
+> mapping incl. after-death never past due by age, filters, sort, 404, read-only Prisma fake, no private fields),
+> admin e2e 24/24 on the isolated DB (denial for anonymous/Customer/Recipient/Trusted Contact, real fixtures, no
+> state change), full unit 1383/1383, oxlint, tsc; frontend release list/detail tests (states, stale refresh, filter
+> URL and page reset, links, no mutation controls), full Vitest 572/572, typecheck, eslint, `next build`; browser check
+> on the isolated DB at 320/375/768/1440 px (no overflow after a badge-wrap fix, no titles shown, keyboard filter and
+> detail, Overview link). **Gaps:** why a past-due release is stuck (worker `blocked`/`stale` reasons are only logged);
+> history before a schedule change is not stored; release detail views are logged, not audited (needs a new audit
+> event type); no `Message(status, updatedAt)` index yet (documented for growth); no global no-store policy for other
+> admin responses. Backend `npm run build` not run (it stops the local :4000 watch API).
+
+> **Delivery monitoring, Step 3 of the admin operations plan (2026-10-30, `docs/admin.md` §17).** Done: Operations →
+> Deliveries (`/admin/deliveries`, details `/admin/deliveries/release-emails/:id` and `/safety-notices/:caseId`) over
+> new read-only `GET /admin/deliveries[...]` (admin role + MFA, `Cache-Control: no-store`). Covers the two durable
+> delivery records: release emails (`ReleaseNotification`) and the death-verification safety notice (case fields).
+> Statuses from stored fields only (waiting, retrying, accepted by the email provider, failed for good; plus "last
+> attempt: outcome uncertain" for timeout/network errors; notices: waiting, attempted, accepted, not sent (case
+> closed)); never "Delivered" (no provider confirmation exists). Error codes are allowlisted on output. References only:
+> no addresses, subjects, bodies, links, tokens, payloads or provider text. Optional queue job state on email detail
+> (Redis; "unavailable" when unreadable, lists are PostgreSQL only). Overview email counts and Release detail link to
+> the matching filters (shared definitions). No schema change, no mutation endpoint. **Not covered (no durable
+> records):** Trusted Contact invitations, OTPs, account emails, any SMS; per-attempt history (only count + last error).
+> **Verified:** backend admin unit tests (category allowlist, status mapping, uncertain vs failed, filters, sort, 404,
+> Redis-down detail, read-only Prisma fake, no private fields) and full unit suite 1403/1403, oxlint, tsc; admin e2e
+> 25/25 on the isolated DB (denial for all principals, real release-email and safety-notice records, no addresses,
+> Overview totals equal the filters, no state change); frontend admin component tests 83/83 (incl. Deliveries), frontend
+> typecheck and eslint; browser check on the isolated DB with a private API + worker (email disabled) at 320/375/768/
+> 1440 px: no overflow, no titles or addresses, keyboard detail navigation, Release → Deliveries link.
+> **Step 3 decisions applied (same day):** release emails show an opaque recipient reference and a **server-masked**
+> destination (`maskDestination`: `r***@g***.com`; short parts `*`, malformed `***`; the full address never leaves the
+> API); past-due releases show "Reason not recorded" (worker unchanged); the release schedule panel is labelled "Current
+> schedule"; detail views are application-log entries, not durable audit events (a new audit event type is deferred);
+> `Cache-Control: no-store` now comes from one path-scoped middleware for every `/admin` and `/admin-auth` response
+> (errors included; Customer routes unaffected), checked on real HTTP responses; indexes evaluated with read-only
+> `EXPLAIN` (sequential scans are cheapest at current volume; filtered paths already indexed; no index added, trigger
+> documented in `docs/admin.md` §16). **Verified after these changes:** admin e2e 26/26 (incl. headers and masked
+> destination), backend unit 1414/1415 (the 1 is the local `app.setup.spec.ts` 5 s timeout under load; it passes alone),
+> oxlint, tsc; frontend typecheck, eslint, full Vitest 580/580, `next build`. **Not run:** backend `npm run build` (it
+> stops the local :4000 watch API).
+
+> **System health, Step 4 of the admin operations plan (2026-10-30, `docs/admin.md` §19).** Done: Operations → System
+> health (`/admin/system/health`) over new `GET /admin/system/health` (admin role + MFA, no input, `no-store`). From the
+> answering API instance: API (this request), PostgreSQL (`SELECT 1`) and Redis (`PING`) via the existing
+> `HealthService`, the malware scanner via a new clamd `PING` on the existing adapter (configured host/port only, no
+> file, socket always destroyed), and a new worker heartbeat (worker process only: Redis hash in queue Redis via BullMQ's
+> connection, opaque id + time, every 15 s (`WORKER_HEARTBEAT_INTERVAL_SECONDS`), stale after 45 s, pruned after 5 min,
+> removed on shutdown with a 1 s cap). 2 s budget per check, in parallel; one 5 s snapshot shared by System Health and
+> the Overview. Statuses: ok / failed / timed out / stale / missing / unknown / not configured, each service with its own
+> success wording; summary "Issues detected" / "Monitoring incomplete" / "No issues in these checks" (scoped). The
+> Overview's service panel is now a compact "System status" summary with "View system health" (the earlier "compact
+> summary" refinement had not been built). No schema change; public health endpoints unchanged. **Verified:** backend
+> unit (heartbeat: settings, fresh/stale/missing/expired, multiple workers, bounded pruning, failures logged once,
+> fake-timer start/stop, 1 s shutdown cap, only `WorkerModule` publishes; health: ok/failed/timed out, independent
+> failures, snapshot coalescing and expiry, real local TCP clamd stand-in for PONG / bad reply / silence, not configured,
+> no hosts or keys in output) and full suite 1431/1432 (the 1 is the local `app.setup.spec.ts` 5 s timeout under load; it
+> passes alone), oxlint, tsc; admin e2e 28/28 on the isolated DB/Redis (denial for all principals, `no-store`, real
+> statuses, Overview = same snapshot, real heartbeat round trip); frontend admin component tests 87/87, typecheck,
+> eslint; browser check on the isolated env with a temporary private API + real worker + real local clamd: all five
+> services observed, no overflow at 320–1440 px, keyboard refresh, Overview summary and link, and a hard-killed worker
+> went `ok` → `stale` after 45 s with its last-seen time kept. **Not run:** full frontend Vitest and `next build` (the
+> run was stopped by the system for low memory, not by a failure); backend `npm run build` (it stops the local :4000
+> watch API).
+
+> **Security activity, Step 5 of the admin operations plan (2026-10-31, `docs/admin.md` §20).** Done: Operations →
+> Security activity (`/admin/security`, detail `/admin/security/[reference]`) over new `GET /admin/security/events` and
+> `/:reference` (admin role + MFA, `no-store`): a read-only projection of 13 existing `AuditLog` security event types in 6
+> categories, explicit DTO (no user agent, no raw metadata or free-text reasons; controlled MFA reason codes; /24 or /48
+> network re-validated and labelled "Proxy attribution unverified"), filters (category, outcome, actor type, exact
+> reference, account, date range: default 30 days, max 366), stable order, per-category recorded-row counts, manual
+> refresh with stale indicator, coverage notice. Overview: "Admin two-factor failures recorded, last 7 days" linking to
+> the filtered list. No new event capture (customer/recipient/trusted-contact sign-in failures, OTP failures, throttling
+> and Origin rejections stay documented gaps), no schema change, no auth code touched. **Verified:** backend
+> `admin-security.service.spec.ts` + `admin.service.spec.ts` 22/22 (DTO exclusions, malformed metadata and addresses,
+> filters, bounds, stable order, failure is not zero), oxlint, tsc; admin e2e 29/29 on the isolated DB/Redis (denial for
+> all principals, `no-store`, real MFA-failure rows attributed to the verified admin, untrusted `X-Forwarded-For` not
+> recorded, non-security rows 404, validation, reading writes no audit rows); frontend Security activity tests 7/7 and
+> admin overview tests, typecheck, eslint.
+
+> **Storage and scans, Step 6 of the admin operations plan (2026-10-31, `docs/admin.md` §21).** Done: Operations →
+> Storage & scans (`/admin/storage`, detail `/admin/storage/[reference]`) over new `GET /admin/storage/assets` and
+> `/:reference` (admin role + MFA, `no-store`): read-only metadata over the six media tables (five quota tables +
+> death-verification evidence, shown apart with no account). One row = one stored file (no shared assets). Totals use
+> `StorageQuota`'s definitions (verified = live READY bytes; reserved = live PENDING_UPLOAD declared bytes, shown
+> separately); states from stored columns only (Awaiting upload or checks / Verified / Failed verification; removal
+> pending vs recorded from `deletedAt`/`FAILED` and `storageDeletedAt`). No per-file scan result, reason or time exists,
+> so none is shown ("Not recorded per file"); READY is not labelled "scan passed" (pre-12B rows were not scanned); no
+> quarantine; provider inventory not reconciled. Totals fail independently (`null`, never zeros). System health's scanner
+> row links here. No schema change; no upload, scan, access or cleanup code touched; `AdminModule` has no media provider.
+> **Verified:** backend `admin-storage.service.spec.ts` 8/8 (DTO exclusions, verified vs declared, summary definitions,
+> parameterised filters, allowlisted sort + id tie-breaker, range bounds, failed totals = null), full unit suite
+> 1450/1450, oxlint, tsc; admin e2e 30/30 on the isolated DB/Redis (real SQL: fictional rows in every state, no file
+> names/keys/provider ids/MIME in responses, admin bytes = `StorageQuota.usage` for the same customer, filters,
+> validation, stable order, `no-store`, all principals denied, rows unchanged by reading); frontend admin component
+> tests 101/101, typecheck, eslint. **Not run:** full frontend Vitest, `next build` and a browser check (0.6 GB of 7.7 GB
+> memory free; the same full run was stopped for low memory in Step 4); backend `npm run build` (it stops the local
+> :4000 watch API).
+
+> **Support requests, Step 7 of the admin operations plan (2026-10-31, `docs/support.md`).** Done: Customer "Help &
+> support" in the account menu (`/support`, `/support/new`, `/support/[id]`): create (subject 3–150, category,
+> description 10–5,000, plain text, privacy hint), own paginated list, detail with public replies ("For After support"),
+> follow-ups while not resolved. Admin Management → Support (`/admin/support`, `/admin/support/[id]`): paginated inbox
+> (status, category, reference, account, created range), status change with `expectedStatus` (409 on a concurrent
+> change), "Reply to customer" and "Internal note" as separate endpoints. Migration `20261031090000_add_support_requests`
+> (additive: `SupportRequest`, `SupportMessage`, `SupportInternalNote` in its own table, three enums, four
+> `SUPPORT_*` audit events) applied and drift-checked **only on the isolated `for_after_p24` DB**, not the dev DB.
+> Statuses Open / In progress / Waiting for customer / Resolved (resolved only reopens; follow-up turns waiting into open;
+> follow-up on resolved is a 409). `clientRequestId` makes retries return the first result. Per-IP limits (create
+> 10/h, follow-up 30/h, admin writes 60/min), 20 unresolved per Customer, 100 messages and 100 notes per request.
+> `no-store` extended to `/api/v1/support`. Audit rows carry ids, category and statuses only. No notifications, no
+> attachments, no AI; retention is an open policy (kept until account deletion). **Verified:** support e2e 9/9 on the
+> isolated DB/Redis (principals, forged fields, ownership 404s, notes never in Customer responses or public times,
+> retries, transitions, concurrent status change 200/409, audit without text, real 429 with nothing stored past it,
+> `no-store`); admin e2e still 30/30; backend unit 1451/1452 (the 1 is `app.setup.spec.ts` timing out under full-suite
+> load; it passes alone), oxlint, tsc; frontend support + admin + account + companion tests 181/181, typecheck,
+> eslint. **Not run:** full frontend Vitest, `next build`, Playwright and a browser check (0.8 GB memory free; the same
+> full run was stopped for low memory in Step 4); backend `npm run build` (it stops the local :4000 watch API).
+
+> **Customer support page redesign (2026-10-31, frontend only).** `/support` now opens with "A little help, when you need
+> it." and a "New request" (plus icon) action; "Your requests (n)" uses the real total; each request is a card with a
+> conversation icon, the subject as its single stretched link (no nested controls), a status badge with icon + text
+> (customer wording "Waiting for you"; admin wording unchanged), category, and "Sent / Updated" short dates
+> (`createdAt` / `lastPublicActivityAt`, never note times; full instant on hover and in `datetime`); a warm-ivory "How can
+> we help?" panel beside the list on desktop, after it on small screens; empty state "We’re here to help." with "Create a
+> request"; a failed load stays an error with "Try again". Detail header adds the full sent time with timezone and a
+> short reference (the request's own id). No API, backend, validation, duplicate-prevention or status change; admin page
+> only gains the shared status icons. **Verified:** support + admin support component tests 11/11, typecheck, eslint;
+> browser check on the running dev frontend with every API call stubbed (fictional data): no horizontal overflow at 320,
+> 375, 768 and 1440 px or at 200% zoom (640 px viewport at scale 2), guidance beside the list only on desktop, keyboard
+> Tab + Enter opens a request with a visible focus ring, detail and empty state correct. **Not run:** `next build` and
+> the full frontend Vitest (0.8 GB memory free; the dev frontend was running), Playwright suites (they need the dev
+> database, whose support migration is not applied).
+
+> **AI operations, Step 8 of the admin operations plan (2026-10-31, `docs/assistant.md` §8).** Done: new
+> `AssistantMetrics` recorder (shared Redis, `for_after:ai_metrics:` hourly hashes kept 8 days, allowlisted fields only:
+> page, action, controlled outcome/result and numbers; no text, user or request ids). One request record per validated
+> request (from the existing `finally`; 400s excluded) with 14 controlled outcomes tagged where each error is thrown
+> (HTTP unchanged), one attempt record per Groq call (retries flagged), monotonic durations as sums + counts, and
+> Groq's prompt/completion/total tokens from answered attempts (anything else is "usage unknown", never zero). Admin
+> Operations → AI operations (`/admin/system/ai`, `GET /admin/system/ai?window=24h|7d&area=&action=`, admin role + MFA,
+> `no-store`): key presence (never its value), model and application limits apart from the last observed reply / provider
+> failure; requests, replies, limit hits, attempts and retries, weighted means with sample counts (no percentiles),
+> token usage with unknown-attempt warning, outcome and attempt tables, partial-coverage and "no observations" states,
+> "Monitoring unavailable" instead of zeros, "Cost estimate unavailable". System health links to it. No schema change,
+> no provider probe; companion behaviour, prompts and model unchanged. **Verified:** backend assistant + metrics specs
+> 44/44 (request vs attempt counts, retries, all outcome mappings, cancellation, limits, 400s excluded, unknown usage,
+> weighted means, window buckets, replicas through one store, recorder failure changes nothing and logs once, nothing
+> private recorded), full unit suite 1471/1471, oxlint, tsc; admin e2e 31/31 on the isolated DB/Redis (two recorders
+> aggregated through real Redis, settings without the key, validation, no Groq call, `no-store`, all principals
+> denied); frontend admin + companion tests 132/132, typecheck, eslint. **Not run:** live Groq traffic (mocked only),
+> full frontend Vitest, `next build`, browser check and Playwright (low memory; dev DB lacks pending migrations);
+> backend `npm run build` (it stops the local :4000 watch API).
+
+> **Admin support request detail redesign (2026-10-31, frontend only; reference `For After admin support request
+> detail.png`, inspected).** `/admin/support/[id]` is now a two-column workspace: compact header ("All support
+> requests", category, subject, status, created / last public activity with timezone); one "Conversation" panel
+> ("Visible to the customer") with role labels and icons only ("Customer" / "For After support", never admin ids),
+> compact times, preserved line breaks, long text wrapping, and the "Reply to customer" box inside it (placeholder, compact
+> height); a tinted "Internal notes" panel ("Administrators only", "Never shown to the customer.") whose "Save internal
+> note" box stays collapsed until "Add internal note" and keeps its draft when hidden; "Request status" card (selector +
+> "Update status", conflict shown, badge shows only the saved status); "Request details" with full-width rows, shortened
+> references with the full value in a disclosure and the existing admin "Copy" button (toast on failure), "View account"
+> and "Times shown in …". Mobile order: status, conversation, notes, details. No API, backend or behaviour change.
+> **Verified:** admin + customer support component tests 118/118 (admin support 6), typecheck, eslint; browser check on
+> the running dev frontend with every API call stubbed (fictional data): no horizontal overflow at 320, 375, 768 and
+> 1440 px or 200% zoom, all 12 admin nav links kept, status before conversation on small screens, keyboard "Add internal
+> note" moves focus into the box. **Not run:** `next build`, full frontend Vitest and Playwright (low memory; the dev
+> database lacks the support migration).
+
+> **Customer support detail redesign + Help & support in the sidebar (2026-10-31, frontend only; reference `Refined
+> lower-right guidance card.png`, inspected).** "Help & support" (headset icon) moved from the account menu to a lower
+> sidebar section (separator, flex layout inside the one scroll area, active on `/support` and `/support/*`, shared by
+> the mobile menu); logout stays in the account menu, unchanged. `/support/[id]`: header ("All support requests",
+> "HELP & SUPPORT", subject, status, "Your conversation with the For After team."), one "Conversation" panel ("Only you
+> and the For After support team can see this request.") with a connected thread: "You" (your own initials from the
+> session) on neutral, "For After support" (headset) on rose, compact times, wrapped text; a resolved banner from the
+> stored status only (existing new-request form) or the existing follow-up box; "Request details" (status, category,
+> shortened reference with full value and Copy, sent, last public activity, timezone) and the warm "A little help, when
+> you need it." card. `CopyButton` moved to `components/shared/copy-button.tsx` (admin uses the same one). No API,
+> backend or workflow change. **Verified:** frontend support + layout + admin + companion + account tests 192/192 (new:
+> shell test for the sidebar entry, its active state, removal from the menu and unchanged logout; detail, resolved,
+> open-not-resolved, copy success/failure, not found/error), typecheck, eslint; browser check on the running dev
+> frontend with every API call stubbed (fictional data): no horizontal overflow at 320, 375, 768, 1440 px, a 560 px
+> tall window or 200% zoom; Help & support visible and current on desktop including the short window. **Not run:**
+> `next build`, full frontend Vitest and Playwright (low memory; the dev database lacks the support migration).
+
+> **Admin access, Step 9 of the admin operations plan (2026-10-31, `docs/admin.md` §22), read-only.** Done: Operations →
+> Admin access (`/admin/access`, detail `/admin/access/[id]`) over `GET /admin/access/admins` and `/:id` (admin role +
+> MFA, `no-store`, GET only): admins with role, account status, two-factor enrolment (not session MFA) and last admin
+> sign-in from `ADMIN_LOGIN` audit rows ("None recorded" otherwise); filters (search, role, status, two-factor), stable
+> sort; detail with permissions computed from `canManage`/`ADMIN_ROLES`, access history from existing audit rows
+> (explicit fields, no free-text reason), and a link to the Users page only when that page's own rule lets the viewer
+> act. **No mutations**: step-up re-authentication and a role-grant policy do not exist, so no role-change, MFA-reset or
+> new suspension endpoint was added; suspension stays on the Users page (whole account; ends sessions on the next
+> request). No schema change; no account was modified (one fictional e2e admin is created and deleted).
+> **Verified:** backend `admin-access.service.spec.ts` 3/3, admin e2e 32/32 on the isolated DB/Redis (admin roles only,
+> no secrets, enrolment/last sign-in incl. a never-signed-in admin, filters and validation, permissions, history,
+> viewer rule, Customers 404, no write route on any method, all principals denied, `no-store`), full unit suite
+> 1473/1474 (the 1 is `app.setup.spec.ts` timing out under load; passes alone), oxlint, tsc; frontend admin tests
+> 116/116, typecheck, eslint. **Not run:** `next build`, full frontend Vitest, Playwright, browser check (low memory;
+> dev DB lacks pending migrations); backend `npm run build` (stops the local :4000 watch API).
 
 ### 23 · Audit + security — 🟡 2 (+1 partly) of 7
 
@@ -1330,6 +1733,8 @@ demo-only.
 - [ ] GitHub Actions: lint → type check → tests → build → deploy staging → E2E
 - [ ] Staging secrets separate from production; Stripe test mode
 - [ ] Client review / QA pass
+- 2026-10-29: fixed the API exiting at startup when `OBSERVE_APP_KEY`/`OBSERVE_APP_SECRET` are unset (any deploy
+  without Nest Observe); regression test `src/config/app.setup.spec.ts`
 
 ### 27 · Production — ⬜ 0 of 9
 
@@ -1429,6 +1834,657 @@ future rule stays: AI output must never be presented as legal advice (`docs/my-w
 - [x] Component tests (list states, types, detail); recipient e2e leak check widened
 - Details: [recipient-portal.md](recipient-portal.md#portal-design-2026-10-15)
 
+### Optional device setup — ✅ built locally 2026-11-02 (uncommitted; mocked tests only)
+
+- [x] Frontend only, no API/schema/migration change: "Set up your For After experience" card on the Customer dashboard
+      (after sign-in, which already requires a verified email; billing gate unchanged and decides access), with
+      "Done" / "Set up later"; reopened from Account settings → "Devices" (`/settings/devices`).
+      Not shown in Admin, Recipient or Trusted Contact portals
+- [x] Dismissal stored per account **per browser** (`localStorage` `for-after:device-setup:<userId>`, value `later`/`done`
+      only; no permission claim); another account on the same browser still gets its own prompt
+- [x] Camera (`{ video: true }`, muted local preview) and Microphone (`{ audio: true }`, local level meter, never
+      played back) only on their own click; tracks stopped on finish, cancel, unmount/navigation and sign-out (shell
+      unmounts); a request resolving late is stopped at once. Denied / not allowed (not mislabelled as blocked unless
+      the Permissions API says `denied`) / missing / busy / unsupported / insecure context handled; Permissions API
+      read-only, "Not checked" when unknown. Nothing recorded or uploaded (the existing Recorder is unchanged)
+- [x] Sound: a short quiet tone generated in the browser only on click, with Stop; refused playback handled
+- [x] **Browser notifications removed (2026-11-02, product decision: Customers get no browser/system push).** The
+      "Browser notifications" row ("Not available yet", disabled "Enable notifications") is gone from the dashboard
+      prompt and `/settings/devices`; Account settings section and page title renamed "Devices". Setup now has three
+      rows (Camera, Microphone, Sound); "Done"/"Set up later" never depended on notifications, and existing stored
+      `later`/`done` choices still hide the prompt. Audit: no service worker, PushManager subscription, push endpoint,
+      push table, VAPID key or push delivery job exists in frontend or backend, so nothing else to disable;
+      `Notification.requestPermission` is never called. Email delivery unchanged
+- [ ] **Pending:** admin-created announcements delivered by email to customers (Step 1 drafts + preview, Step 2
+      test emails, Step 3 audience review and Step 4 broadcast infrastructure are below; customer sending stays blocked
+      by the feature gate and the open communication-policy decisions)
+- [x] Permissions-Policy not changed (none is set; browser default already limits camera/microphone to same-origin
+      top-level pages, and `X-Frame-Options: DENY` stops framing)
+- [x] **Verified (mocked browser APIs), after the notification removal:** `device-setup.test.tsx` 15/15 (incl. "no
+      browser-notification row", "Done never requests notification permission"), new Account settings "Devices" link
+      test, full frontend Vitest 655/655, typecheck, eslint (`src/components/account`, `src/app/(dashboard)`), `next build`
+      (passes; `/settings/devices` static). **Not run:** Playwright, a manual check with a real camera, microphone and
+      speakers in Chrome, Firefox and Safari (incl. iOS); no backend change, so no backend checks
+
+### Notification centre, Step 1: email announcement drafts + preview — ✅ built locally 2026-11-02 (uncommitted)
+
+**Step 1 creates email announcement drafts and previews only. No emails or browser notifications are sent.**
+
+- [x] Admin sidebar → Operations → "Notification centre" (`/admin/announcements`, `/new`, `/[id]`), SUPER_ADMIN only:
+      hidden from other admins in the nav, "Access denied" on the page, and enforced by the API
+      (`SessionAuthGuard` + `AdminGuard` (ACTIVE, completed admin MFA) + new `SuperAdminGuard`; role re-read per request)
+- [x] API `admin/announcements`: `GET` (paged, max 100, sorted `updatedAt desc, id desc`), `GET :id`, `POST`, `PUT :id`
+      (`expectedVersion`), `POST preview`. Throttled (30 writes / 60 previews per minute); global Origin check,
+      `no-store` and `forbidNonWhitelisted` validation. **No send, test-send, schedule, recipient or delete route**
+- [x] Fields: internal name 1–120, subject 1–150 single line (CR/LF, control characters and Unicode line separators
+      rejected), message 1–5,000 plain text, optional button: label 1–60 + destination key from a server allowlist
+      (`DASHBOARD` → `/dashboard`, `SUPPORT` → `/support`), both or neither. All trimmed; unknown fields refused. No
+      URLs, HTML, headers, recipients or placeholders are accepted (text such as `{{name}}` or `<b>` is shown literally)
+- [x] Model `EmailAnnouncement` (migration `20261102090000_add_email_announcement_drafts`, additive: table, enum
+      `AnnouncementStatus { DRAFT }`, audit values `ANNOUNCEMENT_DRAFT_CREATED` / `_UPDATED`). Creator kept on edits,
+      `updatedBy` recorded; `version` + a guarded `updateMany` → 409 on a stale or concurrent save (the editor keeps the
+      text). No HTML stored; no recipient, delivery or engagement tables
+- [x] Audit: actor, draft id, version, `hasButton` / `changedFields` (field names only). Never the name, subject or text
+- [x] One renderer, `announcement()` in `email-templates.ts` (new function; existing templates unchanged): escaped
+      text, blank line = paragraph, line break = `<br>`, button URL = validated `APP_BASE_URL` + allowlisted path, no
+      images or remote assets. Preview shows the sender identity (`EMAIL_FROM` for Microsoft) in a `sandbox=""` iframe
+      labelled "Email preview — not sent", from the current (unsaved) editor content; it writes nothing and calls no
+      provider. A shown sender address does not mean sending works
+- [x] UI: list (name, subject, Draft, last updated, created by, Edit; loading / empty / error + retry; pager), editor
+      (read-only Channel "Email" / Audience "Customers" + "Eligible recipients will be checked before sending is
+      available."), Save draft / Preview email / Back, unsaved-changes warning, save locked while pending and after a
+      create until the draft opens (a double click created two drafts before this fix)
+- [x] **Verified:** backend unit `announcements.service.spec.ts` 3/3 (+ email templates 17/17); backend e2e on the
+      isolated env (`for_after_p24` + Redis :6390) `announcements.e2e-spec.ts` 5/5 (roles incl. password-only admin,
+      Origin, validation/boundaries, header injection, CTA allowlist, create/reopen/edit by a second SUPER_ADMIN,
+      concurrent 409, audit without content, preview escaping, no rows/audit/emails from preview or save), regression
+      `admin.e2e-spec.ts` 32/32, `support.e2e-spec.ts`, `admin-onboarding.e2e-spec.ts` pass; full backend unit 1499
+      (4 auth/app-setup timing failures under parallel load, all 17 pass when rerun alone); backend `tsc --noEmit`,
+      oxlint clean, production compile (`tsc -p tsconfig.build.json` to a scratch dir; `npm run build` not run because
+      the dev API on :4000 was running); `prisma migrate diff` test DB vs schema empty. Frontend
+      `announcements.test.tsx` 6/6, full Vitest 661/661, typecheck, eslint, `next build`. **Not run:** Playwright,
+      a manual check in a browser
+- [x] Dev DB `for_after` already has this migration recorded (2026-11-02 07:47 UTC); it was not applied by this
+      step's commands (all Prisma commands ran against `for_after_p24` or read-only)
+- [x] **Editor redesign (2026-11-02, frontend only, `components/admin/announcements.tsx`)** after the reference image
+      `For After announcement editor and email preview.png`: header (back link, heading, "Draft" badge for saved
+      drafts only, "Prepare a thoughtful update for your customers.", quiet "Draft only. Saving does not send an
+      email." banner); "Announcement details" card with Email / Customers chips; button destination + label side by
+      side (stacked on narrow screens); "Email preview" card with "Not sent" badge, From / Subject and the real
+      rendered email in an iframe sized to the email (`sandbox="allow-same-origin"`, still no scripts, forms,
+      pop-ups or navigation); bottom bar (unsaved state, Cancel, Preview email, Save draft), sticky from `lg` up,
+      normal flow below. No API, renderer, validation, permission or behaviour change; preview still on click. No
+      test-email feature exists, so none was restyled. **Verified:** `announcements.test.tsx` 7/7, full frontend
+      Vitest 662/662, typecheck, eslint, `next build`; Playwright screenshots on the :3000 dev server with every API
+      call mocked in the browser (preview HTML from the real renderer) at 1440 / 820 / 390 px: no horizontal
+      overflow, preview frame height = email height. Differences from the reference, kept on purpose: the email
+      shows the renderer's "For After." text wordmark (template unchanged), helper text sits under fields (shared
+      `TextField`). **Not run:** a signed-in manual check against the real API; no backend checks (no backend change)
+- [ ] **Prerequisites before any sending step (open decisions):** no communication preferences, consent, unsubscribe
+      or suppression list exists today (only transactional emails). Needed: classify announcements (service vs
+      optional/product/marketing), consent and unsubscribe rules for the optional kind, a suppression list (bounces,
+      complaints, unsubscribes), which account states are eligible (e.g. verified email, ACTIVE, not PASSED/DELETED),
+      the sending path (queue + existing Microsoft Graph provider, rate and Graph limits, at-least-once delivery) and
+      SPF/DKIM/DMARC for production. Footer/unsubscribe wording follows from those decisions
+
+### Notification centre, Step 2: test email to the requesting super admin — ✅ built locally 2026-11-02 (uncommitted; mocked provider only)
+
+**Step 2 supports test emails to the requesting Super Admin only. Customer broadcasts and browser notifications are
+not implemented.**
+
+- [x] Editor action bar (saved drafts only): "Send test email" → dialog "Send a test email?" with the destination
+      (the admin's own verified email, from `GET admin/announcements/test-destination`), Cancel / Send test email.
+      Disabled with a visible reason while there are unsaved changes or the account email is unverified. Status line:
+      "Test email queued." → provider accepted ("…Check your inbox or spam folder…") / failed / unknown ("…Check your
+      inbox before sending another test."), with the request time; polls every 3 s until settled. Never "Delivered"
+- [x] API: `POST admin/announcements/:id/test-sends` (202; body exactly `clientOperationId` (UUID) + `expectedVersion`;
+      any recipient/CC/BCC/account field → 400) and `GET admin/announcements/:id/test-sends/:testId` (status and times
+      only, own requests only; another admin's → 404). Same guards as Step 1 (session, ACTIVE, admin MFA,
+      `SuperAdminGuard`), global Origin check and `no-store`, per-IP throttle 10/min. No customer-send route
+- [x] Model `AnnouncementTestSend` (migration `20261102150000_add_announcement_test_sends`, additive; enum
+      `AnnouncementTestStatus`, audit values `ANNOUNCEMENT_TEST_REQUESTED` / `_COMPLETED`): immutable snapshot of the
+      saved subject, message, button and the destination at request time. One transaction under an advisory lock:
+      replay of `(admin, clientOperationId)` returns the same request (reuse for another draft/version → 409),
+      saved-version check (409), unverified email (409), 3 per admin / 20 shared per 10 minutes (429), snapshot + audit
+- [x] Delivery: new queue `announcement-test-email` (same queue Redis, attempts ≤ 3, backoff as `email-delivery`) with
+      `AnnouncementTestProcessor` in `QueueWorkersModule` and a reconciler (QUEUED rows that missed their job are
+      re-queued; PROCESSING older than 15 min → UNKNOWN). Job payload = row id only. Claim QUEUED → PROCESSING; a row
+      found PROCESSING becomes UNKNOWN, never resent. Sends through the existing `EmailProvider` (Microsoft Graph,
+      configured sender), kind `announcement-test`, same `announcement()` renderer with `[TEST] ` subject and "This is a
+      test announcement. It has not been sent to customers." (HTML and text). Retried only for `rate_limit_exceeded`,
+      `unauthorized`, `token_unavailable` (provably not accepted); other retryable errors (timeout, network, 5xx) →
+      UNKNOWN; permanent → FAILED. Draft status/version never change. Not wired into Admin → Queues or dead letters
+- [x] Audit: request (admin, draft id, version, operation id) and completion (SYSTEM; outcome, `errorCategory`,
+      requester). No subject, message or address in audit rows or logs (logs mask the address)
+- [x] **Verified (mocked provider; no real email):** backend e2e (isolated env) `announcement-tests.e2e-spec.ts` 7/7
+      (roles, extra-field rejection, Origin, unverified, snapshot vs later edit, escaping/CTA/[TEST]/notice, duplicate
+      worker run, concurrent/replayed POST, operation reuse, stale version, FAILED/UNKNOWN/retry/exhausted, crash →
+      UNKNOWN, lost enqueue re-queued, per-admin and shared limits, audit content), `announcements.e2e-spec.ts` 5/5,
+      `admin`, `support`, `dead-letters` e2e pass; `email-delivery.e2e-spec.ts` 16/16 alone (its setup failed once when
+      six suites ran in parallel); backend unit 1500 (2 auth/app-setup timing failures under load, 17/17 alone),
+      tsc, oxlint, production compile to a scratch dir (`npm run build` not run: dev API on :4000 running). Frontend
+      `announcements.test.tsx` 13/13, full Vitest 668/668, typecheck, eslint, `next build`. **Not run:** a real send
+      (manual checklist in the Step 2 report), Playwright
+- [x] Dev DB `for_after` already has this migration (recorded 2026-11-02 ~10:17 UTC, after the test DB's 10:12); not
+      applied by this step's commands
+- [ ] **Still needed before customer broadcasts:** the open decisions above (classification, consent/unsubscribe,
+      suppression, eligibility), recipient expansion + per-recipient records, a send-to-customers confirmation with
+      recent two-factor, throttled bulk sending within Graph limits, bounce/complaint handling, production
+      certificate/federated credential and SPF/DKIM/DMARC
+
+### Notification centre, Step 3: audience review (read-only) — ✅ built locally 2026-11-02 (uncommitted)
+
+**No customer sending exists. The review is a snapshot of counts, not permission to send; any future send must re-run
+the eligibility query, never trust a displayed count.**
+
+- [x] `GET admin/announcements/:id/audience` (`AnnouncementAudienceService`): same guards as Steps 1–2 (session,
+      ACTIVE, admin MFA, `SuperAdminGuard`), `no-store`, per-IP throttle 20/min, UUID validation, 404 for an unknown
+      draft. One aggregate SQL statement (one snapshot, no rows loaded into Node, no per-customer queries, no provider
+      calls, nothing cached or stored). Response: draft id + saved version, audience `CUSTOMERS`, `checkedAt`, `state`,
+      candidate / passing / excluded counts, exclusion counts, one diagnostic count, policy blockers. No addresses,
+      names or content. A failing query → 503 "unavailable", never zero
+- [x] **Eligibility rules (as implemented):** candidates = `User.role = CUSTOMER` (admins excluded by role; Recipients
+      and Trusted Contacts are not User accounts). One primary reason each, in order: (1) account unavailable =
+      `deletedAt` set or status not ACTIVE (SUSPENDED, PASSED, DELETED); (2) email missing or invalid; (3) email not
+      verified (`emailVerifiedAt` null; an email change sets the new address and `emailVerifiedAt` together only when
+      confirmed, so it always refers to the current address). Others "pass account checks". Billing (trial, paid,
+      expired, grandfathered) is not a rule. Diagnostic, overlapping and not additive: how many passing customers have
+      an open, unverified death report (`OPEN_STATUSES`)
+- [x] **State is always "Eligibility not confirmed"** (`eligible: null`) while these blockers are open (code constant
+      `POLICY_BLOCKERS`): announcements not classified as service vs optional; no consent records or communication
+      preferences; no unsubscribe; no suppression list (unsubscribes, bounces, complaints); no rule for customers with an
+      open, unverified death report. No consent or opt-in was invented
+- [x] Audit `ANNOUNCEMENT_AUDIENCE_REVIEWED` (actor, draft id, version, outcome) per completed review; migration
+      `20261102180000_add_announcement_audience_review_audit` (one enum value, additive). Applied to the isolated test DB
+      only; **the dev DB `for_after` does not have it yet** (until then a review on the dev API ends "unavailable") — _update 2026-11-03: now applied (`prisma migrate status`: up to date)_
+- [x] Editor: "Review audience" in the action bar → dialog "Audience review" / "This is an audience review. No emails
+      have been sent.": intended audience, Eligible customers "Not confirmed", pass account checks, excluded,
+      reasons, open-death-report note, blockers, last checked, snapshot note; Refresh review / Close. Checked only when
+      opened (no request on page load). New draft: "Save your draft before reviewing its audience."; unsaved changes:
+      disabled with one shared reason for review and test email; a review of an older saved version is marked out of date
+- [x] **Verified:** backend e2e (isolated env) `announcement-audience.e2e-spec.ts` 5/5 (access incl. password-only
+      admin and bad id; per-reason deltas with fictional customers incl. deleted+unverified counted once, ADMIN not a
+      candidate, expired trial and never-paid counted, open death report flagged; totals reconcile; blockers + null
+      eligible; no addresses, no-store, no email/queue/test rows, audit metadata; DB failure → 503), together with
+      `announcements`, `announcement-tests`, `admin` e2e 49/49; backend unit 1500/1500, tsc, oxlint, production compile
+      (scratch dir; `npm run build` not run, dev API on :4000). Frontend `announcements.test.tsx` 18/18, full Vitest
+      673/673, typecheck, eslint, `next build`. **Not run:** Playwright, a manual check against the dev API (needs the
+      migration above)
+- [ ] **Before customer sending (open):** decide the five blockers above; then recipient expansion that re-runs this
+      query at send time, per-recipient records, unsubscribe handling, suppression, bounce/complaint processing
+
+### Notification centre, Step 4: controlled customer broadcast + progress — 🟡 built locally 2026-11-03 (uncommitted; mocked provider only; **sending blocked**)
+
+**Customer sending infrastructure exists but cannot send anywhere today:** the gate `ANNOUNCEMENT_BROADCAST_ENABLED` is
+off by default (not set in any real env file), and the five Step 3 policy blockers are still open, so every review
+returns no review token and the worker refuses runs. No real email was sent; live delivery is not verified.
+
+- [x] **Confirmation flow (editor, saved drafts only):** "Review and send" (disabled with the shared "save first" line
+      while there are unsaved changes) → `POST admin/announcements/:id/broadcast-review` `{ expectedVersion }` (409 if not
+      the saved version) → dialog with saved subject, sender (configured `EMAIL_FROM`), saved version, communication
+      purpose ("Not classified"), eligible count (or "Not confirmed"), exclusions, blockers, the exact saved email in
+      the sandboxed frame and "Choosing “Queue announcement” queues real emails … cannot be recalled". "Queue
+      announcement" is enabled only with a server review token. Nothing is requested on page load, save, preview,
+      test email or audience review
+- [x] **Review token:** HMAC-SHA256 (key derived from `SESSION_SECRET`) over announcement id, saved version, admin id,
+      eligible count, policy version and expiry; valid **10 minutes** (`REVIEW_TTL_MS`). Issued only when nothing
+      blocks (gate on, no policy blocker, no run for this announcement, no other active run, eligible > 0)
+- [x] **Confirmation** `POST admin/announcements/:id/broadcasts` (202; body exactly `clientOperationId` + `expectedVersion`
+      + `reviewToken`; recipients/counts/audience fields → 400). One transaction under an advisory lock: replay of
+      `(admin, clientOperationId)` → same run; token valid for this admin/announcement/version/policy; gate; policy;
+      saved version; no run for this announcement; no active run; **fresh** eligibility count (never the client's): larger
+      than reviewed, or more than 10 % smaller, → 409 "review again"; then the run row + audit. Throttles per IP:
+      review 20/min, confirm 5/min, stop 10/min. Guards as Steps 1–3 (session, ACTIVE admin, completed MFA,
+      `SuperAdminGuard`), global Origin check, `no-store`
+- [x] **Immutable run** `AnnouncementSendRun` (migration `20261103090000_add_announcement_broadcast_runs`, additive: two
+      tables, two enums, four audit values): announcement + saved version, admin, operation id, rendered subject/HTML/text
+      + source fields (draft edits never reach it), policy version, reviewed count, `audienceBoundaryAt`, prepare cursor,
+      lease, cancel request, finish reason, times. **One run per announcement** (`announcementId` unique) and **one
+      active run at a time** (partial unique index on PREPARING/SENDING). Deliberate resend is not built: send again =
+      a new announcement
+- [x] **Audience (worker):** keyset batches of 500 over `User.id` for `role = CUSTOMER` and `createdAt <=
+      audienceBoundaryAt` (sign-ups after confirmation are never added), same account rules as the review (ACTIVE, not
+      deleted, valid + verified email). Each batch inserts `AnnouncementRunRecipient` rows (unique per run + user and per
+      run + address hash, `ON CONFLICT DO NOTHING`) and moves the cursor in one transaction, so an interrupted
+      preparation resumes exactly; scanned users are locked `FOR KEY SHARE` (a concurrent account delete is skipped, not
+      an FK error). **No address is stored**: only `sha256(lower(email))`; User.email is unique and stored lower-case, so
+      duplicates cannot occur, and the hash constraint backs that up. One email per Customer, one recipient per email
+- [x] **Send-time recheck** before every provider call: role CUSTOMER, ACTIVE, not deleted, valid + verified email, and the
+      **current address hash equals the prepared one** — otherwise `SKIPPED` with `account_unavailable`,
+      `email_invalid`, `email_not_verified` or `email_changed` (never redirected to an unreviewed address). Gate, policy
+      version and cancel are checked at the start of every loop and again right before the provider call
+- [x] **Worker** (`AnnouncementBroadcastProcessor`, worker process only; own queue `announcement-broadcast`, not
+      `email-delivery`): a job carries only the run id and drives one slice (≤ 45 s) under a **lease on the run row** (2
+      min, renewed before each claim), so duplicate/re-delivered jobs and concurrent workers find the lease taken.
+      Claims one QUEUED recipient → PROCESSING, rechecks, sends **outside any transaction**, records the outcome. A new
+      lease holder turns any PROCESSING recipient into `UNKNOWN` (`worker_interrupted`) — never resent. Shutdown stops
+      after the in-flight send is recorded. **Recovery:** the run commits before the job is queued; the reconciler
+      (every `EMAIL_RECONCILE_INTERVAL_SECONDS`) re-queues active runs whose lease has lapsed (lost enqueue, Redis
+      outage, crashed worker). A failed slice (DB error) is not retried by BullMQ; the reconciler resumes the run
+- [x] **Provider and retries:** existing `EmailProvider` (Microsoft Graph, configured sender), kind `announcement`, one
+      recipient per message (no To/CC lists). `EmailSendError` now carries Graph's `Retry-After` on 429 (seconds or
+      HTTP date, max 1 h). Rules: permanent → `FAILED` (one attempt); timeout/network/5xx (may have been accepted, Graph has
+      no idempotency key) → `UNKNOWN`, never retried; provably-not-accepted (`rate_limit_exceeded`, `unauthorized`,
+      `token_unavailable`) → back to QUEUED with `nextAttemptAt` (Retry-After, else 30 s × 2ⁿ), at most 3 attempts, then
+      `FAILED`. A 429 pauses the **whole run** until Retry-After (the lease is held until then). Only the worker retries
+      (the adapter makes one HTTP attempt), so attempts are not multiplied. Stored: safe codes and the Graph request id only
+- [x] **Throughput:** one email at a time, spaced `60 s / ANNOUNCEMENT_BROADCAST_RATE_PER_MINUTE` (default **10/min**,
+      max 30 = Exchange Online's per-mailbox limit), and `ANNOUNCEMENT_BROADCAST_DAILY_LIMIT` attempts per rolling 24 h
+      across broadcasts (default **2000**, max 10,000 = the mailbox's daily recipient limit); reaching it pauses the run 15
+      min. OTPs, invitations and release emails do not use this queue, and the default leaves ~20/min of the mailbox for
+      them. These are the documented Microsoft limits, not a measured quota
+- [x] **States (honest):** run PREPARING → SENDING → COMPLETED (processing finished, not "everyone received it") |
+      CANCELLED | BLOCKED (gate or policy closed mid-run; remaining recipients SKIPPED `broadcast_disabled` /
+      `policy_blocked`). Recipient QUEUED, PROCESSING, ACCEPTED ("Accepted by email provider" — never "Delivered"),
+      FAILED, UNKNOWN, SKIPPED, CANCELLED (before any attempt). No opened/read states
+- [x] **Progress** `GET admin/announcements/:id/broadcasts/:runId` + editor card "Customer send": subject + version,
+      requested by/at, audience prepared, processing ended, last updated, per-state counts, skip/failure reason codes,
+      "N of M processed" only once the audience is prepared (no percentage before). Polls every 5 s while active, not
+      while the tab is hidden, stops at a final state. Counts and codes only: no customer address, no export
+- [x] **Stop** `POST …/broadcasts/:runId/cancel` + "Stop sending" dialog ("Emails already accepted by the provider cannot be
+      recalled. An email being sent at this moment may still be accepted."). Sets `cancelRequestedAt` (one audit row;
+      repeat = no-op, finished run → 409), wakes the run; the worker stops preparing, moves never-attempted recipients to
+      CANCELLED in batches of 1000 and never starts a new attempt; an in-flight send keeps its real outcome. Records are
+      never deleted
+- [x] **Audit** (ids, version, counts, outcome, reason only; never subject, body or addresses):
+      `ANNOUNCEMENT_BROADCAST_REQUESTED` (admin; state preparing), `_QUEUED` (system; audience prepared, count),
+      `_CANCEL_REQUESTED` (admin), `_FINISHED` (system; completed/cancelled/blocked + totals). Logs: run/recipient ids and
+      codes only
+- [x] **Testability without weakening production:** the policy is an injectable `AnnouncementPolicy` (always
+      `POLICY_BLOCKERS` in the app; no env var clears it); e2e swaps in a cleared policy to exercise sending and puts the
+      real blockers back to prove they stop it
+- [x] **Verified (mocked provider; no real email; isolated env `for_after_p24` + Redis :6390):** backend e2e
+      `announcement-broadcasts.e2e-spec.ts` 10/10 — roles/MFA/Origin/extra fields/429; gate off in API and worker
+      (BLOCKED, nothing sent); policy blockers (no token, old token refused, policy change mid-run → BLOCKED); stale,
+      changed, expired, forged, tampered and another admin's reviews; larger audience → 409; replay/parallel confirms →
+      one run, `already_sent` / `run_in_progress`; concurrent drivers → one email each; snapshot vs later edit;
+      boundary (late sign-up excluded); interrupted preparation resumes without duplicates; suspended/changed/unverified/
+      deleted → SKIPPED with reason, never redirected; permanent/timeout/throttle (Retry-After honoured, second driver
+      refused)/limit-exhausted; crash after possible acceptance → UNKNOWN, not resent; Redis down at confirm → run kept,
+      reconciler re-queues; stop during an in-flight send; daily limit pauses without a provider call; audit content.
+      `announcements`, `announcement-tests`, `announcement-audience` e2e pass alongside (27/27). Unit
+      `announcement-broadcast.spec.ts` 3/3 (token, recheck, settings caps), Graph adapter spec 32/32 (Retry-After).
+      Regression: `worker-process` + `microsoft-email-wiring` e2e 9/9 (real WorkerModule/AppModule
+      wiring with the new processor), `admin.e2e-spec.ts` 32/32 (alone; its setup timed out once while the frontend
+      suite ran in parallel). Backend unit 1501/1504 in the full parallel run: the 3 failures are the known
+      auth/app-setup timing tests; `auth.controller.spec` passes alone, `app.setup.spec` "starts under NestFactory"
+      (a bare module, untouched by this step) still exceeded its 5 s limit alone (13.6 s). Backend `tsc --noEmit`,
+      `npm run lint` (oxlint) clean, production compile to a scratch dir (`npm run build` not run: the dev API on :4000
+      runs from `dist`). Frontend `announcements.test.tsx` 24/24 (6 new: blocked review, token-only confirmation body,
+      refused confirmation + review again, progress counts/reasons/stop, finished wording, unsaved disables), full
+      Vitest 679/679 (one file rerun alone after a worker-start timeout), typecheck, eslint, `next build`. **Not run:**
+      Playwright, a manual browser check, any real send, a load test of a large audience
+- [x] _Update 2026-11-03: the dev DB now has every migration, incl. this one (`prisma migrate status`: up to date)._ At build time: dev DB `for_after` did **not** have migration `20261103090000_add_announcement_broadcast_runs` (applied to the
+      isolated test DB only). Until it is applied (`npx prisma migrate deploy` against the dev DB, by the operator),
+      opening a draft on the dev API fails because `GET :id` now reads the run
+- [ ] **Remaining decisions before any customer send (unchanged from Step 3):** classify announcements (service vs
+      optional); consent/communication preferences; an unsubscribe link + handling for optional emails; a suppression
+      list (unsubscribes, bounces, complaints) — each needs a rule in the eligibility SQL **and** in `skipReason`; the
+      open-death-report rule; production Graph credentials and SPF/DKIM/DMARC. Also open: bounce/complaint processing,
+      a recent-two-factor step-up for confirmation (today: the existing admin MFA session), a manual review of UNKNOWN
+      outcomes, resend tooling
+- [ ] **Future controlled live smoke test** (only after the decisions above are implemented and approved): staging
+      only; a database whose only eligible Customers are 1–3 internal mailboxes you own; `EMAIL_PROVIDER=microsoft` with
+      the approved sender; `ANNOUNCEMENT_BROADCAST_ENABLED=true` and `ANNOUNCEMENT_BROADCAST_RATE_PER_MINUTE=2` on API
+      **and** worker; send a test email first; Review and send → check the count equals the internal mailboxes → Queue
+      announcement; watch progress reach "Accepted by email provider"; confirm arrival (and spam folder) in each inbox;
+      test "Stop sending" on a second run; then set the gate back off and restart both processes
+
+### Notification centre wizard redesign (frontend only) — ✅ built locally 2026-11-03 (uncommitted; mocked API only)
+
+**A UI refactor of the announcement editor into four steps. No backend, API, migration, renderer, validation or
+permission change. Customer sending stays blocked exactly as in Step 4 (gate off, policy blockers open).**
+
+- [x] Layout (after the four reference images in the repo root, `For After announcement wizard_ Write step.png`,
+      `Preview and test announcement email.png`, `Review your audience`…, `Review before sending`…): existing admin
+      shell, logo, sidebar and permissions unchanged; header (back link, "Create/Edit announcement", Draft badge for
+      saved drafts, "A thoughtful update, one step at a time."); stepper Write → Preview & test → Audience → Review &
+      send (desktop: horizontal, `aria-current="step"`, checkmarks only for steps actually passed for the current saved
+      version, passed steps clickable; below `md`: "Step N of 4 · Name" + progress bar). Only the active step's card and
+      its own footer are rendered (no sticky bar; normal page scroll). Example names/counts/"Example data" from the
+      images are not used
+- [x] **State:** one form state for all steps (`Wizard` in `components/admin/announcements.tsx`). The step is the only
+      thing in the URL (`?step=write|preview|audience|send`, `history.pushState`; Back/Forward via `popstate`); no
+      content, address or token in the URL or localStorage. A step opens only when every earlier step is done **for the
+      current saved version** (Write = saved and clean; Preview / Audience = "Continue" chosen for that version); a
+      direct link, refresh or Back to a step not yet open lands on the first unfinished step and the URL is corrected.
+      A save that creates a new version therefore requires Preview, Audience and the confirmation again. Unsaved
+      content does not survive a refresh (the existing leave-page warning still asks first). Focus moves to the step
+      heading on each step change; validation focuses the first invalid field
+- [x] **1 Write:** name ("Only visible to administrators."), subject, plain-text message, Email chip; optional button
+      as a collapsible row ("Add a button · Optional", or "Button · “label” → destination" when set) using the existing
+      allowlisted destinations; collapsing only hides the fields, "Remove button" is the only way to clear them; a button
+      validation error opens the row. Footer Cancel · Save draft (stays) · Save & continue (validates, waits for the
+      saved response and its version, then Step 2; a 409/other error stays on Step 1 with every character kept; an
+      unchanged saved draft continues without re-saving, so no needless new version). A new draft opens its edit page
+      at `?step=preview` after Save & continue. "Saving a draft does not send an email."
+- [x] **2 Preview & test:** the SAVED version rendered by the existing `POST admin/announcements/preview` (same server
+      renderer, security footer included, sandboxed iframe sized to the email); From / Subject line; "Not sent" badge.
+      "Send yourself a test" with the existing confirmation dialog, server-chosen destination, operation id and saved
+      version; unverified admin email → only that button disabled with the reason (no admin verify-email page exists, so
+      no link). Latest test status labelled with its version when it belongs to an earlier one. Back · Continue to audience
+- [x] **3 Audience:** existing `GET …/audience` checked each time the step opens; Customers checked / Eligible ("Not
+      confirmed" while blockers are open, plus the pass-account-checks count) / Excluded, the backend's three exclusion
+      reasons, open-death-report note, blockers, last checked, "Eligibility is checked again before each email is
+      sent.", "This is an audience review. No emails have been sent.", Refresh review. Continue to review is disabled
+      (reason shown) while checking, after a failed check (never shown as zero), for a review of an older version, or
+      when no customer passes account checks. Open policy blockers do not stop the admin reaching Step 4, which shows them
+- [x] **4 Review & send:** opening it requests a fresh `POST …/broadcast-review`; rows Announcement (Edit message →
+      Step 1), Email subject, From, Communication purpose ("Not classified"), Audience (eligible or "not confirmed" ·
+      excluded; Review audience → Step 3), Test email for THIS version (Not sent / Queued / Accepted by provider / Failed
+      / Unknown · optional); "View email preview" disclosure (same server-rendered email); blockers or "Audience
+      reviewed"; unchecked checkbox "I confirm this announcement is ready to be emailed to the eligible customers." The
+      Step 4 confirmation dialog was replaced by this in-page confirmation (no second dialog). Queue announcement needs
+      the server review token + the checkbox; any new review clears the checkbox. Same API body as before
+      (`clientOperationId`, `expectedVersion`, `reviewToken`). A network/5xx/unknown outcome shows "We could not confirm
+      whether the announcement was queued" and only offers **Check status**, which repeats the same operation id (the
+      server returns the existing run); a definite refusal (e.g. expired review) asks for Review again and only then
+      uses a new operation id. A created run replaces the wizard with the existing progress view
+- [x] **Verified (mocked API, fictional data, no email):** `announcements.test.tsx` 20/20 (list 3 + wizard 17: only the
+      active step rendered, validation + focus, button collapse/remove, save waits / 409 stays, saved-version preview,
+      no re-save when unchanged, Back/Forward + direct link clamp, unverified test button, test send + retry same id,
+      earlier-version test label, audience counts/blockers/failure/stale, blocked send, explicit confirmation + one
+      queue request + progress view, uncertain → same operation id, edit invalidates later steps, progress/stop,
+      finished wording; no test or queue request from navigation). Frontend typecheck, eslint (changed files),
+      full Vitest 675/675 (50 files), `next build`. Browser walk-through on the :3000 dev server with every API call mocked in the page (nothing
+      reached :4000) at 1440 / 820 / 390 px: all four steps, no horizontal overflow, focus on the step heading after
+      each move. **Not run:** Playwright e2e, a signed-in manual check against the real API, screen-reader testing;
+      no backend checks (no backend change)
+
+### Notification centre, Step 5: end-to-end verification + operational readiness — 🟡 verified locally 2026-11-03 (mocked provider; sending still blocked)
+
+**Not complete as a release step:** the communication-policy prerequisites (classification, consent/preferences,
+unsubscribe, suppression list, open-death-report rule) still do not exist, so customer sending stays blocked and the
+"suppressed address" / "preferences changed" cases could only be verified as blocked. Live Microsoft delivery of
+announcements has never been tested. Operator runbook: [`notification-centre.md`](notification-centre.md).
+
+- [x] **Harness:** isolated env only (`for_after_p24` + Redis :6390 via `scripts/phase24/isolated-env.mjs`), fictional
+      fixtures, fake `EmailProvider` via DI. New guard in `test/setup-e2e.ts`: any e2e `fetch` to a Microsoft host
+      (`*.microsoft.com`, `*.microsoftonline.com`, Office/Outlook) is refused (suites that test the Graph adapter stub
+      fetch themselves; `microsoft-email-wiring` still passes). The cleared communication policy exists only as a test
+      DI override; the gate is set only in the test process. `announcement-broadcasts` and the new
+      `announcement-workflow` suites run serially (one active broadcast per database, by design)
+- [x] **Success flow** (`test/announcement-workflow.e2e-spec.ts`): super admin (password + real TOTP) creates and saves
+      a draft → preview of the saved content (escaped with numeric entities, approved `/dashboard` link only) → test
+      email: destination from the signed-in verified admin (`to` in the body → 400), test worker run → one
+      `announcement-test` email to that admin only → audience counts reconcile → send review HTML identical to the
+      preview → confirm → broadcast worker → COMPLETED; progress counts equal a `groupBy` of the stored recipients,
+      times equal the stored row; test email not counted in the run; one recipient per email, no other address in any
+      email; trial-ended Customer included (billing is not a rule), unverified excluded; no subject, body, review token
+      or address in audit rows or logs; reopening the draft returns the run
+- [x] **Authorization** (same file): anonymous, Customer, **Recipient** and **Trusted Contact** sessions (real OTP sign-in),
+      ordinary admin, super admin without MFA, signed-out, demoted-to-admin and suspended super admins → 401/403 on all
+      12 Notification centre routes; nothing created or sent; button destinations outside the allowlist and CR/LF
+      header injection → 400. Origin, no-store and the confirm 429 were already covered (Step 4)
+- [x] **Recovery / concurrency added** (`announcement-broadcasts.e2e-spec.ts`, now 16 tests): stop during audience
+      preparation (no further batches, repeated stop idempotent, one audit row, no QUEUED audit); graceful shutdown
+      mid-run (in-flight email recorded, rest QUEUED, resume without duplicates); database failure after the claim but
+      before the provider (recipient back to QUEUED, not UNKNOWN; lease holds off a second driver; sent once later);
+      paused run exposes `pausedUntil`; a recipient row that vanishes between lookup and claim (account hard-deleted
+      mid-run) is skipped; bounded throughput run. Earlier Step 4 tests still cover queue-publish failure, resume after
+      interrupted preparation, crash after possible acceptance (UNKNOWN), throttling/Retry-After, permanent failure,
+      lease expiry, duplicate jobs/concurrent drivers, replay/parallel confirms, stale/changed/expired reviews, larger
+      audience, cancellation while sending and after completion
+- [x] **Defects fixed:** (1) a database error after a recipient was claimed but before the provider call left it
+      PROCESSING, later shown as UNKNOWN although nothing was sent → now returned to QUEUED (best effort; if the DB is
+      still down it stays conservative); (2) a recipient row deleted by a cascading account deletion between lookup and
+      claim made the claim throw and fail the slice → now skipped; (3) the progress card could not show a deliberately
+      paused run or a stalled worker → API `pausedUntil` + QUEUED retry reasons, UI "Paused until …", "Waiting to send:
+      Email provider throttling (n)" and, after 5 min without progress, "No progress … check System health"; (4) the
+      Stop and Send-test dialogs did not return focus to their button on close (no Radix trigger) → `DialogTrigger`;
+      (5) `announcements.e2e` preview test compared global draft/audit counts and failed whenever another suite wrote
+      in parallel → scoped to its own admin
+- [x] **Bounded throughput (fake provider, local):** 200 fictional Customers (`BCAST_LOAD_N`, default 200) + the test
+      DB's other Customers (223 prepared): preparation ~0.1 s, one provider attempt at a time (max in flight 1),
+      spacing 6 s each (10/min default, stubbed in the test), implying ~22 min real time. Broadcasts use their own queue,
+      never `email-delivery`; OTP/invitation emails are sent directly, not queued; the default leaves ~20/min of the
+      mailbox's 30/min. Not a production capacity measurement
+- [x] **Browser checks** (:3000 dev server, every API call mocked in the page, nothing reached :4000): long subject and
+      30-line message, progress card with paused/retry/reason states, Stop dialog (opens on "Keep sending", Escape
+      returns focus to "Stop sending") at 1440 and 390 px, no horizontal overflow
+- [x] **Verified:** backend e2e (isolated env) announcement suites together 36/36 (`announcement-workflow` 3,
+      `announcement-broadcasts` 16, `announcements` 5, `announcement-tests` 7, `announcement-audience` 5),
+      `microsoft-email-wiring` with the new guard; backend unit `src/announcements` + `src/email` 73/73, `tsc --noEmit`,
+      `npm run lint` (0 findings), production compile to a scratch dir (`npm run build` not run: dev API on :4000 runs
+      from `dist`). Frontend `announcements.test.tsx` 21/21, full Vitest 676/676 (50 files), typecheck, eslint (changed files), `next build`. **Not run:** Playwright e2e against a real API,
+      the full backend e2e suite, any live provider check
+- [ ] **Still open before any customer send:** the five policy blockers; bounce/complaint processing; production
+      Graph credentials and SPF/DKIM/DMARC; a recent-two-factor step-up for confirmation (optional); a controlled live
+      smoke test (checklist in `notification-centre.md` §13, not executed). (Dev DB migration: applied, 2026-11-03)
+
+### Notification centre, Step 6: controlled live test email — ⛔ prepared, NOT executed (2026-11-03)
+
+**No live email has been sent. Approval, execution, provider acceptance and inbox receipt: all pending.**
+
+- [x] **Local automated verification** (Steps 2–5, fake provider): test-email path covered by `announcement-tests` and
+      `announcement-workflow` e2e (backend-derived recipient, saved-version binding, idempotency, retry rules)
+- [x] **Prerequisites checked 2026-11-03 (read-only, no secrets printed):** target = local development (`NODE_ENV`
+      development, DB `for_after` on localhost, Redis :6379); API :4000 serves the Notification centre routes; worker
+      alive (heartbeat) with one consumer each on `announcement-test-email` and `announcement-broadcast`;
+      `EMAIL_PROVIDER=microsoft`, Graph tenant/client/secret and sender set (From "For After <info@forafter.com.au>");
+      `ANNOUNCEMENT_BROADCAST_ENABLED` absent (broadcasting off); 0 test sends, 0 broadcast runs; no draft named
+      "Notification Centre controlled test"
+- [ ] **Blocker:** the only SUPER_ADMIN (the original dev address, ACTIVE, TOTP enrolled) has **no verified email**, so the
+      test-email request is refused (409) by design. Not bypassed (no DB edit). Supported fixes: (a) if that inbox is
+      owned by the team, "resend verification" (`/verify-email`, `POST /auth/resend-verification`, one real email) then
+      open the link; or (b) Create admin → invitation to an owned inbox (acceptance verifies it), then an operator decides
+      on SUPER_ADMIN promotion with the documented local script. Then the signed-in super admin runs the test in the
+      wizard (Step 2 · Preview & test); the session needs password + TOTP, so the clicks are the operator's
+- [x] **2026-11-03 (owner request, local dev DB only):** the never-used pending ADMIN (the owner's address) was removed and
+      that address given to the existing SUPER_ADMIN (same password and authenticator; old address gone),
+      left **unverified**, sessions ended, audit `EMAIL_CHANGED` (actor SYSTEM). Next: sign in with the new address, then
+      Account settings → "Send verification link" and open it in that inbox
+- [x] **Live test executed by the super admin (UI, Step 2 · Preview & test), checked 2026-11-03 10:32 UTC:** email
+      verified 10:22 UTC (existing verification link; audit `EMAIL_VERIFIED`, which labels the actor `CUSTOMER` — a known
+      label defect in the shared verify flow); one test send `a2361cc8…` of draft `7cdde7c1…` v2 ("Testing") to the
+      signed-in super admin's own address, requested 10:30:29, **ACCEPTED by Microsoft Graph** 10:30:33 (request id
+      stored); audit `ANNOUNCEMENT_TEST_REQUESTED` + `_COMPLETED` (accepted). One operation; no retry
+- [x] **Inbox receipt confirmed by the user** (2026-11-03 10:35 UTC): the test email arrived in the super admin's inbox. Step 6 complete
+
+### Notification centre, Step 7: consent, suppression, unsubscribe and pilot audience — ✅ built locally 2026-11-03 (uncommitted; mocked provider; no customer email sent)
+
+**Owner decisions (2026-11-03):** announcements are optional product news (not service email); marketing consent and
+an unsubscribe option required; exclude unsubscribed, hard-bounced, complained or opted-out addresses and Customers
+with an open, unverified death report; first send to a small pilot of explicitly selected accounts; broadcasting off
+by default; nothing live without explicit approval.
+
+- [x] **Consent:** `User.marketingConsentAt` (null by default); Customer Account settings → "Email preferences" opt-in
+      (`GET/PUT /users/me/communication-preferences`, Customer only, 10/min); audit `MARKETING_CONSENT_GRANTED/_WITHDRAWN`
+- [x] **Unsubscribe:** per-recipient signed link in every announcement (HTML + text footer), public `/unsubscribe` page
+      (button only) → `POST /communications/unsubscribe` (10/min): consent withdrawn + address suppressed, idempotent
+- [x] **Suppression list** `EmailSuppression` (address hash only; UNSUBSCRIBED / HARD_BOUNCE / COMPLAINT; audit
+      `EMAIL_SUPPRESSED`); synchronous "invalid recipient" failures auto-suppress as HARD_BOUNCE; re-opt-in lifts only
+      UNSUBSCRIBED. **Gap:** no complaint feed or async bounce processing (needed before a wide rollout)
+- [x] **Eligibility** (`reasonSql` + `skipReason`): + open death report, suppressed, no consent; `POLICY_BLOCKERS` now
+      empty, policy version `optional-consent-v1-2026-11-03`; purpose shown as "Optional product news"
+- [x] **Pilot audience:** draft scope PILOT (default) or ALL_ELIGIBLE; up to 10 Customer accounts added by exact
+      address in the Audience step with per-member status (`GET/POST/DELETE …/pilot`, `PUT …/audience-scope`, audit
+      `ANNOUNCEMENT_AUDIENCE_UPDATED` with ids only); review token binds scope + member set; pilot runs prepared at
+      confirmation (frozen); gate gains `pilot` mode (pilot sends only)
+- [x] Migration `20261103120000_add_announcement_consent_suppression_pilot` (additive). Applied to the isolated test DB;
+      the local dev DB `for_after` also has it (recorded 2026-11-03 16:22 IST, not by this step's commands — the isolated
+      wrapper was verified to target `for_after_p24` only)
+- [x] **Verified (mocked provider; no real email):** backend e2e (isolated env) all announcement suites 40/40 incl. new
+      `announcement-pilot.e2e-spec.ts` 4/4 with the REAL policy (consent default/off and audit; pilot access, Customer-only
+      lookup, max 10, statuses, audit without addresses; gate `pilot` refuses all-eligible at review/confirm/worker;
+      pilot change after review → 409; run prepared at confirmation and frozen; send-time skips for withdrawn consent,
+      new death report and new suppression; hard bounce → HARD_BOUNCE; per-recipient unsubscribe link → consent withdrawn
+      + suppression, idempotent, tampered → 400; re-opt-in lifts only UNSUBSCRIBED); backend unit 1507/1508 in the full
+      run (the known bare-module `app.setup.spec` timing test; passes alone), lint 0, production compile to scratch.
+      Frontend full Vitest 688/688 (51 files), typecheck, eslint (changed files), `next build` (`/unsubscribe`).
+      **Browser check (2026-11-04):** local production build on 127.0.0.1:3100, every API call mocked in the page, at
+      1440 and 390 px: Audience step with pilot panel, Review & send, Customer Email preferences, `/unsubscribe` (opening
+      it sends nothing). Found and fixed a 20 px horizontal overflow at 390 px (pilot member row: status badge + Remove
+      could not wrap); after the fix no overflow on any screen; wizard tests 22/22, typecheck, eslint, `next build`.
+      **Not run:** Playwright, any live send
+- [x] **First pilot send (owner-approved, local, 2026-11-04):** approved draft `4a119432…` v1 (no button), pilot group
+      of one opted-in Customer; test email accepted 06:31 UTC and confirmed by the owner; gate set to `pilot` for the run
+      only. Run `fd0837f0…` COMPLETED 06:59:45 UTC: 1 recipient ACCEPTED by Microsoft Graph (provider outcome), 0
+      skipped/failed/unknown; one run total. Gate removed afterwards (broadcasting off). Inbox receipt: awaiting owner
+      confirmation (recorded separately in `notification-centre.md` §14)
+- [x] **Post-send status and monitoring fix (2026-11-04, local, uncommitted; no email sent):** the list showed the
+      pilot announcement as "Draft / Edit" although its run existed. Persisted facts (read-only): one customer run
+      `fd0837f0…` for `4a119432…` v1, PILOT, COMPLETED 06:59:45 UTC, 1 recipient ACCEPTED by Microsoft Graph, 0
+      failed/unknown/skipped/cancelled; the admin test send `e992bc78…` is a separate record. Root cause: the list API
+      did not return the run and the list page hard-coded "Draft" and "Edit" (the announcement row's own status is always
+      `DRAFT` by design); the list was also not refreshed after queueing. The edit API also still accepted edits after a
+      run (the run's snapshot was unaffected).
+      - Backend: `GET /admin/announcements` items carry `broadcast: { id, status, audience, issues } | null` from the run
+        (issues = FAILED + UNKNOWN + SKIPPED + CANCELLED recipients; tests never set it); `PUT /admin/announcements/:id`
+        returns 409 once a run exists
+      - Frontend: list status from the run (Preparing audience · Sending · Completed · Completed with issues · Stopped ·
+        Stopped by server; Draft only without a run) and action "View progress"/"View results" instead of Edit; the list
+        re-reads on every visit and after queueing; the results view adds run reference, audience, total recipients, a
+        "couldn't refresh, last known state" warning, and the in-flight note after a stop; "Accepted by provider" label.
+        Open: Notification centre → the announcement's "View results" (`/admin/announcements/<id>`)
+      - Verified: backend tsc, lint, unit 1508/1508; e2e (isolated env, fake provider) announcement suites 41/41 incl. a
+        new post-send monitoring test (list run state, issues reconcile, edit locked, results readable with the gate off,
+        non-super-admin 403, reading sends nothing); frontend tsc, eslint (changed files), Vitest 692/692 (51 files).
+        **Not run:** `next build` (the dev server was using `.next`), a browser check of the live page
+      - Not added: a per-recipient results list (aggregate counts and reason codes only)
+      - Gate: `ANNOUNCEMENT_BROADCAST_ENABLED` absent from `.env`; the running API and worker started after it was
+        removed, so broadcasting is off
+- [x] **Announcement results page + recipient monitoring + safe manual retry (2026-11-04, local, uncommitted; mocked
+      provider; no email sent):** redesigned from the owner's reference (`For After announcement results dashboard.png`,
+      repo root), real data only, existing admin shell unchanged.
+      - Page (`announcement-results.tsx`): header (subject, run status, Refresh, last refreshed), summary cards (total,
+        accepted by provider, failed, unknown + waiting/sending/skipped/cancelled when present), outcomes donut (inline SVG,
+        no new dependency; text equivalent + legend with counts and %), run details (audience, version, requester, run
+        reference with copy, requested/started/completed with the timezone, state), "View email" (the run's immutable
+        snapshot), stop sending (unchanged), retry requests, recipient table (server-side filter/search/pagination,
+        outcome badges with icons, last attempt, attempts, safe reason, Retry / Review / Details)
+      - API (SUPER_ADMIN + MFA, as before): `GET …/broadcasts/:runId` adds `retry` (eligible count, why not, recent
+        requests); `GET …/recipients` (page of 25, `status`, `q`), `GET …/recipients/:recipientId` (with retry history),
+        `GET …/email` (snapshot, non-personal unsubscribe link), `POST …/retry-review`, `POST …/retries` (202). An address
+        is shown only while the account still has the address the email was prepared for (none is stored)
+      - **Retry eligibility** (server, re-checked at confirmation and again by the worker before sending): FAILED with a
+        provably-not-accepted code (`rate_limit_exceeded`, `unauthorized`, `token_unavailable`, i.e. automatic attempts
+        exhausted), attempts < `MAX_ATTEMPTS + 2` (two manual retries), current account/address/death-report/suppression/
+        consent rules pass, run not stopped/blocked/preparing, gate allows the run's audience, policy unchanged. Never:
+        ACCEPTED, UNKNOWN (timeouts, network, 5xx, interrupted), permanent failures (invalid address, rejected message,
+        sender misconfiguration), QUEUED/PROCESSING (incl. automatic backoff), SKIPPED, CANCELLED
+      - **Retry processing:** confirmation binds the sha256 of the reviewed recipient ids; one transaction under the
+        broadcast lock (replay by `clientOperationId`, fresh set must equal the reviewed set, rows FAILED → QUEUED
+        `manual_retry` only if still FAILED, a COMPLETED run reopened to SENDING, audit
+        `ANNOUNCEMENT_BROADCAST_RETRY_REQUESTED`); the existing worker sends with the run snapshot (no new run, lease =
+        one driver). History kept: `AnnouncementRetry` (previous run state + completion time) and `AnnouncementRetryItem`
+        (each recipient's previous code, attempts, times); earlier FINISHED audit rows stay. Max 500 recipients per request
+      - Migration `20261104090000_add_announcement_retries` (additive: 2 tables, 1 audit enum value). Applied to the
+        isolated test DB by the wrapper (13:31:37 IST) and present in the local dev DB `for_after` (13:31:43 IST, not
+        applied by this step's commands — same pattern as 2026-11-03)
+      - Verified: backend tsc, lint; e2e (isolated env, fake provider) announcement suites 44/44 incl. 3 new tests (states,
+        safe reasons, per-rule eligibility incl. consent withdrawn, suppression, changed address, retry limit; filters,
+        search, pagination; snapshot email; 401/403; gate off and pilot-only refuse; exact reviewed set; double click,
+        second operator, duplicate jobs → one request and one send; retry after completion; same content; history and
+        audit kept; automatic-backoff and UNKNOWN rows never retried). Frontend tsc, eslint (changed files), Vitest for
+        the two announcement files 34/34 (13 new results tests: one-recipient run, mixed outcomes reconcile, failed loads
+        not zeros, server-side filters/search/pages with keyboard, unknown → Review, single and bulk retry, gate-off
+        disabled, snapshot email, polling stops at terminal state and on unmount, stale refresh). Desktop 1440 and mobile
+        390 screenshots (dev server, all API calls mocked): no horizontal overflow
+      - **Not run:** full backend unit and full frontend Vitest after this change (the combined run was stopped by the
+        host for low memory), `next build` (dev server uses `.next`), a real retry (none possible: no failures)
+      - Real data rechecked: one run `fd0837f0…` COMPLETED, 1 recipient ACCEPTED (1 attempt), 0 retries; gate absent
+
+### Admin account settings (own account) — ✅ built locally 2026-11-03 (uncommitted; mocked email only)
+
+- [x] **Top-right account menu** (admin shell, Radix dropdown): avatar initials, name, email, chevron; menu shows
+      identity, role (existing labels) and "Account settings" (`/admin/account`). Not in the sidebar. Sign-out
+      placements unchanged (sidebar, mobile sheet, tablet header); no sign-out added to the menu
+- [x] **API `admin/account`** (`src/auth/admin-account.controller.ts`, ADMIN and SUPER_ADMIN; session + `AdminGuard`
+      (completed MFA, idle timeout); account always from the session, no id accepted; Origin check, `no-store`):
+      `GET` (profile, real verification and two-factor state, unused recovery-code count, password last changed, this
+      session's sign-in / two-factor times, idle timeout and expiry, last 5 admin sign-ins from the audit log; no
+      hashes, secrets, codes or session ids); `PATCH profile` (names only, shared `UpdateProfileDto`, 10/min);
+      `POST password` (existing `AuthService.changePassword`: current password, policy, Argon2id, `PASSWORD_CHANGED`
+      audit with actor ADMIN; other sessions end, this one keeps its two-factor; 5/min); `POST verification` (existing
+      verification link to the account's own unverified address; 3/hour). Admin renames no longer write a Customer
+      "Recent changes" row
+- [x] **Page** (`/admin/account`, tabs Profile · Security · Sessions, `?section=`, arrow keys): personal details form
+      (unsaved warning, values kept on errors and across tabs; header name updates after save), read-only email with
+      its real Verified / Not verified state and "Send verification link", security overview, Administrator access
+      card; Security = password (the shared Customer dialog with the admin mutation) and two-factor status/policy;
+      Sessions = this session, an honest "other sessions can't be listed" note, recent sign-ins (plain text)
+- [ ] **Not supported (by design or missing prerequisite):** admin email change (confirmation is Customer-only by
+      policy); MFA reset / re-enrolment / new recovery codes (operations procedure, `incident-response.md`); timezone
+      preference (none exists; dates use the browser's zone); session list and "sign out other sessions" (sessions are
+      not indexed per account; would need a schema change; a password change already ends other sessions)
+- [x] **Verified:** backend e2e (isolated env) `admin-account.e2e-spec.ts` 5/5 (all principals, ownership, no
+      secrets, field allowlist, password re-auth + other-session revocation, own-address verification, no token in
+      logs), with `account` and `admin` e2e (60/60 together); backend unit 1505/1505 (73 files), tsc, lint, production
+      compile to a scratch dir. Frontend `account.test.tsx` 8/8 + admin tests, full Vitest 684/684 (51 files), typecheck, eslint, `next build`;
+      browser check of the production build on 127.0.0.1:3100 with every API call mocked at 1440 / 820 / 390 px (no
+      overflow, menu inside the viewport, Escape returns focus). No real admin account, email, MFA or session was used
+      or changed. **Not run:** Playwright e2e against the real API
+
+### 🔍 Code review remediation (2026-11-05, working tree, nothing committed or deployed)
+
+Local only; provider, Stripe and database failures simulated in tests. No live email, retry, Stripe call or gate activation.
+
+- [x] **Announcements, acceptance vs persistence:** both processors record a provider acceptance outside the provider `try`.
+      A database failure leaves the row PROCESSING; the next lease holder (broadcast) or the job retry / reconciler (test)
+      makes it UNKNOWN, which neither automatic nor manual retry can resend. A throw that is not an `EmailSendError` is
+      now UNKNOWN too, not FAILED
+- [x] **Announcements, completion vs retry:** `finish()` takes the same advisory lock as `confirmRetry` and refuses to end a
+      run with QUEUED or PROCESSING rows; the slice carries on
+- [x] **Announcements, retry batch:** `eligible()` pages through failed rows by id until the batch is full, so rows blocked by
+      today's rules cannot hide eligible ones
+- [x] **Billing gate:** `@RequiresPlan()` route metadata replaces the URL prefix list (`POST /RECIPIENTS` was reaching the
+      controller without the check); same routes gated; reads and DELETE open
+- [x] **Billing sync:** the account holds the best of the customer's Stripe subscriptions; writes are conditional on `syncedAt`
+      as read before the fetch, losers re-read (3 attempts, then 503); audit rows only for applied updates; superseded
+      events recorded and logged. No migration
+- [x] **Lapsed customers (frontend):** shell redirect replaced by a plan notice; add/edit pages show a blocker; 402 now maps to
+      its own error kind (it was shown as "Something went wrong") with a plan link
+- [x] **Billing filters:** `state` values are the displayed states; `accessStateWhere` is `accessState()` as a query, compared
+      over every combination in e2e (`ended` is now `access_ended`; `cancellation_scheduled` and `payment_pending` added)
+- [x] **Songs:** create, delete and reorder serialise on the owner's User row (`SELECT … FOR UPDATE`, as support does)
+- [x] **Live billing prerequisite:** `BILLING_ENABLED=true` with a live Stripe key refuses to start until
+      `BILLING_AFTER_DEATH_POLICY_APPROVED=true`; test mode and billing off unaffected (`docs/billing.md` §7)
+- [x] **Verified:** backend unit 1511/1511 (73 files), tsc, oxlint, production compile to a scratch dir; backend e2e (isolated env)
+      681/682 in the full run, the one failure being `announcement-audience` (global candidate count, 10 vs 11, while parallel
+      suites changed customers in the shared test database), which passes alone 5/5. Frontend 725/725 (52 files), tsc,
+      eslint on the touched files, `next build`. Eleven regression tests were confirmed to fail with the defects temporarily
+      put back. Local dev DB counts (read-only): 1 run, no record in a state these defects would leave, 0 billing accounts
+- [ ] **Owner decision:** subscriptions after a verified death and during suspension (`docs/billing.md` §7). Nothing is built
+- [ ] Real Stripe test-mode run (checkout, replacement, cancellation, payment failure) has not happened: Stripe is mocked
+
+### 🛡️ Security activity redesign + temporary IP blocks — ✅ built locally 2026-11-09 (uncommitted; blocking unavailable everywhere)
+
+Reference `Security activity and IP controls.png` (repo root) inspected; built as working components, no illustrative
+data or concept badges. Most backend and UI code was already in the working tree (dated 2026-11-05, undocumented until
+now); this pass audited it against the brief, fixed what was wrong and verified it. Details: `admin.md` §20 and §20a;
+incident row in `incident-response.md` §6a.
+
+- [x] Page: header with date range, Refresh (GET only), last-refreshed time + timezone; coverage notice with gaps; four
+      server-side cards + other-category chips; graph of stored rows per local day/hour (plum sign-in steps, muted-red
+      two-factor failures, tooltip, table alternative, zero-filled, no smoothing); IP controls panel; events table with
+      compact filters, More filters, URL state, server pagination. Cards/graph/sources use the date range only (stated)
+- [x] Labels: "Admin sign-in and sign-out events" now says one sign-in records several steps, so it is not a count of
+      people or sign-ins
+- [x] Temporary exact-IP blocks: `IpBlock` table (migration `20261105090000_add_ip_blocks`, additive; applied to the
+      isolated test DB only by this session), SUPER_ADMIN + two-factor in the last 15 min, 30/h, durations 15/60/1440 min,
+      reason required, public unicast only, operator/proxy/protected addresses refused, advisory-locked duplicates,
+      audit rows with the masked network only, revoke with confirmation, history kept
+- [x] Enforcement: middleware on all routes except `/health/*` and the signed Stripe webhook; per-instance snapshot
+      polled from Postgres every 15 s, expiry checked per request, failed poll keeps the last snapshot; blocked requests
+      logged at most once a minute per address, never audited
+- [x] Fixed: 42 px page-wide horizontal overflow at 820 px (the shared admin `DataTable` now scrolls horizontally
+      instead of clipping, and the events panel no longer grows past the page); colliding x-axis dates on phones
+- [x] Fixed stale tests: frontend `security-activity.test.tsx` (did not typecheck against the new response) rewritten,
+      15 tests incl. dialog keyboard/focus, success only after persistence, refused block, revoke confirmation, masked
+      view; `admin.e2e-spec.ts` expectation updated for `sourceTrusted`
+- [x] **Verified (2026-11-09):** backend unit (ip-blocks, admin-security, admin-access, app.setup) 37/37 (app.setup
+      timed out once under memory pressure, passes alone); e2e on isolated DB/Redis `ip-blocks` 15/15, `admin` 32/32;
+      backend tsc clean, oxlint 0 errors (5 existing test warnings); frontend security tests 15/15, admin + deliveries
+      66/66, tsc clean, eslint clean on touched files, `next build` passed. Rendered at 1440/820/390 px with the API
+      stubbed from fictional data: no horizontal overflow, Block IP dialog traps focus and Escape returns focus to the
+      trigger. Only documentation-range addresses were ever blocked, on the test DB
+- [ ] **Deployment prerequisite:** verify the proxy chain in the target environment, set `IP_BLOCK_PROTECTED_IPS`,
+      then `IP_ATTRIBUTION_VERIFIED_AT` (`admin.md` §20a). Until then blocking is unavailable and nothing is enforced
+- [ ] Not run: full backend/frontend suites, full e2e suite, real-API browser check (admin sign-in needs TOTP)
+- [ ] Open: retention period for `IpBlock` rows; the Block IP dialog shows the address as typed (the stored,
+      normalised form appears in the success message and list)
+
 ## 🧹 Housekeeping
 
 **Done**
@@ -1441,11 +2497,23 @@ future rule stays: AI output must never be presented as legal advice (`docs/my-w
 - [x] Development guide: `APP_ENV` → `NODE_ENV`
 - [x] All docs updated for Step 14 and given a consistent layout (summary card, contents, numbered sections)
 
+- [x] **Local dev DB test-account cleanup (2026-11-04, owner-approved):** deleted exactly **93** Customer accounts from
+      `for_after` (localhost, development): 92 created by the Playwright helper (`e2e/helpers.ts`, reserved `example.com`
+      domain, 2026-10-05–17, before e2e moved to the isolated DB) and 1 Claude-created synthetic account (2026-10-19,
+      reserved `.invalid` domain). Evidence and the id list are in a private local file outside the repo. Method: verified
+      `pg_dump` backup first (restore-tested into a throwaway DB, identical counts, then dropped; kept privately outside
+      the repo), live candidates re-matched the reviewed list, one transaction restricted to role CUSTOMER with an
+      exact-count rollback; their own data went with them through the existing cascades (no cross-account links found).
+      Verified afterwards: none of the 93 remain; the Super Admin, the 2 verified customer accounts and 1 ambiguous
+      account kept by the owner are unchanged (role, status, verification, consent, owned records); audit rows (8,770)
+      and suppressions unchanged; storage-bucket files not touched (orphaned test media files may remain in the dev
+      bucket). Audience (app logic, 06:17 UTC): 3 customers, 0 eligible, 3 excluded (2 not opted in, 1 email not
+      verified). No email sent; broadcasting stays off; no verification or consent changed
+
 **To do**
 
-- [ ] Commit Steps 7–14 (currently uncommitted)
-- [ ] Put `for-after-frontend` under version control (Step 17): it is not in the backend repo, and the root
-      `D:\FOR-AFTER-DIGITAL-VAULT` git repo has no commits yet. Decide: its own repo, or a root monorepo
+- [ ] Commit the current working tree (170 uncommitted paths on 2026-11-03; last commit `345ad28`, 2026-11-02)
+- [x] `for-after-frontend` under version control: root monorepo `D:\FOR-AFTER-DIGITAL-VAULT` (79 commits; checked 2026-11-03)
 - [ ] Dev account `jiya@gmail.com` was re-registered with a password other than the one the Postman collection uses; reset it
 - [ ] Approve Prisma install script (`npm install-scripts approve prisma`) after the npm warning
 - [x] Run Prettier on 7 older files flagged by `prettier --check` (done during Step 15; formatting only)
