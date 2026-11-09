@@ -40,6 +40,9 @@
   --success: #3d6b50; /* inferred */
   --warning: #8a5a14; /* inferred */
   --danger: #9f2f3a; /* inferred */
+  /* Security activity graph: CVD-checked pair; failures also use a dashed line. */
+  --chart-sign-in: #6b3f73;
+  --chart-failure: #d0605f;
   --sidebar-background: var(--surface);
   --sidebar-active: var(--brand-petal);
   --sidebar-border: var(--border);
