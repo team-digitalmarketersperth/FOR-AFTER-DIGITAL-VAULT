@@ -458,6 +458,11 @@ never notes or reporter data) with one operator alert (Phase 17A, [admin.md §8]
 An admin retry only queues the job again: the worker re-reads the case, so a `CANCELLED`, `REJECTED` or `VERIFIED`
 case is never advanced (outcome `stale`) and a not-yet-due one goes back to its stored time.
 
+A safeguard job that exhausts its attempts becomes a durable dead letter (entity `DeathVerificationCase`, ids only:
+never notes or reporter data) with one operator alert (Phase 17A, [admin.md §8](admin.md#8-queue-monitoring-and-failed-job-retry)).
+An admin retry only queues the job again: the worker re-reads the case, so a `CANCELLED`, `REJECTED` or `VERIFIED`
+case is never advanced (outcome `stale`) and a not-yet-due one goes back to its stored time.
+
 ---
 
 ## 13. Testing
