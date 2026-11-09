@@ -1,6 +1,7 @@
 import {
   BookOpen,
   Feather,
+  Headset,
   Heart,
   House,
   Images,
@@ -69,6 +70,14 @@ export const SPACES: NavItem[] = [
     href: '/my-wishes',
   },
 ];
+
+/** The lower sidebar section, apart from the main groups. */
+export const HELP_SUPPORT: NavItem = {
+  label: 'Help & support',
+  description: 'Ask the For After team a question and find your replies.',
+  icon: Headset,
+  href: '/support',
+};
 
 export const NAV_GROUPS: NavGroup[] = [
   { items: [HOME] },
