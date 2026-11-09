@@ -38,10 +38,13 @@ import {
   storyBookApi,
   type StoryBook,
   wishesNoticeApi,
+  wishSongsApi,
   type AnswerInput,
   type Prompt,
   type PromptArea,
   type WishesNotice,
+  type WishSong,
+  type WishSongInput,
 } from '@/lib/api/prompts';
 import { queryKeys } from '@/lib/query/query-client';
 
@@ -290,6 +293,44 @@ export function useWishesNotice() {
     queryFn: ({ signal }) => wishesNoticeApi.get(signal),
   });
 }
+
+/**
+ * Funeral songs (My Wishes). Every write refetches the list afterwards, so a
+ * failed save or reorder always shows what the server really holds.
+ */
+function useWishSongWrite<V, R = unknown>(fn: (v: V) => Promise<R>) {
+  const qc = useQueryClient();
+  return useMutation<R, ApiError, V>({
+    mutationFn: fn,
+    onSettled: () => qc.invalidateQueries({ queryKey: queryKeys.wishSongs }),
+  });
+}
+
+export const wishSongs = {
+  useList: () =>
+    useQuery<WishSong[], ApiError>({ queryKey: queryKeys.wishSongs, queryFn: ({ signal }) => wishSongsApi.list(signal) }),
+  /** Create (no id) or update one song. */
+  useSave: () =>
+    useWishSongWrite(({ id, input }: { id?: string; input: WishSongInput }) =>
+      id ? wishSongsApi.update(id, input) : wishSongsApi.create(input),
+    ),
+  useRemove: () => useWishSongWrite((id: string) => wishSongsApi.remove(id)),
+  /** Shows the new order at once; a failure restores the server's order. */
+  useReorder: () => {
+    const qc = useQueryClient();
+    return useMutation<WishSong[], ApiError, WishSong[], { previous?: WishSong[] }>({
+      mutationFn: (songs) => wishSongsApi.reorder(songs.map((s) => s.id)),
+      onMutate: async (songs) => {
+        await qc.cancelQueries({ queryKey: queryKeys.wishSongs });
+        const previous = qc.getQueryData<WishSong[]>(queryKeys.wishSongs);
+        qc.setQueryData(queryKeys.wishSongs, songs);
+        return { previous };
+      },
+      onError: (_error, _songs, context) => qc.setQueryData(queryKeys.wishSongs, context?.previous),
+      onSettled: () => qc.invalidateQueries({ queryKey: queryKeys.wishSongs }),
+    });
+  },
+};
 
 /** Phase 14B / 15B: a new draft from a My Story answer or a wish; it joins the Messages lists. */
 export function useAnswerMessage(area: PromptArea, key: string) {

@@ -31,6 +31,7 @@ import { textRevision } from '@/lib/api/drafts';
 import { ANSWER_MAX, type Prompt, type PromptArea } from '@/lib/api/prompts';
 import { formatDate, humanize } from '@/lib/format';
 import { cn } from '@/lib/utils';
+import { WishSongs } from '@/components/prompts/wish-songs';
 import { answerSchema, type AnswerValues } from '@/schemas/vault';
 
 const AREAS: Record<
@@ -147,6 +148,8 @@ export function PromptList({ area, category }: { area: PromptArea; category?: st
           );
         }}
       </QueryView>
+      {/* Funeral songs belong with the music wishes: shown on All and that filter. */}
+      {area === 'my-wishes' && (!category || category === 'MUSIC_AND_READINGS') && <WishSongs />}
     </>
   );
 }

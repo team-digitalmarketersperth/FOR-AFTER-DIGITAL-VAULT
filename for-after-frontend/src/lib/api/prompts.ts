@@ -50,6 +50,39 @@ export const wishesNoticeApi = {
   get: (signal?: AbortSignal) => apiRequest<WishesNotice>('/my-wishes/disclaimer', { signal }),
 };
 
+/**
+ * Songs for the funeral (My Wishes). Private like every wish: saving one never
+ * sends, schedules or shares anything. The API validates and normalises the
+ * link (YouTube / Spotify only) and never fetches it.
+ */
+export const SONG_MOMENTS = ['ARRIVAL', 'REFLECTION', 'FAREWELL', 'OTHER'] as const;
+export type SongMoment = (typeof SONG_MOMENTS)[number];
+
+export type WishSong = {
+  id: string;
+  title: string;
+  link: string | null;
+  moment: SongMoment | null;
+  /** Only with moment OTHER. */
+  momentOther: string | null;
+  note: string | null;
+  position: number;
+  createdAt: string;
+  updatedAt: string;
+};
+export type WishSongInput = Pick<WishSong, 'title' | 'link' | 'moment' | 'momentOther' | 'note'>;
+
+export const wishSongsApi = {
+  list: (signal?: AbortSignal) => apiRequest<WishSong[]>('/my-wishes/songs', { signal }),
+  create: (input: WishSongInput) => apiRequest<WishSong>('/my-wishes/songs', { method: 'POST', body: input }),
+  update: (id: string, input: Partial<WishSongInput>) =>
+    apiRequest<WishSong>(`/my-wishes/songs/${encodeURIComponent(id)}`, { method: 'PATCH', body: input }),
+  remove: (id: string) => apiRequest<void>(`/my-wishes/songs/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  /** Every song once, in the new order; 409 if the list changed elsewhere. */
+  reorder: (songIds: string[]) =>
+    apiRequest<WishSong[]>('/my-wishes/songs/order', { method: 'PUT', body: { songIds } }),
+};
+
 /** textContent null = cleared; memoryVaultItemIds (My Story only) replaces the linked memories. */
 export type AnswerInput = { textContent?: string | null; memoryVaultItemIds?: string[]; privateNote?: string | null };
 

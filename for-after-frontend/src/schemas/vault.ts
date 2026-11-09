@@ -8,7 +8,8 @@ import {
   TRIGGER_TYPES,
 } from '@/lib/api/messages';
 import { localToday } from '@/lib/format';
-import { ANSWER_MAX, type PromptArea } from '@/lib/api/prompts';
+import { ANSWER_MAX, SONG_MOMENTS, type PromptArea } from '@/lib/api/prompts';
+import { normaliseSongLink, SONG_LINK_INVALID, SONG_LINK_MAX } from '@/lib/song-link';
 
 // Early, friendly feedback mirroring the backend DTO limits; the API stays
 // authoritative. Form values are strings; blank optional fields become null
@@ -174,3 +175,20 @@ export const answerSchema = (area: PromptArea) =>
     privateNote,
   });
 export type AnswerValues = z.infer<ReturnType<typeof answerSchema>>;
+
+// My Wishes songs: the backend's limits (title 200, link 500, "Other" 100,
+// note 1,000). No artist field. The link is optional; when given it must be a
+// supported YouTube or Spotify song link.
+export const SONG_MAX = { title: 200, link: SONG_LINK_MAX, momentOther: 100, note: 1000 } as const;
+export const songSchema = z.object({
+  title: required('A song title', SONG_MAX.title),
+  link: z
+    .string()
+    .trim()
+    .max(SONG_MAX.link, SONG_LINK_INVALID)
+    .refine((v) => !v || normaliseSongLink(v) !== null, SONG_LINK_INVALID),
+  moment: z.enum(['', ...SONG_MOMENTS]),
+  momentOther: optional('This', SONG_MAX.momentOther),
+  note: optional('Personal note', SONG_MAX.note),
+});
+export type SongValues = z.infer<typeof songSchema>;
