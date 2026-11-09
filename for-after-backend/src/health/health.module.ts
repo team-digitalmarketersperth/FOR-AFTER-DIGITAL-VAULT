@@ -5,5 +5,7 @@ import { HealthService } from './health.service.js';
 @Module({
   controllers: [HealthController],
   providers: [HealthService],
+  // The admin Overview reuses the same two checks.
+  exports: [HealthService],
 })
 export class HealthModule {}

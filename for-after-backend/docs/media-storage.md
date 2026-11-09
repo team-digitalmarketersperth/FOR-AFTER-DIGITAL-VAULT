@@ -274,6 +274,9 @@ file signature → ClamAV), signed access URLs and `MediaCleanup` reconciliation
   `application/pdf`, signature, full read, signed URL served identical bytes, unsigned URL `403`, delete) and through
   local clamd (`CLEAN`).
 
+**Admin view (Step 6).** Admins see these rows' metadata (never files, names, keys or links) on Storage & scans,
+`docs/admin.md` §21, with the same verified/reserved definitions as the quota below.
+
 ## 3. File Storage (planned)
 - **Planned uses**: other documents, export ZIPs. Same principle: private files, direct upload with server-signed
   tokens, short-lived signed downloads. (Death certificates: built as §2f.)

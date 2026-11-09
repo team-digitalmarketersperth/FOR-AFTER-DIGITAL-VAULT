@@ -5,7 +5,10 @@ import {
 } from '@nestjs/common';
 import type { AuditActor } from '../audit/audit-log.service.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
+import type { SystemHealth, SystemHealthService } from './system-health.service.js';
+import type { AdminSecurityService } from './admin-security.service.js';
 import type { AdminQueuesService } from './admin-queues.service.js';
+import { pastDueWhere } from './admin-releases.service.js';
 import { AdminService } from './admin.service.js';
 
 type Row = { id: string; role: string; status: string; email: string };
@@ -77,7 +80,13 @@ const setup = () => {
         { status: 'PASSED', _count: { _all: 1 } },
       ]),
     },
-    message: { count: vi.fn(async () => 1) },
+    message: { count: vi.fn(async (_args?: unknown) => 1) },
+    releaseNotification: {
+      count: vi.fn(async ({ where }: { where: { status: string } }) =>
+        where.status === 'FAILED' ? 1 : 4,
+      ),
+    },
+    deadLetterJob: { count: vi.fn(async () => 5) },
     deathVerificationCase: {
       groupBy: vi.fn(async () => [
         { status: 'READY_FOR_REVIEW', _count: { _all: 2 } },
@@ -92,12 +101,39 @@ const setup = () => {
     $transaction: async (arg: unknown) =>
       typeof arg === 'function' ? arg(db) : Promise.all(arg as unknown[]),
   };
-  const queues = { failedTotal: vi.fn(async (): Promise<number | null> => 3) };
+  const queues = {
+    totals: vi.fn(
+      async (): Promise<Record<
+        'waiting' | 'active' | 'delayed' | 'failed',
+        number
+      > | null> => ({ waiting: 2, active: 1, delayed: 4, failed: 3 }),
+    ),
+  };
+  const at = '2026-10-30T12:00:00.000Z';
+  const snapshot = (over: Partial<Record<'database' | 'redis' | 'worker' | 'malwareScanner', string>> = {}) =>
+    ({
+      checkedAt: at,
+      api: { status: 'ok', checkedAt: at },
+      database: { status: over.database ?? 'ok', checkedAt: at, durationMs: 3 },
+      redis: { status: over.redis ?? 'ok', checkedAt: at, durationMs: 1 },
+      worker: {
+        status: over.worker ?? 'missing',
+        checkedAt: at,
+        reportingWorkers: 0,
+        lastSeenAt: null,
+        staleAfterSeconds: 45,
+      },
+      malwareScanner: { status: over.malwareScanner ?? 'ok', checkedAt: at, durationMs: 2 },
+    }) as SystemHealth;
+  const health = { check: vi.fn(async () => snapshot()), snapshot };
+  const security = { mfaFailuresSince: vi.fn(async (_since: Date) => 3) };
   const service = new AdminService(
     db as unknown as PrismaService,
     queues as unknown as AdminQueuesService,
+    health as unknown as SystemHealthService,
+    security as unknown as AdminSecurityService,
   );
-  return { service, users, audit, db, queues, findMany };
+  return { service, users, audit, db, queues, health, security, findMany };
 };
 
 describe('AdminService', () => {
@@ -303,19 +339,84 @@ describe('AdminService', () => {
   });
 
   describe('dashboard', () => {
-    it('real aggregates; failed jobs null (not 0) when Redis is unreadable', async () => {
-      const { service, queues } = setup();
-      expect(await service.dashboard()).toEqual({
-        users: { total: 8, active: 7, suspended: 0, passed: 1, deleted: 0 },
-        deathVerification: {
-          pending: 0,
-          safeguardActive: 0,
-          readyForReview: 2,
-        },
-        queues: { failed: 3 },
+    const NOW = new Date('2026-10-30T12:00:00.000Z');
+
+    it('customers only, with a rolling 7-day window; open cases; release, email and queue counts', async () => {
+      const { service, db, security } = setup();
+      db.user.count.mockResolvedValueOnce(2);
+      const d = await service.dashboard(NOW);
+      expect(d).toEqual({
+        generatedAt: '2026-10-30T12:00:00.000Z',
+        customers: { total: 8, active: 7, suspended: 0, passed: 1, deleted: 0, newLast7Days: 2 },
+        deathVerification: { pending: 0, safeguardActive: 0, readyForReview: 2 },
+        releases: { pastDue: 1 },
+        releaseEmails: { retrying: 4, failed: 1 },
+        queues: { waiting: 2, active: 1, delayed: 4, failed: 3 },
+        deadLetters: { open: 5 },
+        security: { adminMfaFailuresLast7Days: 3 },
+        // The System Health snapshot's statuses, unchanged.
+        services: { database: 'ok', redis: 'ok', worker: 'missing', malwareScanner: 'ok' },
       });
-      queues.failedTotal.mockResolvedValueOnce(null);
-      expect((await service.dashboard()).queues).toEqual({ failed: null });
+      // Customers only: admins are never counted as customers.
+      expect(db.user.groupBy).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { role: 'CUSTOMER' } }),
+      );
+      // Exactly 168 hours back from the server's now (UTC instants).
+      expect(db.user.count).toHaveBeenCalledWith({
+        where: { role: 'CUSTOMER', createdAt: { gte: new Date('2026-10-23T12:00:00.000Z') } },
+      });
+      // Past due = Messages matching the shared definition the Releases filter uses.
+      expect(db.message.count).toHaveBeenCalledWith({ where: pastDueWhere(NOW) });
+      // Retrying = a failed attempt still pending; failed = given up.
+      expect(db.releaseNotification.count).toHaveBeenCalledWith({
+        where: { status: 'PENDING', attemptCount: { gt: 0 } },
+      });
+      expect(db.releaseNotification.count).toHaveBeenCalledWith({ where: { status: 'FAILED' } });
+      expect(db.deadLetterJob.count).toHaveBeenCalledWith({ where: { status: 'OPEN' } });
+      // Same rolling 7 days, through Security Activity's shared definition.
+      expect(security.mfaFailuresSince).toHaveBeenCalledWith(new Date('2026-10-23T12:00:00.000Z'));
+    });
+
+    it('returns counts only: no emails, names, ids or content', async () => {
+      const { service } = setup();
+      const body = JSON.stringify(await service.dashboard(NOW));
+      expect(body).not.toMatch(/@|"email"|firstName|lastName|textContent|"note"|"id"|[Tt]oken|[Uu]rl|payload/);
+    });
+
+    it('each source fails on its own: null (not 0) and the rest still shown', async () => {
+      const { service, db, queues, health, security } = setup();
+      queues.totals.mockResolvedValueOnce(null);
+      security.mfaFailuresSince.mockRejectedValueOnce(new Error('db'));
+      health.check.mockResolvedValueOnce(health.snapshot({ redis: 'timed_out', worker: 'unknown' }));
+      db.releaseNotification.count.mockRejectedValue(new Error('db'));
+      const d = await service.dashboard(NOW);
+      expect(d.queues).toBeNull();
+      expect(d.services).toMatchObject({ redis: 'timed_out', worker: 'unknown', database: 'ok' });
+      expect(d.releaseEmails).toBeNull();
+      expect(d.security).toBeNull();
+      // PostgreSQL-backed sections are unaffected by Redis.
+      expect(d.deadLetters).toEqual({ open: 5 });
+      expect(d.customers?.active).toBe(7);
+      expect(d.releases?.pastDue).toBe(1);
+
+      health.check.mockResolvedValueOnce(health.snapshot({ database: 'failed' }));
+      db.user.groupBy.mockRejectedValueOnce(new Error('db down'));
+      const e = await service.dashboard(NOW);
+      expect(e.services.database).toBe('failed');
+      expect(e.customers).toBeNull();
+      expect(e.deathVerification).toEqual({ pending: 0, safeguardActive: 0, readyForReview: 2 });
+    });
+
+    it('a valid zero stays zero', async () => {
+      const { service, db, queues } = setup();
+      db.user.groupBy.mockResolvedValueOnce([]);
+      db.user.count.mockResolvedValueOnce(0);
+      db.deadLetterJob.count.mockResolvedValueOnce(0);
+      queues.totals.mockResolvedValueOnce({ waiting: 0, active: 0, delayed: 0, failed: 0 });
+      const d = await service.dashboard(NOW);
+      expect(d.customers).toEqual({ total: 0, active: 0, suspended: 0, passed: 0, deleted: 0, newLast7Days: 0 });
+      expect(d.deadLetters).toEqual({ open: 0 });
+      expect(d.queues).toEqual({ waiting: 0, active: 0, delayed: 0, failed: 0 });
     });
   });
 });

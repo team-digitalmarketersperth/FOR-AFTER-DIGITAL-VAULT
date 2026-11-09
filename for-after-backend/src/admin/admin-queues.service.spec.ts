@@ -90,7 +90,8 @@ describe('AdminQueuesService', () => {
       failed: 1,
       completed: 25,
     });
-    expect(await service.failedTotal()).toBe(1);
+    // Summed over the three allowlisted queues; only the release queue has a failed job.
+    expect(await service.totals()).toEqual({ waiting: 3, active: 0, delayed: 9, failed: 1 });
   });
 
   it('rejects any queue name outside the allowlist', async () => {
@@ -191,6 +192,6 @@ describe('AdminQueuesService', () => {
     expect(
       JSON.stringify((err as ServiceUnavailableException).getResponse()),
     ).not.toContain('s3cr3t');
-    expect(await service.failedTotal()).toBeNull();
+    expect(await service.totals()).toBeNull();
   });
 });

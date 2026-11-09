@@ -287,11 +287,40 @@ export class AdminQueuesService {
     }
   }
 
-  /** Total failed jobs, or null when Redis cannot be read (never a fake 0). */
-  async failedTotal(): Promise<number | null> {
+  /** Allowlisted queues summed; null when Redis cannot be read (not zero). */
+  async totals(): Promise<Record<
+    'waiting' | 'active' | 'delayed' | 'failed',
+    number
+  > | null> {
     try {
       const summary = await this.summary();
-      return summary.reduce((sum, q) => sum + q.failed, 0);
+      const sum = (k: 'waiting' | 'active' | 'delayed' | 'failed') =>
+        summary.reduce((n, q) => n + q[k], 0);
+      return {
+        waiting: sum('waiting'),
+        active: sum('active'),
+        delayed: sum('delayed'),
+        failed: sum('failed'),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * One allowlisted job's BullMQ state and attempt counts, read-only (never a
+   * payload). 'missing' = no such job in Redis (completed and trimmed, or never
+   * queued); null = Redis could not be read.
+   */
+  async jobState(name: string, jobId: string) {
+    try {
+      const job = await withTimeout(this.get(name).getJob(jobId));
+      if (!job) return { state: 'missing' as const, attemptsMade: null, maxAttempts: null };
+      return {
+        state: await withTimeout(job.getState()),
+        attemptsMade: job.attemptsMade,
+        maxAttempts: job.opts.attempts ?? 1,
+      };
     } catch {
       return null;
     }
