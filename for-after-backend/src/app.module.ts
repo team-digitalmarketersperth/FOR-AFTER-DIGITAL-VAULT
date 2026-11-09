@@ -11,6 +11,10 @@ import { MessageSchedulesModule } from './message-schedules/message-schedules.mo
 import { MessagesModule } from './messages/messages.module.js';
 import { MyStoryModule } from './my-story/my-story.module.js';
 import { MyWishesModule } from './my-wishes/my-wishes.module.js';
+import { AnnouncementsModule } from './announcements/announcements.module.js';
+import { CommunicationsModule } from './communications/communications.module.js';
+import { SupportModule } from './support/support.module.js';
+import { BillingModule } from './billing/billing.module.js';
 import { ActivityModule } from './activity/activity.module.js';
 import { AssistantModule } from './assistant/assistant.module.js';
 import { DraftRecoveryModule } from './draft-recovery/draft-recovery.module.js';
@@ -43,6 +47,10 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
     MemoryVaultModule,
     MyStoryModule,
     MyWishesModule,
+    SupportModule,
+    AnnouncementsModule,
+    CommunicationsModule,
+    BillingModule,
     ReadinessModule,
     ActivityModule,
     DraftRecoveryModule,
