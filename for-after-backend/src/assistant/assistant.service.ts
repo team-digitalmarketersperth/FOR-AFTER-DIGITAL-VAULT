@@ -15,6 +15,7 @@ import {
   PROMPT_NOT_FOUND,
 } from '../my-story/my-story.prompts.js';
 import { RedisService } from '../redis/redis.service.js';
+import { AssistantMetrics, type AttemptResult, type RequestOutcome, type Usage } from './assistant-metrics.js';
 
 export const ASSISTANT_PAGES = [
   'dashboard',
@@ -79,7 +80,7 @@ const GUIDE: Record<AssistantPage, [title: string, facts: string]> = {
   ],
   'my-wishes': [
     'My Wishes',
-    'My Wishes records preferences (for example about a ceremony) for the people left behind. Each wish is a question answered in your own words and saved with "Save answer"; "Help me write" opens this companion for that answer. It is not a will or a legal document.',
+    'My Wishes records preferences (for example about a ceremony) for the people left behind. Each wish is a question answered in your own words and saved with "Save answer"; "Help me write" opens this companion for that answer. Songs for the funeral go under "Music I’d like remembered" on the My Wishes page ("Add a song"): only a song title is needed (there is no artist field); a YouTube or Spotify link, when to play it and a note are optional, and no music account is connected. Songs are private like every wish: saving one sends nothing to anyone, and no one else can see them. It is not a will or a legal document.',
   ],
   account: [
     'Account settings',
@@ -202,8 +203,20 @@ export const BUSY = 'The assistant is busy. Please try again in a minute.';
 export const FAILED = 'The assistant couldn’t reply. Please try again.';
 
 type Attempt =
-  | { ok: true; content: string; finish: string; tokens?: number }
-  | { ok: false; category: string; retryAfterMs?: number; status?: number };
+  | { ok: true; content: string; finish: string; usage: Usage }
+  | {
+      ok: false;
+      category: Exclude<AttemptResult, 'ok'>;
+      retryAfterMs?: number;
+      status?: number;
+      /** The budget was already spent: nothing was sent to the provider. */
+      notSent?: true;
+    };
+
+// The AI Operations outcome of a thrown error, set where it is thrown (HTTP unchanged).
+const outcomes = new WeakMap<object, RequestOutcome>();
+const tag = <E extends object>(error: E, outcome: RequestOutcome) => (outcomes.set(error, outcome), error);
+const num = (v: unknown) => (typeof v === 'number' ? v : undefined);
 
 /**
  * The For After companion's replies, through Groq's OpenAI-compatible chat
@@ -223,6 +236,7 @@ export class AssistantService {
   constructor(
     config: ConfigService,
     private readonly redis: RedisService,
+    private readonly metrics: AssistantMetrics,
   ) {
     this.key = config.get<string>('GROQ_API_KEY')?.trim() ?? '';
     this.model = config.get<string>('GROQ_MODEL')?.trim() || DEFAULT_GROQ_MODEL;
@@ -233,39 +247,63 @@ export class AssistantService {
     this.concurrent = n('ASSISTANT_MAX_CONCURRENT', 3);
   }
 
+  /** For AI Operations: whether a key is set (never its value), the model and the application limits. */
+  get settings() {
+    return {
+      configured: !!this.key,
+      provider: 'Groq',
+      model: this.model,
+      perUserHour: this.perUserHour,
+      globalAttemptsPerMinute: this.perMinute,
+      maxConcurrent: this.concurrent,
+      budgetMs: BUDGET_MS,
+      maxAttempts: 2,
+      maxCompletionTokens: LIMITS.maxTokens,
+    };
+  }
+
   async reply(
     userId: string,
     req: AssistantRequest,
     signal?: AbortSignal,
   ): Promise<AssistantReply> {
+    // AI Operations counts from here: validated requests only (the 400s above are not counted).
     const messages = this.build(req);
-    if (!this.key) throw new ServiceUnavailableException(UNAVAILABLE);
+    const t0 = performance.now();
     const id = randomUUID();
     const started = Date.now();
-    let outcome = 'error';
+    let outcome: RequestOutcome = 'unknown';
     let tokens: number | undefined;
-    await this.limit(
-      `for_after:assistant:user:${userId}`,
-      this.perUserHour,
-      3_600_000,
-    );
-    await this.reserve(id);
+    let reserved = false;
     try {
-      const result = await this.call(messages, started, signal);
-      tokens = result.tokens;
-      outcome = result.finish === 'length' ? 'truncated' : 'ok';
-      const out = readMarkers(result.content, req, result.finish === 'length');
+      if (!this.key)
+        throw tag(new ServiceUnavailableException(UNAVAILABLE), 'not_configured');
+      await this.limit(
+        `for_after:assistant:user:${userId}`,
+        this.perUserHour,
+        3_600_000,
+        'user_limit',
+      );
+      await this.reserve(id);
+      reserved = true;
+      const result = await this.call(messages, started, req, signal);
+      tokens = result.usage.total;
+      const truncated = result.finish === 'length';
+      const out = readMarkers(result.content, req, truncated);
       // Nothing but markers came back: nothing to show.
-      if (!out.reply) throw new BadGatewayException(FAILED);
+      if (!out.reply) throw tag(new BadGatewayException(FAILED), 'empty_reply');
+      outcome = truncated ? 'reply_truncated' : 'reply';
       return out;
     } catch (error) {
-      outcome =
-        error instanceof HttpException ? `http_${error.getStatus()}` : 'error';
+      outcome = (error instanceof Object && outcomes.get(error)) || 'unknown';
       throw error;
     } finally {
-      await this.release(id);
+      if (reserved) await this.release(id);
+      const ms = performance.now() - t0;
+      // Exactly one record per request; it never throws or delays the reply.
+      void this.metrics.request(req.page, req.action, outcome, ms);
       this.logger.log(
-        `assistant_reply id=${id.slice(0, 8)} page=${req.page} action=${req.action} outcome=${outcome} ms=${Date.now() - started}${tokens ? ` tokens=${tokens}` : ''}`,
+        `assistant_reply id=${id.slice(0, 8)} page=${req.page} action=${req.action} outcome=${outcome} ms=${Math.round(ms)}${tokens ? ` tokens=${tokens}` : ''}`,
       );
     }
   }
@@ -336,16 +374,28 @@ export class AssistantService {
   private async call(
     messages: { role: string; content: string }[],
     started: number,
+    req: Pick<AssistantRequest, 'page' | 'action'>,
     signal?: AbortSignal,
   ) {
     // At most one retry, only for transient failures, inside the same budget; every attempt counts app-wide.
     for (let attempt = 1; ; attempt++) {
-      await this.limit('for_after:assistant:global', this.perMinute, 60_000);
+      await this.limit('for_after:assistant:global', this.perMinute, 60_000, 'global_limit');
+      const a0 = performance.now();
       const result = await this.attempt(
         messages,
         BUDGET_MS - (Date.now() - started),
         signal,
       );
+      if (result.ok || !result.notSent) {
+        void this.metrics.attempt(
+          req.page,
+          req.action,
+          result.ok ? 'ok' : result.category,
+          performance.now() - a0,
+          attempt > 1,
+          result.ok ? result.usage : undefined,
+        );
+      }
       if (result.ok) return result;
       const left = BUDGET_MS - (Date.now() - started);
       const wait = result.retryAfterMs ?? 500;
@@ -361,10 +411,13 @@ export class AssistantService {
         `assistant_provider_failed category=${result.category}${result.status ? ` status=${result.status}` : ''}`,
       );
       if (result.category === 'provider_429')
-        throw new HttpException(BUSY, HttpStatus.TOO_MANY_REQUESTS);
+        throw tag(new HttpException(BUSY, HttpStatus.TOO_MANY_REQUESTS), 'provider_rate_limited');
       if (['provider_auth', 'provider_request'].includes(result.category))
-        throw new ServiceUnavailableException(UNAVAILABLE);
-      throw new BadGatewayException(FAILED);
+        throw tag(new ServiceUnavailableException(UNAVAILABLE), 'provider_config');
+      throw tag(
+        new BadGatewayException(FAILED),
+        result.category === 'timeout' || result.category === 'cancelled' ? result.category : 'provider_failure',
+      );
     }
   }
 
@@ -373,7 +426,7 @@ export class AssistantService {
     budgetMs: number,
     signal?: AbortSignal,
   ): Promise<Attempt> {
-    if (budgetMs < 1_000) return { ok: false, category: 'timeout' };
+    if (budgetMs < 1_000) return { ok: false, category: 'timeout', notSent: true };
     let res: Response;
     try {
       res = await fetch(GROQ_URL, {
@@ -426,7 +479,7 @@ export class AssistantService {
     }
     const body = (await res.json().catch(() => null)) as {
       choices?: { message?: { content?: unknown }; finish_reason?: unknown }[];
-      usage?: { total_tokens?: unknown };
+      usage?: { prompt_tokens?: unknown; completion_tokens?: unknown; total_tokens?: unknown };
     } | null;
     const choice = body?.choices?.[0];
     const content =
@@ -434,18 +487,22 @@ export class AssistantService {
         ? choice.message.content.trim()
         : '';
     if (!content) return { ok: false, category: 'malformed' };
-    const tokens = body?.usage?.total_tokens;
     return {
       ok: true,
       content,
       finish:
         typeof choice?.finish_reason === 'string' ? choice.finish_reason : '',
-      tokens: typeof tokens === 'number' ? tokens : undefined,
+      // As the provider reported them; a missing value stays unknown.
+      usage: {
+        input: num(body?.usage?.prompt_tokens),
+        output: num(body?.usage?.completion_tokens),
+        total: num(body?.usage?.total_tokens),
+      },
     };
   }
 
   /** Fixed-window counter in the shared Redis (every API instance); fails closed. */
-  private async limit(key: string, max: number, windowMs: number) {
+  private async limit(key: string, max: number, windowMs: number, reached: RequestOutcome) {
     let hits: number;
     try {
       [hits] = (await this.redis.client
@@ -454,9 +511,9 @@ export class AssistantService {
         .pExpire(key, windowMs, 'NX')
         .exec()) as unknown as [number];
     } catch {
-      throw new ServiceUnavailableException(UNAVAILABLE);
+      throw tag(new ServiceUnavailableException(UNAVAILABLE), 'limits_unavailable');
     }
-    if (hits > max) throw new HttpException(BUSY, HttpStatus.TOO_MANY_REQUESTS);
+    if (hits > max) throw tag(new HttpException(BUSY, HttpStatus.TOO_MANY_REQUESTS), reached);
   }
 
   // App-wide in-flight cap: a sorted set of request ids scored by start time,
@@ -473,11 +530,11 @@ export class AssistantService {
         .zCard(this.inflight)
         .exec()) as unknown as [number, number, number];
     } catch {
-      throw new ServiceUnavailableException(UNAVAILABLE);
+      throw tag(new ServiceUnavailableException(UNAVAILABLE), 'limits_unavailable');
     }
     if (count > this.concurrent) {
       await this.release(id);
-      throw new HttpException(BUSY, HttpStatus.TOO_MANY_REQUESTS);
+      throw tag(new HttpException(BUSY, HttpStatus.TOO_MANY_REQUESTS), 'concurrency_limit');
     }
   }
 

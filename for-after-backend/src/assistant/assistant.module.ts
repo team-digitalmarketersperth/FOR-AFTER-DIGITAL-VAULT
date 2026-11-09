@@ -1,3 +1,4 @@
+import { RequiresPlan } from '../billing/billing-access.js';
 import { Body, Controller, HttpCode, Module, Post, Res, UseGuards } from '@nestjs/common';
 import { ApiCookieAuth, ApiTags } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
@@ -18,6 +19,7 @@ import { SessionAuthGuard } from '../auth/guards/session-auth.guard.js';
 import { AUTH } from '../config/swagger.js';
 import { PROMPT_KEY_PATTERN } from '../my-story/my-story.prompts.js';
 import { UsersModule } from '../users/users.module.js';
+import { AssistantMetrics } from './assistant-metrics.js';
 import type { SafeUser } from '../users/users.service.js';
 import {
   ASSISTANT_ACTIONS,
@@ -78,6 +80,7 @@ class AssistantReplyDto {
 @ApiCookieAuth(AUTH.customer)
 @Controller('assistant')
 @UseGuards(SessionAuthGuard, CustomerGuard)
+@RequiresPlan()
 export class AssistantController {
   constructor(private readonly assistant: AssistantService) {}
 
@@ -97,10 +100,12 @@ export class AssistantController {
   }
 }
 
-// UsersModule backs SessionAuthGuard; Redis is global.
+// UsersModule backs SessionAuthGuard; Redis is global. Exported for the
+// admin AI Operations page (settings + aggregates only).
 @Module({
   imports: [UsersModule],
   controllers: [AssistantController],
-  providers: [AssistantService],
+  providers: [AssistantService, AssistantMetrics],
+  exports: [AssistantService, AssistantMetrics],
 })
 export class AssistantModule {}

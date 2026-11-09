@@ -104,7 +104,8 @@ is collected for training.
 - The browser closing the request (Stop, closing the panel, leaving) aborts the Groq call.
 - In-flight cap: a Redis sorted set of request ids; released on success, error and cancellation; a crashed request
   stops counting after the budget + 5 s.
-- Logs: `assistant_reply id=<8 chars> page action outcome ms tokens` and `assistant_provider_failed category status`.
+- Logs: `assistant_reply id=<8 chars> page action outcome ms tokens` (outcome is one of the controlled values in §8;
+  `ms` is now measured with a monotonic clock) and `assistant_provider_failed category status`.
   Never the key, prompts, included text, replies or provider error bodies. Observe tracing (when its keys are set)
   records outbound calls as `POST api.groq.com` spans; request bodies are not captured (Observe's body capture is off).
 
@@ -191,3 +192,65 @@ still works); no undo for a placed draft beyond the editor's normal editing.
   ~2,000 tokens per request, five requests in 15 s hit the provider's per-minute limit (`429`), so the default
   `ASSISTANT_GLOBAL_LIMIT_PER_MINUTE=20` is too high for that account.
 - A production key per environment, held in the host's secret store.
+
+## 8. AI operations monitoring (admin, Step 8)
+
+Admin → Operations → AI operations (`/admin/system/ai`) over `GET /admin/system/ai?window=24h|7d&area=&action=`
+(`SessionAuthGuard` + `AdminGuard`: admin role **and** completed MFA; `no-store`). Read-only: no key, model, prompt or
+limit can be changed, no conversation can be seen, and opening or refreshing it never calls Groq.
+
+**Recorder** (`src/assistant/assistant-metrics.ts`, `AssistantMetrics`). Shared Redis, namespace `for_after:ai_metrics:`
+(apart from the limit keys `for_after:assistant:*`): one hash per UTC hour (`for_after:ai_metrics:h:<hour>`), expiring
+after **192 h (8 days)**, so the 7-day window is complete; `…:last` (time of the last reply / last provider failure)
+and `…:since` (first record ever, set once). `HINCRBY` on allowlisted fields only: dimensions are the validated page and
+action plus a controlled outcome/result. Never text, user ids, request ids, URLs or error strings. Collection began
+when this code was deployed; nothing is back-filled. No database rows, no log parsing.
+
+**Capture point and counting.**
+- A **request** is recorded once, in the request's single `finally`, after validation (`build()`): requests refused as
+  invalid (400, 404 prompt key) are **not** counted; guard rejections (401/403) never reach it.
+- An **attempt** is recorded once per outbound Groq call (a retry is a second attempt, flagged `retry`, not a second
+  request). Limit refusals and "budget already spent" make no attempt.
+
+| Request outcome | Meaning (HTTP to the Customer, unchanged) |
+|---|---|
+| `reply` / `reply_truncated` | a reply returned (cut at 700 completion tokens) |
+| `empty_reply` | the provider answered with nothing usable (502) |
+| `not_configured` | no `GROQ_API_KEY` (503) |
+| `user_limit`, `global_limit`, `concurrency_limit` | application limits (429) |
+| `limits_unavailable` | the limits' Redis failed, so the request was refused (503, fail closed) |
+| `provider_rate_limited` | Groq 429 after any retry (429) |
+| `provider_config` | Groq refused the key or request: 401/403/other 4xx (503) |
+| `provider_failure` | Groq 5xx, network error or malformed reply (502) |
+| `timeout` | the 25 s budget ran out (502) |
+| `cancelled` | the browser closed the request (not a provider failure) |
+| `unknown` | anything else; never counted as success |
+
+Attempt results: `ok`, `provider_429`, `provider_auth`, `provider_request`, `provider_5xx`, `network`, `malformed`,
+`timeout`, `cancelled`.
+
+**Latency**: `performance.now()` (monotonic). Requests: from the capture point to the end of `finally` work, all
+outcomes; "Replies" includes only `reply`/`reply_truncated`. Attempts: one Groq call each. Stored as sums and counts;
+shown as `sum / count` over every bucket in the window (weighted across replicas and hours) with the sample count.
+**No percentiles** (no histogram is kept).
+
+**Tokens**: Groq's `usage.prompt_tokens`, `completion_tokens`, `total_tokens` from answered attempts, retries included.
+An attempt counts as "usage reported" only when all three are numbers; every other attempt (failed, cancelled, or
+missing usage) is "usage unknown", shown as such and never as zero. No estimate from text length.
+
+**Windows**: "Last 24 hours" = the 24 most recent UTC hour buckets, "Last 7 days" = 168; the oldest bucket starts at
+the shown `from`, the newest (current hour) is partial. If recording began after `from`, the page says coverage is
+partial.
+
+**Configuration vs. observation**: the page shows whether a key is set (never its value or anything derived from it),
+the model and the application limits, separately from the last observed reply and the last provider failure. A
+configured key, an old success or no traffic says nothing about current availability.
+
+**Failure behaviour**: recorder calls are fire-and-forget and catch everything (`assistant_metrics_failed (<error
+class>)`, logged once per failure spell, then `assistant_metrics_recovered`). Replies, limits, concurrency-slot release
+and cancellation are unaffected (unit-tested). If the admin read fails the page shows "Monitoring unavailable",
+never zeros.
+
+**Not covered**: cost (no verified pricing is configured; "Cost estimate unavailable"), provider billing and quota,
+reply quality, per-customer analytics (by design), anything before deployment, and gaps after Redis outages or data
+loss. Redis counts are not billing records. Verified with Groq mocked only.

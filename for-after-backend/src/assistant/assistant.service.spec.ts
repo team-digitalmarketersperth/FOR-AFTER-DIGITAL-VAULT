@@ -1,6 +1,7 @@
 import { HttpException, Logger } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import type { RedisService } from '../redis/redis.service.js';
+import type { AssistantMetrics } from './assistant-metrics.js';
 import { AssistantService, DEFAULT_GROQ_MODEL, LIMITS, readMarkers, type AssistantRequest } from './assistant.service.js';
 
 // Just the Redis commands the assistant uses, in memory (no TTL clock needed here).
@@ -53,13 +54,18 @@ const story: AssistantRequest = {
 
 const setup = (env?: Record<string, string>) => {
   const redis = memoryRedis();
-  const service = new AssistantService(config(env), { client: redis.client } as unknown as RedisService);
+  const metrics = { request: vi.fn(async () => undefined), attempt: vi.fn(async () => undefined) };
+  const service = new AssistantService(
+    config(env),
+    { client: redis.client } as unknown as RedisService,
+    metrics as unknown as AssistantMetrics,
+  );
   const fetch = vi.fn<typeof globalThis.fetch>();
   vi.stubGlobal('fetch', fetch);
   const logs: string[] = [];
   vi.spyOn(Logger.prototype, 'log').mockImplementation((m: unknown) => void logs.push(String(m)));
   vi.spyOn(Logger.prototype, 'warn').mockImplementation((m: unknown) => void logs.push(String(m)));
-  return { redis, service, fetch, logs };
+  return { redis, service, fetch, logs, metrics };
 };
 const sent = (fetch: ReturnType<typeof vi.fn>) => JSON.parse((fetch.mock.calls[0][1] as RequestInit).body as string);
 const statusOf = (p: Promise<unknown>) =>
@@ -93,7 +99,7 @@ describe('AssistantService (Groq, mocked)', () => {
     expect(last).toContain('They are answering this My Story question: "What is one of your earliest memories?"');
     expect(last).toContain('<source>\nSynthetic answer about a red bicycle.');
     // Logs: metadata only, never the text, key or reply.
-    expect(logs.join('\n')).toMatch(/assistant_reply id=\w{8} page=my-story action=improve outcome=ok ms=\d+ tokens=42/);
+    expect(logs.join('\n')).toMatch(/assistant_reply id=\w{8} page=my-story action=improve outcome=reply ms=\d+ tokens=42/);
     expect(logs.join('\n')).not.toMatch(/bicycle|test-key|gentle/);
     expect(redis.inflight()).toBe(0);
   });
@@ -282,5 +288,101 @@ describe('AssistantService (Groq, mocked)', () => {
 
     redis.client.fail = true;
     expect(await statusOf(service.reply('erin', ask))).toBe(503);
+  });
+});
+
+describe('AI Operations recording (metadata only)', () => {
+  const okUsage = (usage: object) =>
+    new Response(JSON.stringify({ choices: [{ message: { content: 'Fine.' }, finish_reason: 'stop' }], usage }), { status: 200 });
+  const outcomesOf = (m: ReturnType<typeof setup>['metrics']) => m.request.mock.calls.map((c: unknown[]) => c[2]);
+  const attemptsOf = (m: ReturnType<typeof setup>['metrics']) =>
+    m.attempt.mock.calls.map((c: unknown[]) => ({ result: c[2], retry: c[4], usage: c[5] }));
+
+  it('one request record and one record per provider attempt; a retry is an attempt, not a request', async () => {
+    const { service, fetch, metrics } = setup();
+    fetch.mockResolvedValueOnce(status(503)).mockResolvedValueOnce(okUsage({ prompt_tokens: 30, completion_tokens: 12, total_tokens: 42 }));
+    await service.reply('u', ask);
+    expect(outcomesOf(metrics)).toEqual(['reply']);
+    expect(attemptsOf(metrics)).toEqual([
+      { result: 'provider_5xx', retry: false, usage: undefined },
+      { result: 'ok', retry: true, usage: { input: 30, output: 12, total: 42 } },
+    ]);
+    const [page, action, , ms] = metrics.request.mock.calls[0] as unknown[];
+    expect([page, action]).toEqual(['dashboard', 'ask']);
+    expect(ms).toBeGreaterThanOrEqual(0);
+  });
+
+  it('usage the provider did not report stays unknown, never zero', async () => {
+    const { service, fetch, metrics } = setup();
+    fetch.mockResolvedValue(okUsage({ total_tokens: 9 }));
+    await service.reply('u', ask);
+    expect(attemptsOf(metrics)[0]!.usage).toEqual({ input: undefined, output: undefined, total: 9 });
+  });
+
+  it.each([
+    ['timeout', () => Promise.reject(Object.assign(new Error('t'), { name: 'TimeoutError' })), 'timeout', ['timeout']],
+    ['provider 429 (long retry-after)', () => Promise.resolve(status(429, { 'retry-after': '30' })), 'provider_rate_limited', ['provider_429']],
+    ['provider 401', () => Promise.resolve(status(401)), 'provider_config', ['provider_auth']],
+    ['malformed', () => Promise.resolve(new Response('<html>', { status: 200 })), 'provider_failure', ['malformed']],
+    ['markers only', () => Promise.resolve(ok('[OPEN: people]')), 'empty_reply', ['ok']],
+    ['truncated', () => Promise.resolve(ok('Half', 'length')), 'reply_truncated', ['ok']],
+  ])('%s → %s', async (_, response, outcome, attempts) => {
+    const { service, fetch, metrics } = setup();
+    fetch.mockImplementation(response as () => Promise<Response>);
+    await service.reply('u', ask).catch(() => undefined);
+    expect(outcomesOf(metrics)).toEqual([outcome]);
+    expect(attemptsOf(metrics).map((a) => a.result)).toEqual(attempts);
+  });
+
+  it('cancellation is its own outcome, not a provider failure', async () => {
+    const { service, fetch, metrics, redis } = setup();
+    fetch.mockImplementation((_, init) => new Promise((_, reject) => init!.signal!.addEventListener('abort', () => reject(Object.assign(new Error('a'), { name: 'AbortError' })))));
+    const gone = new AbortController();
+    const pending = service.reply('u', ask, gone.signal).catch(() => undefined);
+    await vi.waitFor(() => expect(redis.inflight()).toBe(1));
+    gone.abort();
+    await pending;
+    expect(outcomesOf(metrics)).toEqual(['cancelled']);
+    expect(attemptsOf(metrics).map((a) => a.result)).toEqual(['cancelled']);
+  });
+
+  it('application limits and configuration: no provider attempt recorded', async () => {
+    const none = setup({ GROQ_API_KEY: '' });
+    await none.service.reply('u', ask).catch(() => undefined);
+    expect(outcomesOf(none.metrics)).toEqual(['not_configured']);
+    expect(none.metrics.attempt).not.toHaveBeenCalled();
+
+    const { service, fetch, metrics, redis } = setup({ ASSISTANT_USER_LIMIT_PER_HOUR: '1', ASSISTANT_GLOBAL_LIMIT_PER_MINUTE: '1' });
+    fetch.mockImplementation(async () => ok());
+    await service.reply('alice', ask);
+    await service.reply('alice', ask).catch(() => undefined); // per-Customer limit
+    await service.reply('bob', ask).catch(() => undefined); // app-wide attempt limit
+    redis.client.fail = true;
+    await service.reply('carol', ask).catch(() => undefined);
+    expect(outcomesOf(metrics)).toEqual(['reply', 'user_limit', 'global_limit', 'limits_unavailable']);
+    expect(metrics.attempt).toHaveBeenCalledTimes(1);
+  });
+
+  it('400s are not counted (before the capture point)', async () => {
+    const { service, metrics } = setup();
+    await service.reply('u', { ...ask, action: 'improve' }).catch(() => undefined);
+    expect(metrics.request).not.toHaveBeenCalled();
+  });
+
+  it('a metrics failure changes nothing: same reply, slot released, no rejection', async () => {
+    const { service, fetch, metrics, redis } = setup();
+    metrics.request.mockImplementation(() => Promise.reject(new Error('should never be awaited')).catch(() => undefined));
+    metrics.attempt.mockImplementation(() => Promise.reject(new Error('x')).catch(() => undefined));
+    fetch.mockResolvedValue(ok('Still fine.'));
+    await expect(service.reply('u', ask)).resolves.toMatchObject({ reply: 'Still fine.' });
+    expect(redis.inflight()).toBe(0);
+  });
+
+  it('nothing private reaches the recorder: only page, action, a controlled outcome and numbers', async () => {
+    const { service, fetch, metrics } = setup();
+    fetch.mockResolvedValue(ok('Private reply text'));
+    await service.reply('user-123', story);
+    const recorded = JSON.stringify([metrics.request.mock.calls, metrics.attempt.mock.calls]);
+    expect(recorded).not.toMatch(/user-123|red bicycle|Private reply|Earlier turn|childhood|test-key/);
   });
 });
