@@ -95,6 +95,14 @@ export class AuthService {
     }
   }
 
+  /** An invited ADMIN's first password; then the normal admin sign-in (TOTP setup). */
+  async acceptAdminInvitation(token: string, newPassword: string, meta: { ip?: string; userAgent?: string }): Promise<void> {
+    const hash = await argon2id(newPassword);
+    if (!(await this.tokens.acceptAdminInvitation(token, hash, meta))) {
+      throw new BadRequestException(INVALID_LINK);
+    }
+  }
+
   async validateLogin(dto: LoginDto): Promise<SafeUser> {
     const found = await this.users.findByEmail(dto.email);
     const valid = await argon2.verify(

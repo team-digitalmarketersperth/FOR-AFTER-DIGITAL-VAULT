@@ -7,6 +7,7 @@ import { RedisService } from '../redis/redis.service.js';
 import { RedisThrottlerStorage } from '../redis/redis-throttler.storage.js';
 import { UsersModule } from '../users/users.module.js';
 import { AuthTokensService } from './auth-tokens.service.js';
+import { AdminAccountController } from './admin-account.controller.js';
 import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 
@@ -26,7 +27,9 @@ import { AuthService } from './auth.service.js';
       }),
     }),
   ],
-  controllers: [AuthController],
+  controllers: [AuthController, AdminAccountController],
   providers: [AuthService, AuthTokensService],
+  // Admin access (§22) issues admin invitations through the same token service.
+  exports: [AuthTokensService],
 })
 export class AuthModule {}

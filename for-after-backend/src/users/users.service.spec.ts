@@ -23,6 +23,7 @@ const setup = () => {
   return {
     user,
     auditLog,
+    customerActivity,
     service: new UsersService(prisma as unknown as PrismaService),
   };
 };
@@ -60,6 +61,16 @@ describe('UsersService', () => {
     expect(args.where).toEqual({ id: 'id-1' });
     expect(args.data).toEqual({ firstName: 'Lisa', lastName: undefined });
     expect(args.select).not.toHaveProperty('passwordHash');
+  });
+
+  it('a Customer rename is recorded in their Recent changes; an admin renaming themselves is not', async () => {
+    for (const [role, rows] of [['CUSTOMER', 1], ['ADMIN', 0], ['SUPER_ADMIN', 0]] as const) {
+      const { user, customerActivity, service } = setup();
+      user.findUniqueOrThrow.mockResolvedValue({ firstName: 'Old', lastName: 'Name', role });
+      user.update.mockResolvedValue({ id: 'id-1', firstName: 'New', lastName: 'Name' });
+      await service.updateProfile('id-1', { firstName: 'New' });
+      expect(customerActivity.create).toHaveBeenCalledTimes(rows);
+    }
   });
 
   it('updatePassword stores hash + passwordChangedAt and audits without secrets', async () => {

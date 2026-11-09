@@ -66,14 +66,15 @@ export class UsersService {
     return this.prisma.$transaction(async (tx) => {
       const before = await tx.user.findUniqueOrThrow({
         where: { id },
-        select: { firstName: true, lastName: true },
+        select: { firstName: true, lastName: true, role: true },
       });
       const user = await tx.user.update({
         where: { id },
         data: { firstName: input.firstName, lastName: input.lastName },
         select: safeUserSelect,
       });
-      if (before.firstName !== user.firstName || before.lastName !== user.lastName) {
+      // "Recent changes" is the Customer's own history; an admin renaming themselves (admin/account) is not in it.
+      if (before.role === 'CUSTOMER' && (before.firstName !== user.firstName || before.lastName !== user.lastName)) {
         await recordActivity(tx, { userId: id, type: 'PROFILE_UPDATED' });
       }
       return user;
@@ -102,6 +103,31 @@ export class UsersService {
         subjectId: id,
       });
     });
+  }
+
+  /**
+   * An admin's own security facts for Account settings: enrolment date, unused
+   * recovery-code count, last password change and the last 5 admin sign-ins
+   * (audit log). Never the TOTP secret or code hashes.
+   */
+  async adminSecurity(id: string) {
+    const [credential, recoveryCodesRemaining, account, signIns] = await Promise.all([
+      this.prisma.adminMfaCredential.findUnique({ where: { userId: id }, select: { enabledAt: true } }),
+      this.prisma.adminMfaRecoveryCode.count({ where: { userId: id, usedAt: null } }),
+      this.prisma.user.findUniqueOrThrow({ where: { id }, select: { passwordChangedAt: true } }),
+      this.prisma.auditLog.findMany({
+        where: { actorUserId: id, eventType: AuditEventType.ADMIN_LOGIN },
+        orderBy: { createdAt: 'desc' },
+        take: 5,
+        select: { createdAt: true, ipPrefix: true, userAgent: true },
+      }),
+    ]);
+    return {
+      twoFactorEnabledAt: credential?.enabledAt ?? null,
+      recoveryCodesRemaining,
+      passwordChangedAt: account.passwordChangedAt,
+      signIns,
+    };
   }
 
   /** For credential checks only; callers must strip passwordHash before responding. */

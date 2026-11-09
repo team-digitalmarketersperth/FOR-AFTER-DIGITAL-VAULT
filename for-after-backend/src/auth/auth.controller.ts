@@ -116,6 +116,17 @@ export class AuthController {
     return { success: true };
   }
 
+  // Admin invitation (docs/admin.md §22): sets the invited ADMIN's first
+  // password. No session: they sign in at the admin portal and set up TOTP.
+  @Post('admin-invitation/accept')
+  @HttpCode(200)
+  @UseGuards(ThrottlerGuard)
+  @Throttle(FIVE_PER_MINUTE)
+  async acceptAdminInvitation(@Body() dto: ResetPasswordDto, @Req() req: Request): Promise<{ success: true }> {
+    await this.auth.acceptAdminInvitation(dto.token, dto.newPassword, meta(req));
+    return { success: true };
+  }
+
   /**
    * Customer: session created, user returned (unchanged since Step 2).
    * ADMIN / SUPER_ADMIN: the password only opens an MFA challenge; no session
