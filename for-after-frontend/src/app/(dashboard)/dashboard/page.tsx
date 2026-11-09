@@ -1,5 +1,6 @@
 import Image from 'next/image';
 import Link from 'next/link';
+import { DeviceSetupPrompt } from '@/components/account/device-setup';
 import { RecentChanges } from '@/components/activity/activity';
 import { NeedsAttention } from '@/components/dashboard/attention';
 import { DashboardJourney } from '@/components/dashboard/journey';
@@ -26,6 +27,8 @@ export default function DashboardPage() {
           A secure place for the things that matter most, kept for the people you love.
         </p>
       </header>
+
+      <DeviceSetupPrompt />
 
       <section
         aria-labelledby="your-for-after"
