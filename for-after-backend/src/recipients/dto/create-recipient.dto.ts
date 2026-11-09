@@ -10,11 +10,22 @@ import {
 } from 'class-validator';
 import { normalizeEmail, trim } from '../../auth/dto/register.dto.js';
 
-// Basic shape check only: stored as typed, no country-code guessing or verification.
-export const IsMobile = () =>
-  Matches(/^\+?[0-9][0-9 ()-]{5,19}$/, {
-    message: 'mobile must be a phone number, e.g. +61400000000',
+/**
+ * E.164: + country code + number, digits only, as Twilio Verify needs it.
+ * Recipient and Trusted Contact mobiles (SMS sign-in for both).
+ */
+export const E164 = /^\+[1-9]\d{6,14}$/;
+/** Spaces, dots, dashes and brackets removed. No country-code guessing. */
+export const stripPhone = (value: string) => value.replace(/[\s().-]/g, '');
+export const normalizeMobile = ({ value }: { value: unknown }) =>
+  typeof value === 'string' ? stripPhone(value) : value;
+export const IsE164Mobile = () =>
+  Matches(E164, {
+    message: 'mobile must include the country code, e.g. +61400000000',
   });
+/** For logs: +61******678. */
+export const maskMobile = (mobile: string) =>
+  `${mobile.slice(0, 3)}******${mobile.slice(-3)}`;
 
 // Only these fields are accepted; the global ValidationPipe rejects anything
 // else (ownerUserId, id, deletedAt, ...). Optional fields accept null to clear.
@@ -44,9 +55,10 @@ export class CreateRecipientDto {
   @MaxLength(254)
   email?: string | null;
 
+  // Not unique, like email. Stored as E.164 so SMS sign-in can match it.
   @IsOptional()
-  @Transform(trim)
-  @IsMobile()
+  @Transform(normalizeMobile)
+  @IsE164Mobile()
   mobile?: string | null;
 
   // Calendar date only; strict mode rejects impossible dates like 2001-02-30.

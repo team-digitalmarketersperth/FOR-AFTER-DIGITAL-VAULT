@@ -2,11 +2,11 @@
 
 | | |
 |---|---|
-| **Status** | ✅ Built in Step 11 (text answers) · notice served by the API + versioned acknowledgement (Phase 15A, 2026-10-08) · photos/recordings/videos + sharing as a separate Message after a verified death (Phase 15B, 2026-10-09) · AI help **deferred post-MVP** |
+| **Status** | ✅ Built in Step 11 (text answers) · notice served by the API (Phase 15A, 2026-10-08; informational only, no acknowledgement gate, since 2026-10-14) · photos/recordings/videos + sharing as a separate Message after a verified death (Phase 15B, 2026-10-09) · AI help **deferred post-MVP** |
 | **Who can see it** | Only the Customer: no Recipient, Trusted Contact (incl. Step 14) or admin access. People the Customer picks receive only a separate Message copy, released by the normal Message rules |
 | **Related** | [My Story](my-story.md) · [Death verification](death-verification.md) · [API](api.md) |
 
-**Contents:** [Not a legal document](#not-a-legal-document) · [Private content](#private-customer-content) ·
+**Contents:** [Songs](#songs-music-id-like-remembered-2026-10-30) · [Not a legal document](#not-a-legal-document) · [Private content](#private-customer-content) ·
 [Prompt catalogue](#prompt-catalogue) · [Answers](#answers) · [Endpoints](#endpoints) ·
 [PUT, delete and re-answer](#put-delete-and-re-answer) · [Ownership](#ownership) · [Logging](#logging-and-privacy) ·
 [Rich wishes](#rich-wishes-phase-15b) · [Sharing after death](#sharing-after-death-phase-15b) ·
@@ -34,13 +34,12 @@ of the wording has not been done** and stays an open item (`task.md` Phase 01).
 | | |
 |---|---|
 | Wording, version **1** | "My Wishes records personal preferences and guidance only. It is not a will, legal document, medical directive, financial instruction or substitute for professional advice." (exactly the Step 18 text) |
-| Source | The backend only (`MyWishesDisclaimer` in `src/my-wishes/my-wishes-disclaimer.service.ts`, code-defined, not in the database or env). The frontend renders what `GET /my-wishes/disclaimer` returns and keeps no copy; if it cannot load, the UI shows an error with retry and offers no writing |
-| Acknowledgement | **Required once per version, before creating or editing a wish.** An unticked checkbox ("I have read this notice.") and Continue on the My Wishes pages. It records that this version was shown and confirmed: it is not consent, a waiver, legal advice or a signature, and must never be described as one |
-| Enforcement | Server-side: `PUT …/response` answers **409** `Please acknowledge the current My Wishes notice before saving.` without an acknowledgement of the current version. Reading (`GET`) and deleting (`DELETE`) never need one, so a Customer can always read or remove their wishes |
-| New version | Changing a word of the notice means a new version: bump `version` with the new text. Earlier acknowledgements do not count for it (writes wait for a new one); existing wishes are never changed, hidden or deleted |
-| Record | `MyWishesDisclaimerAcknowledgement` (`userId`, `disclaimerVersion`, `acknowledgedAt`; unique per user and version; migration `my_wishes_disclaimer_acknowledgements`, additive). Kept as history, never edited. Idempotent (repeated or concurrent submits keep one row). Only the current version can be acknowledged (409 `The My Wishes notice has changed. Please read the current version.`). The body is `{ version }` only; user, time and text never come from the client |
-| Existing users | **Not backfilled**: no one is recorded as having acknowledged anything they were not shown |
-| Audit | `MY_WISHES_DISCLAIMER_ACKNOWLEDGED` once per user and version: actor id and `{ disclaimerVersion }` only; no IP, device, notice text or wish content |
+| Source | The backend only (`MyWishesDisclaimer` in `src/my-wishes/my-wishes-disclaimer.service.ts`, code-defined, not in the database or env). The frontend renders what `GET /my-wishes/disclaimer` returns and keeps no copy; if it cannot load, the UI shows an error with retry. It loads alongside the wishes and never holds them back |
+| Display | **Informational only** (product decision 2026-10-14, replacing the 15A acknowledgement gate). The notice is shown above the prompts on the list and each editor page; there is no checkbox, no "I have read this notice." and no Continue. Customers read, write, autosave, add files to and delete wishes straight away |
+| Enforcement | None: no My Wishes route (text, media upload, autosave) checks for an acknowledgement. Auth, Customer-only access, ownership, validation, media rules and sharing/release are unchanged |
+| New version | Changing a word of the notice means a new version: bump `version` with the new text. Nothing waits for it; existing wishes are never changed, hidden or deleted |
+| Historical record | `MyWishesDisclaimerAcknowledgement` (`userId`, `disclaimerVersion`, `acknowledgedAt`; unique per user and version; migration `my_wishes_disclaimer_acknowledgements`, additive) is **kept**: rows from the 15A period stay as history, never edited, and never affect access. The current UI creates none. `POST /my-wishes/disclaimer/acknowledgement` stays for older clients only (idempotent; current version only, 409 `The My Wishes notice has changed. Please read the current version.`; body `{ version }`). An acknowledgement was never consent, a waiver, legal advice or a signature |
+| Audit | The legacy route still writes `MY_WISHES_DISCLAIMER_ACKNOWLEDGED` once per user and version (actor id and `{ disclaimerVersion }` only). No Customer Activity event exists for it |
 
 The notice is still not stored per answer, and `acceptedLegalDisclaimer` or similar on a wish is rejected (400) like any
 unknown field.
@@ -112,16 +111,13 @@ All under `/api/v1`, `SessionAuthGuard` + `CustomerGuard` (no session 401; `ADMI
 | `PUT` | `/my-wishes/prompts/:promptKey/response` | 200, created / updated / restored answer |
 | `DELETE` | `/my-wishes/prompts/:promptKey/response` | 204 soft delete with its files; 404 if there is no live answer. Messages made from it stay |
 | `POST` | `/my-wishes/prompts/:promptKey/response/messages` | 201, a new independent DRAFT Message from chosen parts (Phase 15B) |
-| `POST` | `/my-wishes/prompts/:promptKey/response/media/upload-url` | 201, signed ImageKit upload (PHOTO/AUDIO/VIDEO); needs the notice acknowledged |
+| `POST` | `/my-wishes/prompts/:promptKey/response/media/upload-url` | 201, signed ImageKit upload (PHOTO/AUDIO/VIDEO) |
 | `POST` | `/my-wishes/prompts/:promptKey/response/media/:mediaAssetId/complete` | 200, verified and scanned → `READY` |
 | `GET` | `/my-wishes/prompts/:promptKey/response/media` | 200, the wish's live files (`[]` if none) |
 | `GET` | `/my-wishes/prompts/:promptKey/response/media/:mediaAssetId/access-url` | 200, short-lived signed URL (`READY` only) |
 | `DELETE` | `/my-wishes/prompts/:promptKey/response/media/:mediaAssetId` | 204, soft delete, then the file is removed |
-| `GET` | `/my-wishes/disclaimer` | 200 `{ version, text, requiresAcknowledgement, acknowledged, acknowledgedAt }` (own state only) |
-| `POST` | `/my-wishes/disclaimer/acknowledgement` | 200, same shape; body `{ version }` (current version only, idempotent) |
-
-`PUT …/response` and `…/media/upload-url` (adding a file is writing a wish) are 409 until the current notice version is
-acknowledged (Phase 15A); reading, completing an upload already authorised, deleting and creating a message never are.
+| `GET` | `/my-wishes/disclaimer` | 200 `{ version, text, requiresAcknowledgement: false, acknowledged, acknowledgedAt }` (own historical state only) |
+| `POST` | `/my-wishes/disclaimer/acknowledgement` | Legacy (older clients): 200, same shape; body `{ version }` (current version only, idempotent). Not required by anything |
 
 Prompt: `{ key, category, version, prompt, answered, response }`; `response` is null or
 `{ id, promptKey, textContent, mediaCount, createdAt, updatedAt }` (`textContent` may be null, `mediaCount` = `READY`
@@ -164,8 +160,6 @@ storage quota).
   its reconciler, which also retires stale `PENDING_UPLOAD` rows (the `myWishMediaAsset` table is in its list).
 - **Upload shell:** a file needs a wish row to belong to: upload auth creates an empty, private one when there is none (or
   restores a deleted one empty, with the current wording). It is never shown as a wish until it has content.
-- **Notice:** adding a file needs the current notice acknowledged, like saving text (the existing
-  `MyWishesDisclaimerService.assertAcknowledged`, not a second check).
 
 ## Sharing after death (Phase 15B)
 
@@ -181,7 +175,6 @@ Product decisions approved 2026-10-09 (`task.md` Phase 01):
 | Several messages | One wish can make any number of messages; different wishes can go to different people |
 | Timing | `ON_DEATH` or `AFTER_DEATH` (existing `afterDeathDays`) for after-death sharing. `FIXED_DATE`/`NOW` stay available as for any Message but are not "after-death wish release" |
 | Media | PHOTO / AUDIO / VIDEO allowed |
-| Notice | Creating a message reads a wish, so it needs no acknowledgement (Phase 15A gates writing wishes only) |
 | AI help | Deferred post-MVP (below) |
 
 ```text
@@ -214,6 +207,85 @@ released by this call.
   `/my-wishes` routes, the catalogue, the prompt key, the notice state, the original files or other wishes. The release
   email is the normal minimal one, with no wish text or files.
 
+## Songs: "Music I’d like remembered" (2026-10-30)
+
+Songs the Customer would like played at their funeral. **Where:** My Wishes page (`/my-wishes`), section "Music I’d like
+remembered", shown under the prompts on **All** and the **Music and readings** filter (there is no separate funeral-wishes
+page: all of My Wishes is the funeral-wishes area). Flow: "Add a song" → dialog → "Save song" → the song appears in the
+list. Each song is saved on its own (there is no page-level Save); a toast confirms it, Cancel/Escape keeps what is saved.
+
+**Dialog (two steps, 2026-10-30, shared by Add and Edit).** Step 1 "Your song": title (required) and link (optional),
+privacy line "Only you can see your songs. Saving won’t share them." (true: songs are owner-only), Cancel / Continue.
+Continue (or Enter) validates the title and any link and moves on; it never saves. Step 2 "Personal details": a summary of
+the title, "When to play" chips (Not set, Arrival, Reflection, Farewell, Other, as a native radio group), the Other
+detail, the personal note, Back / Save song. Back keeps every value. "Skip and save" appears only when adding with no
+optional details entered (it then sends the same payload as Save song), never when editing. One request per save (a
+double click sends one); a failed save keeps the step and every value. Header, stepper and fields scroll in one region
+(slim scoped scrollbar, `companion-scroll`) above a fixed footer; `100dvh` and safe-area limits keep it inside phone
+viewports. Focus starts on the title, moves to the step 2 heading on Continue and back to the title on Back, and returns
+to the opener on close.
+
+| Field | Rules |
+|---|---|
+| Song title | Required, plain text, not blank, max **200**, stored as written |
+| Song link | Optional, max **500** before normalisation; see below |
+| When to play it | Optional: `ARRIVAL`, `REFLECTION`, `FAREWELL`, `OTHER` (Arrival, Reflection, Farewell, Other) |
+| Other detail | Optional, max **100**, kept only with `OTHER` (cleared otherwise) |
+| Personal note | Optional, plain text, max **1,000** (why it matters, preferred version, instructions) |
+
+**No Artist field** (product decision), no album, no music-account connection, OAuth, provider credentials, audio
+upload, search API, embedded player or AI analysis. At most **50 songs** per Customer. Limits are implementation limits
+(no product decision), mirrored in the frontend schema.
+
+**Links** (`src/my-wishes/song-link.ts`, mirrored in the frontend `src/lib/song-link.ts` for early feedback; the API is
+authoritative). Parsed with the WHATWG `URL` parser, never fetched (no redirects, previews or metadata scraping): HTTPS
+only, no user/password, no port, exact hostname allowlist, and a supported path with a well-formed id. Stored in canonical
+form; tracking parameters (`si`, `feature`, `list`, ...) are dropped and a YouTube start time `t` (`90`, `90s`, `1m30s`) is kept.
+
+| Accepted | Stored as |
+|---|---|
+| `https://www.youtube.com/watch?v=<11-char id>` (also `youtube.com`, `m.youtube.com`) | `https://www.youtube.com/watch?v=<id>[&t=…]` |
+| `https://youtu.be/<id>` | `https://youtu.be/<id>[?t=…]` |
+| `https://music.youtube.com/watch?v=<id>` | `https://music.youtube.com/watch?v=<id>[&t=…]` |
+| `https://open.spotify.com/track/<22-char id>` (also `/intl-xx/track/…`) | `https://open.spotify.com/track/<id>` |
+
+Everything else is 400 `Paste a YouTube or Spotify song link (https://…).`: `http:`, `javascript:`, `data:`, `file:`,
+credentials, ports, lookalikes (`youtube.com.evil.example`), playlists, albums, channels, other sites. A valid link does
+not mean the song is still available; the UI never says it was checked, and promises no playback. "Open song" opens the
+stored link in a new tab (`target="_blank"`, `rel="noopener noreferrer"`, screen-reader text "opens YouTube/Spotify in a
+new tab"); a stored link that no longer passes the check is not rendered as a link.
+
+**Endpoints** (`MyWishSongsController`, `SessionAuthGuard` + `CustomerGuard`; admins 401/403 like every My Wishes route):
+
+| Method | Path | Result |
+|---|---|---|
+| `GET` | `/my-wishes/songs` | 200, the session user's songs in order |
+| `POST` | `/my-wishes/songs` | 201, added at the end (`{ title, link?, moment?, momentOther?, note? }`) |
+| `PATCH` | `/my-wishes/songs/:id` | 200; omitted = unchanged, `null`/blank = cleared; the title can't be cleared |
+| `DELETE` | `/my-wishes/songs/:id` | 204, removes only that song (hard delete: no files, nothing to restore) |
+| `PUT` | `/my-wishes/songs/order` | 200, `{ songIds }` = every own song once, in the new order |
+
+Unknown fields (`artist`, `ownerUserId`, `position`, ...) are 400. Another Customer's song id is 404 (same as missing).
+Reorder is validated and applied in one transaction: duplicates 400; a list that is not exactly the Customer's current
+songs (a foreign id, a missing or extra song, a stale list) is 409 `Your song list has changed. Reload the page and try
+again.` and nothing moves. The UI moves a song at once and restores the saved order if the request fails.
+
+**Model:** `MyWishSong` (`id`, `ownerUserId` → `User` cascade, `title`, `link`, `moment` enum `MyWishSongMoment`,
+`momentOther`, `note`, `position`, timestamps; index `(ownerUserId, position)`), migration `20261030090000_add_my_wish_songs`
+(additive: new enum + table, no existing row touched).
+
+**Visibility:** owner-only, exactly like wishes. Saving, editing, reordering or removing a song never creates a Message,
+schedule, release, notification, Recipient or Trusted Contact access, and needs no Recipient. No Recipient, Trusted
+Contact, admin or public route reads songs. **Gap:** songs are not part of "Create message for loved ones" and there is no
+flow for loved ones to view them after a death; that would need its own product decision. Songs are also not counted in
+the dashboard readiness, the Trusted Contact "preserved content exists" flag or Recent changes.
+
+**Tests:** backend `src/my-wishes/song-link.spec.ts` (accepted/rejected links, DTOs, guards) and
+`test/my-wish-songs.e2e-spec.ts` (real PostgreSQL: auth, title-only save without a recipient, no side effects, no fetch,
+unsafe links, unknown fields, partial update, atomic/stale/foreign reorder, cross-owner 404, delete one); frontend
+`src/components/prompts/wish-songs.test.tsx` (empty state, no Artist, validation, failed save, safe external link,
+markup as text, edit/cancel/focus return, remove, keyboard reorder + announcement, failed reorder, placement).
+
 ## AI help: deferred post-MVP
 **Decision (product owner, 2026-10-09): AI help for My Wishes is deferred to post-MVP**, in line with the MVP exclusion of AI
 features (`PROJECT_OVERVIEW.md` §54, `task.md` "Out of scope for MVP"). Nothing AI-related is built: no AI button,
@@ -234,9 +306,10 @@ notice gate, quota, magic bytes, malware, scanner outage, access, delete; Wish �
 → no release → safeguard → review → admin verifies → `ON_DEATH` and overdue `AFTER_DEATH` released, future one waits →
 Recipient reads copies, never My Wishes; Trusted Contact and admin never see wish content); frontend
 `my-wishes-rich.test.tsx` and Playwright (`vault.spec.ts`, `portals.spec.ts`). Phase 15A: `my-wishes-disclaimer.service.spec.ts` (exact
-wording, status, idempotent acknowledgement, version rules, audit, DTO, guards) and e2e (409 before acknowledgement,
-concurrent submits → one row and one audit event, per-user state, a simulated version 2: read/delete still work, writes
-wait, history kept); frontend `prompts.test.tsx` and Playwright (`e2e/vault.spec.ts`).
+wording, status, legacy idempotent acknowledgement, version rules, audit, DTO, guards) and e2e (no acknowledgement:
+read/create/update/delete/upload/autosave all work and create no rows; legacy route: concurrent submits → one row and one
+audit event; a historical row changes nothing; a simulated version 2 blocks nothing); frontend `prompts.test.tsx` (no
+checkbox or Continue, form usable while the notice loads or fails) and Playwright (`e2e/vault.spec.ts`).
 
 ## Not built
 Wills, estate planning, executors, medical directives, powers of attorney, legal-document generation, a legal review of the

@@ -1,5 +1,6 @@
 'use client';
 
+import { BillingBadge, BillingFacts } from '@/components/admin/billing';
 import { Lock, Users } from 'lucide-react';
 import Link from 'next/link';
 import { useState } from 'react';
@@ -91,6 +92,10 @@ export function UserList({ filters }: { filters: UserFilters }) {
                   { header: 'Role', cell: (u) => <RoleBadge role={u.role} /> },
                   { header: 'Status', cell: (u) => <UserStatusBadge status={u.status} /> },
                   { header: 'Created', cell: (u) => formatDate(u.createdAt) },
+                  // Plan/access: only in responses to SUPER_ADMIN viewers.
+                  ...(items.some((u) => u.billing !== undefined)
+                    ? [{ header: 'Plan', cell: (u: (typeof items)[number]) => (u.role === 'CUSTOMER' ? <BillingBadge b={u.billing ?? null} /> : '—') }]
+                    : []),
                 ]}
               />
               <Pager pagination={pagination} hrefFor={(page) => nav.href({ page })} />
@@ -155,6 +160,11 @@ export function UserDetail({ id }: { id: string }) {
             </div>
             <div className="grid content-start gap-6">
               <Panel title="Account access">{me && <AccessActions me={me} user={u} />}</Panel>
+              {u.billing && (
+                <Panel title="Plan">
+                  <BillingFacts b={u.billing} />
+                </Panel>
+              )}
               <Panel title="Death verification">
                 {u.deathVerification ? (
                   <div className="grid gap-3">

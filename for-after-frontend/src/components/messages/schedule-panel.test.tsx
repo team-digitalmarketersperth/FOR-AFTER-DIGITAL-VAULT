@@ -13,6 +13,7 @@ const message = (over: Partial<Message> = {}): Message => ({
   title: 'For your birthday',
   contentType: 'TEXT',
   textContent: 'Dear Sofia,',
+  privateNote: null,
   status: 'DRAFT',
   createdAt: '2026-09-01T00:00:00Z',
   updatedAt: '2026-09-02T00:00:00Z',
@@ -20,6 +21,7 @@ const message = (over: Partial<Message> = {}): Message => ({
     { id: 'r1', firstName: 'Sofia', lastName: null, relationship: 'Daughter' },
     { id: 'r2', firstName: 'Tom', lastName: 'Lee', relationship: 'Son' },
   ],
+  version: 1,
   ...over,
 });
 const person = (id: string, firstName: string, birthday: string | null) => ({

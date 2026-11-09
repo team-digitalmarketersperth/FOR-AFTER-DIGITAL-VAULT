@@ -41,7 +41,9 @@ const setup = () => {
     count: vi.fn().mockResolvedValue(0),
   };
   const $queryRaw = vi.fn().mockResolvedValue([]);
-  const db = { trustedContact, $queryRaw };
+  // Recent changes (customer activity): recorded, not asserted here.
+  const customerActivity = { create: vi.fn(async () => ({})) };
+  const db = { trustedContact, $queryRaw, customerActivity };
   const invitations = { send: vi.fn().mockResolvedValue(true) };
   return {
     trustedContact,
@@ -128,7 +130,7 @@ describe('TrustedContactsService', () => {
   it('create with an email sends the invitation; mobile-only does not (no SMS)', async () => {
     const { invitations, service } = setup();
     await service.create('owner-a', { firstName: 'D', email: 'd@example.com' });
-    expect(invitations.send).toHaveBeenCalledWith('owner-a', 't1', undefined);
+    expect(invitations.send).toHaveBeenCalledWith('owner-a', 't1', 'EMAIL', undefined);
     invitations.send.mockClear();
     await service.create('owner-a', { firstName: 'M', mobile: '+61400000000' });
     expect(invitations.send).not.toHaveBeenCalled();
@@ -138,7 +140,7 @@ describe('TrustedContactsService', () => {
     const { service } = setup();
     const res = await service.findOwnedById('owner-a', 't1');
     expect(res).not.toHaveProperty('invitations');
-    expect(res.invitation).toEqual({ status: 'NOT_SENT', sentAt: null });
+    expect(res.invitation).toEqual({ status: 'NOT_SENT', sentAt: null, channel: null });
   });
 
   it('lists only the owner’s non-deleted contacts, newest first', async () => {

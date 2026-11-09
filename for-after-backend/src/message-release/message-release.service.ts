@@ -7,6 +7,7 @@ import {
 } from '../generated/prisma/client.js';
 import { emailKey } from '../auth/dto/register.dto.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { stripPhone } from '../recipients/dto/create-recipient.dto.js';
 import { isRecurring, nextOccurrence } from './recipient-occurrences.js';
 
 export type ReleaseOutcome =
@@ -81,11 +82,25 @@ export const releaseDueAt = (
 };
 
 /**
+ * The name a Recipient sees a released Message is from: "First Last" as the
+ * Customer has it now, whitespace collapsed; null when neither is set.
+ */
+export const senderDisplayName = (owner: {
+  firstName: string | null;
+  lastName: string | null;
+}) =>
+  [owner.firstName, owner.lastName]
+    .map((part) => part?.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .join(' ') || null;
+
+/**
  * One RecipientMessageAccessGrant per live assigned Recipient (or just
- * `recipientId`), snapshotting contact details only (never notes, birthday or
- * relationship). Idempotent: existing (release, recipient) pairs are skipped.
- * Runs inside the caller's transaction; also used by the backfill script.
- * Returns grants created.
+ * `recipientId`), snapshotting contact details and the sender's display name
+ * (never notes, birthday or relationship, nor any other Customer data).
+ * Idempotent: existing (release, recipient) pairs are skipped, so a retry or a
+ * later recurring year never rewrites a snapshot. Runs inside the caller's
+ * transaction; also used by the backfill script. Returns grants created.
  */
 export const createAccessGrants = async (
   tx: Prisma.TransactionClient,
@@ -103,15 +118,21 @@ export const createAccessGrants = async (
       recipient: { select: { email: true, mobile: true } },
     },
   });
+  const { owner } = await tx.message.findUniqueOrThrow({
+    where: { id: release.messageId },
+    select: { owner: { select: { firstName: true, lastName: true } } },
+  });
+  const senderDisplayNameSnapshot = senderDisplayName(owner);
   const { count } = await tx.recipientMessageAccessGrant.createMany({
     data: assigned.map(({ recipientId, recipient }) => ({
       messageReleaseId: release.id,
       messageId: release.messageId,
       recipientId,
-      // A mobile-only (or contactless) Recipient still gets a grant; it is
-      // just not reachable by email OTP.
+      // A mobile-only Recipient signs in by SMS; a contactless one cannot
+      // sign in. Mobiles are E.164 (older, typed ones are only de-formatted).
       recipientEmailNormalized: emailKey(recipient.email ?? '') || null,
-      recipientMobileNormalized: recipient.mobile?.trim() || null,
+      recipientMobileNormalized: stripPhone(recipient.mobile ?? '') || null,
+      senderDisplayNameSnapshot,
     })),
     skipDuplicates: true,
   });

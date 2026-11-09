@@ -1,11 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import {
-  createEmailProvider,
-  EmailProvider,
-  emailSettings,
-  type EmailSettings,
-} from './email-provider.js';
+import { EmailProvider, emailSettings, type EmailSettings } from './email-provider.js';
+import { emailProviderFor } from './email-provider.factory.js';
 
 /** DI token for the validated email settings (app link, sender). */
 export abstract class EmailConfig {
@@ -13,7 +9,7 @@ export abstract class EmailConfig {
 }
 
 /**
- * Step 24. The provider is chosen from EMAIL_PROVIDER (brevo | resend |
+ * Step 24. The provider is chosen from EMAIL_PROVIDER (microsoft | resend |
  * console | disabled) and validated at startup; tests override EmailProvider with a fake.
  * Imported by each module that sends (OTP, death verification, release).
  */
@@ -21,7 +17,7 @@ export abstract class EmailConfig {
   providers: [
     {
       provide: EmailProvider,
-      useFactory: createEmailProvider,
+      useFactory: emailProviderFor,
       inject: [ConfigService],
     },
     {

@@ -71,7 +71,7 @@ in `DeathVerificationAuditEvent` (admin detail endpoint). See [death-verificatio
 | Situation | Action |
 |---|---|
 | **False or malicious report** | Nothing happens automatically. The Customer can confirm alive (`CANCELLED`); otherwise an admin **rejects** at review. Keep all records: reports are never deleted |
-| **Safety notice keeps failing** | Case stays `PENDING_VERIFICATION` (by design: no notice, no safeguard). Watch `death_safety_notice_failed`; check `EMAIL_PROVIDER`, the Brevo sender / authorised-IP status and `email_send_failed` lines ([email setup](email-production-setup.md)). `safetyNoticeAttemptCount` shows the attempts |
+| **Safety notice keeps failing** | Case stays `PENDING_VERIFICATION` (by design: no notice, no safeguard). Watch `death_safety_notice_failed`; check `EMAIL_PROVIDER`, the Microsoft app registration / mailbox permissions and `email_send_failed` lines ([email setup](email-production-setup.md)). `safetyNoticeAttemptCount` shows the attempts |
 | **Case stuck in `SAFEGUARD_ACTIVE` past its end** | Redis/worker trouble. The death reconciler advances overdue cases from PostgreSQL every interval; check `death_reconciliation_error` |
 | **Verified, but Messages not released** | Check the admin detail `activations` (`messageStatus`). The reconcilers rebuild missing activations and release jobs; watch `release_*` and `death_trigger_*` logs. A Message with no live recipient stays `SCHEDULED` (`release_business_block`) |
 | **Report spam** | One report per Trusted Contact per case is enforced (`409`). Watch `death_report_submitted` / `death_report_duplicate` and the OTP rate-limit categories |
@@ -125,6 +125,7 @@ There is **no reversal API** (terminal states are final by design). Until a reco
 | **Lost authenticator** | Sign in with a recovery code (`/admin-auth/recovery/verify`). No codes left: after out-of-band identity verification, an operator deletes the `AdminMfaCredential` and `AdminMfaRecoveryCode` rows; the next login re-enrolls. Audit the action in the ticket |
 | **Many `ADMIN_MFA_FAILED`** | Filter the audit log by `eventType=ADMIN_MFA_FAILED`; the IP prefix shows the network. The password was correct (a challenge exists), so treat it as a compromised password: suspend, reset the password, re-enroll |
 | **`ADMIN_TOTP_ENCRYPTION_KEY` leaked** | Rotate the key; existing secrets can no longer be decrypted, so every admin must re-enroll (delete all `AdminMfaCredential` rows). Treat as P1 together with a database leak |
+| **Mistaken temporary IP block** | Another super admin revokes it from a different address (`/admin/security/ip-blocks`); otherwise it ends by itself (max 24 h). Database and emergency options: `admin.md` §20a "Recovery". There is no unauthenticated unblock |
 | **Wrong suspension** | `POST /admin/users/:id/reactivate` (only `SUSPENDED → ACTIVE`; a `PASSED` account follows §4 "Wrong verification") |
 
 Audit rows cannot be edited or deleted (database trigger); corrections are new rows plus the incident ticket.

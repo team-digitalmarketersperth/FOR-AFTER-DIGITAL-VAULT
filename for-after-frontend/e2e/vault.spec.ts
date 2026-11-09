@@ -321,11 +321,11 @@ test('Memory Vault: tags → search → category + tag filters → paginate → 
     await expect(page).not.toHaveURL(/page=/);
     await expect(page.getByText('1 result', { exact: true })).toBeVisible();
     // Tag + category + search.
-    await page.getByLabel('Tag', { exact: true }).selectOption({ label: 'Road trips' });
+    await page.getByLabel('Filter memories by tag').selectOption({ label: 'Road trips' });
     await expect(page).toHaveURL(/tag=Road\+trips/);
     await expect(page.getByText('1 result', { exact: true })).toBeVisible();
     // Tag + search across all categories.
-    await page.getByLabel('Tag', { exact: true }).selectOption({ label: 'Family' });
+    await page.getByLabel('Filter memories by tag').selectOption({ label: 'Family' });
     await expect(page).toHaveURL(/tag=Family/);
     await page.getByRole('link', { name: 'All', exact: true }).click();
     await expect(page).not.toHaveURL(/category=/);
@@ -385,26 +385,24 @@ test('Storage: settings meter, an upload over the remaining space is refused, ex
   }
 });
 
-for (const area of ['my-story', 'my-wishes'] as const) {
+// My Story's own page is the focused workspace (covered below); the full answer page is shared.
+for (const area of ['my-wishes'] as const) {
   test(`${area}: answer → edit → delete`, async ({ page }) => {
     await page.goto(`/${area}`);
     if (area === 'my-wishes') {
-      // Phase 15A: the API's notice, acknowledged once per version with an unticked box.
+      // The API's notice, informational only: no checkbox, no Continue, prompts right away.
       await expect(page.getByText(/It is not a will, legal document/)).toBeVisible();
-      const box = page.getByRole('checkbox', { name: 'I have read this notice.' });
-      await expect(box).not.toBeChecked();
-      await expect(page.getByRole('button', { name: 'Continue' })).toBeDisabled();
-      await box.check();
-      await page.getByRole('button', { name: 'Continue' }).click();
-      await expect(box).toHaveCount(0);
-      // Same version after a reload: not asked again.
-      await page.reload();
-      await expect(page.getByText(/It is not a will, legal document/)).toBeVisible();
-      await expect(page.getByRole('checkbox', { name: 'I have read this notice.' })).toHaveCount(0);
+      await expect(page.getByRole('checkbox')).toHaveCount(0);
+      await expect(page.getByText('I have read this notice.')).toHaveCount(0);
+      await expect(page.getByRole('button', { name: 'Continue' })).toHaveCount(0);
     }
     const first = page.getByRole('link', { name: /Write your answer|Continue writing/ }).first();
     await first.click();
-    if (area === 'my-wishes') await expect(page.getByText(/It is not a will, legal document/)).toBeVisible();
+    if (area === 'my-wishes') {
+      await expect(page.getByText(/It is not a will, legal document/)).toBeVisible();
+      await expect(page.getByRole('checkbox')).toHaveCount(0);
+      await expect(page.getByLabel('Your answer')).toBeEnabled();
+    }
 
     await page.getByLabel('Your answer').fill('First thoughts.');
     await page.getByRole('button', { name: 'Save answer' }).click();
@@ -437,7 +435,6 @@ test('My Wishes: words + photo/audio/video → reload → create message for lov
   const KEY = 'music-and-readings.readings';
   const run = Date.now();
   const text = `Please read something by the sea. ${run}`;
-  expect((await page.request.post(`${API}/my-wishes/disclaimer/acknowledgement`, { data: { version: 1 } })).status()).toBe(200);
   await addPerson(page, 'Wren');
   let messageId = '';
   try {
@@ -487,56 +484,39 @@ test('My Wishes: words + photo/audio/video → reload → create message for lov
   }
 });
 
-// Phase 14A: the approved V1 catalogue (9 categories, 22 prompts) end to end.
-test('My Story V1: categories in order → Work and Travel → answer, reload, edit, delete, answer again', async ({ page }) => {
+// Phase 14A: the approved V1 catalogue (9 categories, 22 prompts) end to end,
+// through the focused workspace (approved design, 2026-10-27).
+test('My Story V1: chapters in order → Work → answer, reload, edit, then the full page delete', async ({ page }) => {
   await page.goto('/my-story');
-  const chips = page.getByRole('navigation', { name: /categor/i }).getByRole('link');
-  await expect(chips).toHaveText([
-    'All',
-    'Childhood',
-    'Family',
-    'Relationships',
-    'Work',
-    'Travel',
-    'Milestones',
-    'Values',
-    'Life lessons',
-    'Legacy',
+  const chapters = page.getByRole('navigation', { name: 'Your chapters' }).getByRole('button');
+  await expect(chapters).toHaveText([
+    /^Childhood/,
+    /^Family/,
+    /^Relationships/,
+    /^Work/,
+    /^Travel/,
+    /^Milestones/,
+    /^Values/,
+    /^Life lessons/,
+    /^Legacy/,
   ]);
+  await chapters.filter({ hasText: /^Travel/ }).click();
+  await expect(page.getByRole('progressbar', { name: 'Travel progress' })).toBeVisible();
 
-  await chips.getByText('Travel', { exact: true }).click();
-  await expect(page).toHaveURL(/category=TRAVEL/);
-  await expect(page.getByText('Tell us about a journey that stayed with you.')).toBeVisible();
-  await expect(page.getByText('What do you remember about your first job?')).toHaveCount(0);
-
-  await chips.getByText('Work', { exact: true }).click();
-  await expect(page).toHaveURL(/category=WORK/);
-  await page.getByRole('link', { name: /What do you remember about your first job\?/ }).click();
+  await page.goto('/my-story?category=WORK');
+  // Opens on Work's first unanswered question (this test leaves none answered).
   await expect(page.getByRole('heading', { name: 'What do you remember about your first job?' })).toBeVisible();
   try {
-    await page.getByLabel('Your answer').fill('A paper round, synthetic answer.');
+    await page.getByRole('textbox', { name: 'Your answer' }).fill('A paper round, synthetic answer.');
     await page.getByRole('button', { name: 'Save answer' }).click();
-    await expect(page).toHaveURL(/\/my-story$/);
-    await page.reload();
-    await expect(page.getByText('A paper round, synthetic answer.')).toBeVisible();
-
-    await page.getByRole('link', { name: /A paper round, synthetic answer\./ }).click();
+    await expect(page.getByText('Your answer and private note are saved.')).toBeVisible();
+    await page.goto('/my-story/work.first-job');
+    await expect(page.getByRole('textbox', { name: 'Your answer' })).toHaveValue('A paper round, synthetic answer.');
     await expect(page.getByText(/earlier wording/)).toHaveCount(0); // answered the current wording
-    await page.getByLabel('Your answer').fill('A paper round, edited.');
-    await page.getByRole('button', { name: 'Save answer' }).click();
-    await expect(page.getByText('A paper round, edited.')).toBeVisible();
 
-    await page.getByRole('link', { name: /A paper round, edited\./ }).click();
     await page.getByRole('button', { name: 'Delete answer' }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Delete answer' }).click();
-    await expect(page.getByText('A paper round, edited.')).toHaveCount(0);
-
-    // Answer again: the same prompt takes a new answer (restored server-side).
-    await page.goto('/my-story/work.first-job');
-    await expect(page.getByLabel('Your answer')).toHaveValue('');
-    await page.getByLabel('Your answer').fill('Written again.');
-    await page.getByRole('button', { name: 'Save answer' }).click();
-    await expect(page.getByText('Written again.')).toBeVisible();
+    await expect(page).toHaveURL(/\/my-story$/);
   } finally {
     await page.request.delete(`${API}/my-story/prompts/work.first-job/response`);
   }

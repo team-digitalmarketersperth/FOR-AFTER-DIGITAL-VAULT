@@ -40,6 +40,17 @@ export const TextContent = () =>
     MaxLength(TEXT_CONTENT_MAX),
   );
 
+// Owner-only reminder (docs/private-notes.md), same limit as Recipient's.
+// Plain text; trimmed, blank = null. Missing = unchanged on PATCH, null = clear.
+export const PRIVATE_NOTE_MAX = 2000;
+export const PrivateNote = () =>
+  applyDecorators(
+    IsOptional(),
+    Transform(trimToNull),
+    IsString(),
+    MaxLength(PRIVATE_NOTE_MAX),
+  );
+
 // VIDEO since Phase 12 (ImageKit video pipeline); see message-composition.ts.
 export const SUPPORTED_CONTENT_TYPES = [
   MessageContentType.TEXT,
@@ -83,6 +94,15 @@ export class CreateMessageDto {
   @TextContent()
   textContent?: string | null;
 
+  @PrivateNote()
+  privateNote?: string | null;
+
   @RecipientIds()
   recipientIds: string[];
+
+  // The new-message autosave this save replaces (POST /users/me/drafts/NEW_MESSAGE);
+  // it is deleted with the create. Only ever the caller's own.
+  @IsOptional()
+  @IsUUID()
+  recoveryDraftKey?: string;
 }

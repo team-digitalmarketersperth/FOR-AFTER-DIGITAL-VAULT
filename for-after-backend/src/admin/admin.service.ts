@@ -8,6 +8,7 @@ import {
 import {
   AuditActorType,
   AuditEventType,
+  DeadLetterStatus,
   DeathVerificationCaseStatus,
   MessageStatus,
   Prisma,
@@ -19,8 +20,12 @@ import {
   paginate,
   writeAuditLog,
 } from '../audit/audit-log.service.js';
-import { PrismaService } from '../prisma/prisma.service.js';
+import { errorCode, PrismaService } from '../prisma/prisma.service.js';
 import { AdminQueuesService } from './admin-queues.service.js';
+import { releaseEmailWhere } from './admin-deliveries.service.js';
+import { pastDueWhere } from './admin-releases.service.js';
+import { AdminSecurityService } from './admin-security.service.js';
+import { SystemHealthService } from './system-health.service.js';
 import type { AdminUserListQueryDto } from './dto/admin.dto.js';
 
 // Account metadata only. Never passwordHash, notes, Message/Memory Vault/
@@ -49,7 +54,7 @@ const WRONG_STATE: Record<UserStatus, string> = {
  * ADMIN accounts. Nobody manages a SUPER_ADMIN (or themselves) through the
  * API, so the last SUPER_ADMIN can never be locked out this way.
  */
-const canManage = (actor: AuditActorType, target: UserRole) =>
+export const canManage = (actor: AuditActorType, target: UserRole) =>
   target === UserRole.CUSTOMER ||
   (target === UserRole.ADMIN && actor === AuditActorType.SUPER_ADMIN);
 
@@ -67,39 +72,110 @@ export class AdminService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly queues: AdminQueuesService,
+    private readonly systemHealth: SystemHealthService,
+    private readonly security: AdminSecurityService,
   ) {}
 
-  /** Real aggregates only; billing and delivery do not exist yet. */
-  async dashboard() {
-    const [users, cases, failed] = await Promise.all([
-      this.prisma.user.groupBy({ by: ['status'], _count: { _all: true } }),
-      this.prisma.deathVerificationCase.groupBy({
-        by: ['status'],
-        _count: { _all: true },
-      }),
-      this.queues.failedTotal(),
-    ]);
-    const userCount = (s: UserStatus) =>
-      users.find((u) => u.status === s)?._count._all ?? 0;
-    const caseCount = (s: DeathVerificationCaseStatus) =>
-      cases.find((c) => c.status === s)?._count._all ?? 0;
-    return {
-      users: {
-        total: users.reduce((sum, u) => sum + u._count._all, 0),
-        active: userCount(UserStatus.ACTIVE),
-        suspended: userCount(UserStatus.SUSPENDED),
-        passed: userCount(UserStatus.PASSED),
-        deleted: userCount(UserStatus.DELETED),
-      },
-      deathVerification: {
-        pending: caseCount(DeathVerificationCaseStatus.PENDING_VERIFICATION),
-        safeguardActive: caseCount(
-          DeathVerificationCaseStatus.SAFEGUARD_ACTIVE,
+  /**
+   * The admin Overview: counts and statuses only, never content, names,
+   * emails or ids. Each source is read on its own, so one failing (Redis,
+   * say) leaves the others; a section that could not be read is null, never
+   * zero. Definitions: docs/admin.md → Overview. Read-only: nothing here
+   * queues, releases or sends anything.
+   */
+  async dashboard(now = new Date()) {
+    const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const db = <T>(work: Promise<T>) =>
+      work.catch((err: unknown) => {
+        this.logger.error(`admin_dashboard_unavailable (code: ${errorCode(err)})`);
+        return null;
+      });
+
+    const [customers, cases, releases, emails, deadLetters, mfaFailures, queues, health] =
+      await Promise.all([
+        db(
+          Promise.all([
+            this.prisma.user.groupBy({
+              by: ['status'],
+              where: { role: UserRole.CUSTOMER },
+              _count: { _all: true },
+            }),
+            this.prisma.user.count({
+              where: { role: UserRole.CUSTOMER, createdAt: { gte: weekAgo } },
+            }),
+          ]),
         ),
+        db(
+          this.prisma.deathVerificationCase.groupBy({
+            by: ['status'],
+            where: {
+              status: {
+                in: [
+                  DeathVerificationCaseStatus.PENDING_VERIFICATION,
+                  DeathVerificationCaseStatus.SAFEGUARD_ACTIVE,
+                  DeathVerificationCaseStatus.READY_FOR_REVIEW,
+                ],
+              },
+            },
+            _count: { _all: true },
+          }),
+        ),
+        // Messages, with the same definition as the Releases page's filter.
+        db(this.prisma.message.count({ where: pastDueWhere(now) })),
+        db(
+          Promise.all([
+            // Same definitions as the Deliveries page's status filter.
+            this.prisma.releaseNotification.count({ where: releaseEmailWhere.retrying }),
+            this.prisma.releaseNotification.count({ where: releaseEmailWhere.failed }),
+          ]),
+        ),
+        db(
+          this.prisma.deadLetterJob.count({
+            where: { status: DeadLetterStatus.OPEN },
+          }),
+        ),
+        // Same definition as Security Activity's "Admin two-factor failed".
+        db(this.security.mfaFailuresSince(weekAgo)),
+        this.queues.totals(),
+        this.systemHealth.check(),
+      ]);
+
+    const [byStatus, newLast7Days] = customers ?? [[], 0];
+    const customerCount = (s: UserStatus) =>
+      byStatus.find((u) => u.status === s)?._count._all ?? 0;
+    const caseCount = (s: DeathVerificationCaseStatus) =>
+      cases?.find((c) => c.status === s)?._count._all ?? 0;
+    return {
+      generatedAt: now.toISOString(),
+      customers: customers && {
+        total: byStatus.reduce((sum, u) => sum + u._count._all, 0),
+        active: customerCount(UserStatus.ACTIVE),
+        suspended: customerCount(UserStatus.SUSPENDED),
+        passed: customerCount(UserStatus.PASSED),
+        deleted: customerCount(UserStatus.DELETED),
+        newLast7Days,
+      },
+      deathVerification: cases && {
+        pending: caseCount(DeathVerificationCaseStatus.PENDING_VERIFICATION),
+        safeguardActive: caseCount(DeathVerificationCaseStatus.SAFEGUARD_ACTIVE),
         readyForReview: caseCount(DeathVerificationCaseStatus.READY_FOR_REVIEW),
       },
-      // null = Redis could not be read, not "zero failures".
-      queues: { failed },
+      releases: releases === null ? null : { pastDue: releases },
+      releaseEmails: emails && { retrying: emails[0], failed: emails[1] },
+      // null = Redis could not be read, not "no jobs".
+      queues,
+      // PostgreSQL, so still shown when Redis is down.
+      deadLetters: deadLetters === null ? null : { open: deadLetters },
+      // Recorded AuditLog rows, not attempts (§20).
+      security: mfaFailures === null ? null : { adminMfaFailuresLast7Days: mfaFailures },
+      // The System Health snapshot's statuses (same checks, same definitions;
+      // details on /admin/system/health).
+      services: {
+        database: health.database.status,
+        redis: health.redis.status,
+        worker: health.worker.status,
+        malwareScanner: health.malwareScanner.status,
+      },
     };
   }
 

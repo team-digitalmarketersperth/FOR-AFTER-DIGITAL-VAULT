@@ -205,6 +205,25 @@ export const resetPassword = (
     `This link expires in ${lifetime(expiresInSeconds)} and can be used once. If you didn't ask to reset your password, you can ignore this email; nothing will change.`,
   );
 
+/** A SUPER_ADMIN created an ADMIN account: the link sets the first password (two-factor follows at sign-in). */
+export const adminInvitation = (
+  appBaseUrl: string,
+  token: string,
+  firstName: string | null | undefined,
+  expiresInSeconds: number,
+) =>
+  accountLink(
+    'You have been invited to the For After admin portal',
+    firstName,
+    [
+      'An administrator created a For After admin account for you.',
+      'Choose your password with the button below. When you first sign in, you will set up two-factor authentication.',
+    ],
+    'Set your password',
+    `${appBaseUrl}/admin/invitation?token=${encodeURIComponent(token)}`,
+    `This link expires in ${lifetime(expiresInSeconds)} and can be used once. If you weren't expecting this, you can ignore this email.`,
+  );
+
 /** Phase 08: to the NEW address. The account's email changes only once this link is used. */
 export const changeEmail = (
   appBaseUrl: string,
@@ -250,30 +269,75 @@ export function emailChanged(
 }
 
 /**
- * Phase 10: to a newly nominated Trusted Contact (email only; SMS invitations
- * are deferred). The account holder's display name and the role, nothing else:
+ * Phase 10: to a newly nominated Trusted Contact. The account holder's display
+ * name, the invitee's own first name and the role, nothing else:
  * no preserved content, relationship label or account holder email. The link
  * only opens the accept/decline page; it signs no one in.
  */
-export const trustedContactInvitation = (
+const invitationUrl = (appBaseUrl: string, token: string) =>
+  `${appBaseUrl}/trusted-contact/invitation?token=${encodeURIComponent(token)}`;
+
+/**
+ * The SMS form of the same invitation (same link and page). Plain ASCII so it
+ * stays GSM-7 (two segments with the link); no names, addresses or content.
+ */
+export const trustedContactInvitationSms = (
+  appBaseUrl: string,
+  token: string,
+  expiresInSeconds: number,
+) =>
+  `For After: You've been nominated as a trusted contact. Review your invitation here: ${invitationUrl(appBaseUrl, token)} This link expires in ${lifetime(expiresInSeconds)}.`;
+
+/** The public About page (fixed, product-owner approved; not per environment). */
+export const ABOUT_URL = 'https://forafter.com.au/about/';
+
+/**
+ * Client-approved copy (2026-10-19): most invitees have never heard of For
+ * After, so it explains the platform and the role. Review invitation stays the
+ * only button; the About page is a quiet text link under it.
+ */
+export function trustedContactInvitation(
   appBaseUrl: string,
   token: string,
   accountHolderName: string,
   expiresInSeconds: number,
-) => {
+  trustedContactName?: string | null,
+): RenderedEmail {
   const name = accountHolderName.replace(/\s+/g, ' ').trim();
-  return accountLink(
-    `You've been invited to be a Trusted Contact for ${name}`,
-    null,
-    [
-      `${name} has invited you to be one of their Trusted Contacts on For After.`,
-      'As a Trusted Contact, you may help confirm important account events, including letting For After know if they pass away. You will not be given access to their private messages or memories.',
-    ],
-    'Review invitation',
-    `${appBaseUrl}/trusted-contact/invitation?token=${encodeURIComponent(token)}`,
-    `This link expires in ${lifetime(expiresInSeconds)}. If you weren't expecting this, you can ignore this email; nothing happens unless you accept.`,
-  );
-};
+  const contact = trustedContactName?.replace(/\s+/g, ' ').trim();
+  const url = invitationUrl(appBaseUrl, token);
+  const title = `You've been invited to be a Trusted Contact for ${name}`;
+  const greeting = contact ? `Dear ${contact},` : 'Hello,';
+  const intro = [
+    `${name} has invited you to be one of their Trusted Contacts on For After.`,
+    'For After is a private platform where people can create and preserve videos, voice recordings, photos and written messages for their loved ones. It allows them to capture memories and prepare personal messages to be shared in the future, including after they have passed away.',
+  ];
+  const heading = 'What does being a Trusted Contact involve?';
+  const role = [
+    `${name} has chosen you as someone they trust to help confirm important account events. This may include notifying For After if they pass away or helping verify that information, so their wishes about sharing their messages and memories can be followed.`,
+    'You will not have access to their private messages or memories through this role, and you will not be responsible for managing their account.',
+    'Being a Trusted Contact is entirely your choice. Please use the link below to review the invitation and let us know whether you agree to take on this role.',
+  ];
+  const note = `This link expires in ${lifetime(expiresInSeconds)}. If you weren't expecting this, you can ignore this email; nothing happens unless you accept.`;
+  const closing = `Thank you for considering being part of ${name}’s circle of trusted support.`;
+  const signOff = 'The For After Team';
+  const paras = (lines: string[]) => lines.map((l) => para(escape(l))).join('');
+  return {
+    subject: title,
+    html: layout(
+      title,
+      `${paras([greeting, ...intro])}
+<h2 style="margin:24px 0 12px;font-family:${SERIF};font-size:20px;font-weight:normal;line-height:1.3;color:${C.ink};">${escape(heading)}</h2>
+${paras(role)}${button('Review invitation', url)}
+<p style="margin:0 0 24px;font-family:${SANS};font-size:15px;line-height:1.6;"><a href="${ABOUT_URL}" style="color:${C.accent};text-decoration:underline;">Learn more about For After</a></p>
+${para(`<span style="color:${C.muted};font-size:14px;">${escape(note)}</span>`)}${paras([closing, signOff])}`,
+      escape(
+        `${FOOTER} If the button doesn't work, copy this link into your browser: ${url}`,
+      ),
+    ),
+    text: `For After\n\n${title}\n\n${[greeting, ...intro, heading, ...role].join('\n\n')}\n\nReview invitation:\n${url}\n\nLearn more about For After:\n${ABOUT_URL}\n\n${note}\n\n${closing}\n\n${signOff}\n\n${FOOTER}\n`,
+  };
+}
 
 /**
  * Phase 17A operational alert for the operator, not a customer: ids, counts
@@ -305,3 +369,54 @@ export const deadLetterAlert = (row: {
     text: lines.join('\n'),
   };
 };
+
+/**
+ * `npm run email:send-test` only: proves the configured provider accepts mail
+ * from this backend. No account, code, link or personal data.
+ */
+export function providerTest(provider: string): RenderedEmail {
+  const title = 'For After test email';
+  const lines = [
+    `This is a test email from the For After backend, sent through the "${provider}" email provider.`,
+    'Nothing else happened and no action is needed. If you did not expect it, you can ignore it.',
+  ];
+  return {
+    subject: title,
+    html: layout(title, lines.map((l) => para(escape(l))).join(''), escape(FOOTER)),
+    text: `For After\n\n${title}\n\n${lines.join('\n\n')}\n\n${FOOTER}\n`,
+  };
+}
+
+/**
+ * Notification centre: the one renderer for an admin-written announcement, used
+ * by the admin preview now and meant for delivery later. Plain text only: every
+ * character is escaped, blank lines become paragraphs and single line breaks
+ * become <br>. The optional button links to an allowlisted app path only.
+ */
+export const TEST_NOTICE = 'This is a test announcement. It has not been sent to customers.';
+// Step 7: every announcement is optional news, sent only with the Customer's consent.
+export const UNSUBSCRIBE_NOTICE = "You're receiving this because you chose to hear news from For After.";
+
+export function announcement(
+  { subject, body, cta }: { subject: string; body: string; cta: { label: string; path: string } | null },
+  appBaseUrl: string,
+  // Step 2 test emails: "[TEST] " subject prefix and a notice above the message; otherwise identical.
+  test = false,
+  // Step 7: the unsubscribe link (per recipient at send time; a sample in previews and tests).
+  unsubscribeUrl = `${appBaseUrl}/unsubscribe`,
+): RenderedEmail {
+  const paragraphs = body
+    .replace(/\r\n?/g, '\n')
+    .split(/\n[ \t]*\n+/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  const url = cta && `${appBaseUrl}${cta.path}`;
+  const notice = test ? para(`<span style="color:${C.muted};font-size:14px;">${escape(TEST_NOTICE)}</span>`) : '';
+  const html = layout(
+    subject,
+    `${notice}${paragraphs.map((p) => para(p.split('\n').map(escape).join('<br>'))).join('')}${cta ? button(cta.label, url!) : ''}`,
+    `${escape(`${FOOTER}${cta ? ` If the button doesn't work, copy this link into your browser: ${url}` : ''}`)}<br><br>${escape(UNSUBSCRIBE_NOTICE)} <a href="${escape(unsubscribeUrl)}" style="color:${C.muted};">Unsubscribe</a>`,
+  );
+  const text = `For After\n\n${test ? `${TEST_NOTICE}\n\n` : ''}${subject}\n\n${paragraphs.join('\n\n')}\n\n${cta ? `${cta.label}: ${url}\n\n` : ''}${FOOTER}\n\n${UNSUBSCRIBE_NOTICE} Unsubscribe: ${unsubscribeUrl}\n`;
+  return { subject: test ? `[TEST] ${subject}` : subject, html, text };
+}

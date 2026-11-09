@@ -7,7 +7,6 @@ import { SessionAuthGuard } from '../auth/guards/session-auth.guard.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
 import { AcknowledgeDisclaimerDto } from './dto/acknowledge-disclaimer.dto.js';
 import {
-  DISCLAIMER_NOT_ACKNOWLEDGED,
   DISCLAIMER_OUTDATED,
   MY_WISHES_DISCLAIMER_V1,
   MyWishesDisclaimer,
@@ -45,12 +44,12 @@ describe('My Wishes notice (Phase 15A)', () => {
     });
   });
 
-  it('status: current version and text, acknowledgement required, the user’s own state only', async () => {
+  it('status: current version and text, informational only (no acknowledgement required), the user’s own historical state', async () => {
     const { myWishesDisclaimerAcknowledgement: ack, service } = setup();
     expect(await service.status('lisa')).toEqual({
       version: 1,
       text: APPROVED_V1,
-      requiresAcknowledgement: true,
+      requiresAcknowledgement: false,
       acknowledged: false,
       acknowledgedAt: null,
     });
@@ -119,15 +118,6 @@ describe('My Wishes notice (Phase 15A)', () => {
       ack.findUnique.mock.calls[0][0].where.userId_disclaimerVersion
         .disclaimerVersion,
     ).toBe(2);
-  });
-
-  it('assertAcknowledged: 409 without a row for the current version', async () => {
-    const { myWishesDisclaimerAcknowledgement: ack, service } = setup();
-    await expect(service.assertAcknowledged('lisa')).rejects.toThrow(
-      DISCLAIMER_NOT_ACKNOWLEDGED,
-    );
-    ack.findUnique.mockResolvedValue({ acknowledgedAt: ACK_AT });
-    await expect(service.assertAcknowledged('lisa')).resolves.toBeUndefined();
   });
 
   describe('AcknowledgeDisclaimerDto', () => {

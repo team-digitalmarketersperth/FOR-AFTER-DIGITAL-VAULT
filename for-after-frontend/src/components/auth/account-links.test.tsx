@@ -6,6 +6,7 @@ import {
   ForgotPasswordForm,
   ResendVerificationForm,
   ResetPasswordForm,
+  Unsubscribe,
   VerifyEmail,
   VerifyEmailChange,
 } from './account-links';
@@ -159,3 +160,23 @@ describe('VerifyEmailChange', () => {
   });
 });
 
+
+describe('Unsubscribe link (Step 7)', () => {
+  it('opening the page changes nothing; only the button unsubscribes, with the token from the link', async () => {
+    const fetchMock = mockFetch(json(200, { unsubscribed: true }));
+    renderWithClient(<Unsubscribe token={TOKEN} />);
+    expect(fetchMock).not.toHaveBeenCalled(); // mail scanners opening the link do not unsubscribe anyone
+    await userEvent.click(screen.getByRole('button', { name: 'Unsubscribe' }));
+    expect(await screen.findByText(/You.re unsubscribed/)).toBeInTheDocument();
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(String(url)).toBe(`${API}/communications/unsubscribe`);
+    expect(JSON.parse(String(init!.body))).toEqual({ token: TOKEN });
+  });
+
+  it('without a token it explains where to change preferences', () => {
+    mockFetch();
+    renderWithClient(<Unsubscribe />);
+    expect(screen.getByText('This link is incomplete')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Unsubscribe' })).toBeNull();
+  });
+});

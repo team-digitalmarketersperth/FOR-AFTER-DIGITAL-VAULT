@@ -12,6 +12,7 @@ import {
 import { MessageReleaseQueue } from '../message-release/message-release-queue.service.js';
 import { createFirstOccurrences } from '../message-release/recipient-occurrences.js';
 import { checkComposition } from '../messages/message-composition.js';
+import { recordActivity } from '../activity/customer-activity.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateMessageScheduleDto } from './dto/create-message-schedule.dto.js';
 import { UpdateMessageScheduleDto } from './dto/update-message-schedule.dto.js';
@@ -197,6 +198,12 @@ const toData = (s: ScheduleState) =>
  * birthday for every live assigned Recipient (409, never a silent skip).
  * ANNUAL_AFTER_DEATH gets occurrences only from a verified death.
  */
+/** An assigned Recipient a BIRTHDAY release cannot place (the dashboard's attention list uses it too). */
+export const MISSING_BIRTHDAY_RECIPIENT = {
+  deletedAt: null,
+  birthday: null,
+} satisfies Prisma.RecipientWhereInput;
+
 const rebuildOccurrences = async (
   tx: Prisma.TransactionClient,
   messageId: string,
@@ -208,7 +215,7 @@ const rebuildOccurrences = async (
   });
   if (s.triggerType === ReleaseTriggerType.BIRTHDAY) {
     const missing = await tx.messageRecipient.count({
-      where: { messageId, recipient: { deletedAt: null, birthday: null } },
+      where: { messageId, recipient: MISSING_BIRTHDAY_RECIPIENT },
     });
     if (missing) throw new ConflictException(MISSING_BIRTHDAY);
   }
@@ -301,6 +308,7 @@ export class MessageSchedulesService {
           select: scheduleSelect,
         });
         await rebuildOccurrences(tx, messageId, state, now);
+        await recordActivity(tx, { userId: ownerUserId, type: 'MESSAGE_SCHEDULED', entityId: messageId });
         return {
           schedule,
           occurrences: await pendingOccurrences(tx, messageId),
@@ -398,6 +406,7 @@ export class MessageSchedulesService {
           select: scheduleSelect,
         });
         await rebuildOccurrences(tx, messageId, state, now);
+        await recordActivity(tx, { userId: ownerUserId, type: 'MESSAGE_RESCHEDULED', entityId: messageId });
         return {
           schedule,
           occurrences: await pendingOccurrences(tx, messageId),
@@ -447,6 +456,7 @@ export class MessageSchedulesService {
       await this.assertNothingReleased(tx, messageId);
       await tx.messageRecipientRelease.deleteMany({ where: { messageId } });
       await tx.messageSchedule.delete({ where: { messageId } });
+      await recordActivity(tx, { userId: ownerUserId, type: 'MESSAGE_UNSCHEDULED', entityId: messageId });
       return true;
     });
     if (!done) throw await this.missing(ownerUserId, messageId);

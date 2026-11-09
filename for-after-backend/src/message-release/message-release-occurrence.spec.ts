@@ -48,7 +48,13 @@ const setup = ({
     message: {
       findUniqueOrThrow: vi
         .fn()
-        .mockResolvedValue({ schedule, deathActivation, release }),
+        .mockResolvedValue({
+          schedule,
+          deathActivation,
+          release,
+          // Read for the sender display-name snapshot (Phase 18).
+          owner: { firstName: 'Lisa', lastName: 'Bridgett' },
+        }),
       update: vi.fn(),
     },
     messageRecipient: {

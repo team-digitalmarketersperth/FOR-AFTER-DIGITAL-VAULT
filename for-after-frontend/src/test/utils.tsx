@@ -56,7 +56,7 @@ export function renderWithClient(ui: ReactElement) {
 
 export const router = { replace: vi.fn(), push: vi.fn(), refresh: vi.fn() };
 
-type Handler = Response | ((body: unknown, url: URL) => Response);
+type Handler = Response | ((body: unknown, url: URL) => Response | Promise<Response>);
 
 /**
  * Route-based fetch stub for screens that fire parallel requests. Keys are

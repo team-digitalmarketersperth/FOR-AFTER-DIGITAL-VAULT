@@ -40,6 +40,9 @@ model User {
   passwordChangedAt DateTime?
   // Phase 08: the same for a confirmed email change (sign in again).
   emailChangedAt    DateTime?
+  // Notification centre: the Customer's own opt-in to optional product news (announcements).
+  // Null = no consent (the default; registration never grants it). Changes are audited.
+  marketingConsentAt DateTime?
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -59,6 +62,10 @@ model User {
 
   myStoryResponses MyStoryResponse[]
   myWishResponses  MyWishResponse[]
+  myWishSongs      MyWishSong[]
+  supportRequests  SupportRequest[]
+  trial            CustomerTrial?
+  billingAccount   BillingAccount?
 
   // Phase 10: history. At most one open (or VERIFIED) case per Customer,
   // enforced by a partial unique index in the migration.
@@ -71,12 +78,31 @@ model User {
   authTokens AuthToken[]
 
   recipientPhotos RecipientPhoto[]
+
+  activities      CustomerActivity[]
+  // Autosaved, not-yet-saved edits (Message, My Story, My Wishes).
+  draftRecoveries DraftRecovery[]
+
+  // Notification centre (Step 1): email announcement drafts this admin created / last edited.
+  announcementsCreated EmailAnnouncement[] @relation("AnnouncementCreatedBy")
+  announcementsUpdated EmailAnnouncement[] @relation("AnnouncementUpdatedBy")
+  announcementTestSends AnnouncementTestSend[]
+  // Step 4: broadcasts this admin requested / asked to stop, and the Customer side of each send.
+  announcementRunsRequested AnnouncementSendRun[]      @relation("AnnouncementRunRequestedBy")
+  announcementRunsCancelled AnnouncementSendRun[]      @relation("AnnouncementRunCancelledBy")
+  announcementRetries       AnnouncementRetry[]
+  announcementRunRecipients AnnouncementRunRecipient[]
+  announcementPilotMemberships AnnouncementPilotMember[] @relation("AnnouncementPilotMember")
+  announcementPilotsAdded      AnnouncementPilotMember[] @relation("AnnouncementPilotAddedBy")
+  emailSuppressions            EmailSuppression[]
 }
 
 enum AuthTokenPurpose {
   EMAIL_VERIFICATION
   PASSWORD_RESET
   EMAIL_CHANGE
+  // A SUPER_ADMIN invited a new ADMIN; the link sets their first password.
+  ADMIN_INVITATION
 }
 
 // Phase 04. Single-use emailed links (verify email, reset password). Only the
@@ -160,6 +186,41 @@ enum AuditEventType {
   MY_WISHES_DISCLAIMER_ACKNOWLEDGED
   // Phase 17A: an admin re-queued a dead-lettered job. Ids and outcome only.
   DEAD_LETTER_RETRY_REQUESTED
+  // Step 7 support: references and statuses only, never subjects or text.
+  SUPPORT_REQUEST_CREATED
+  SUPPORT_REPLY_SENT
+  SUPPORT_NOTE_ADDED
+  SUPPORT_STATUS_CHANGED
+  // Step 10 billing: references and states only, never card or payment details.
+  TRIAL_STARTED
+  SUBSCRIPTION_SYNCED
+  // Admin access: references and roles only, never tokens or passwords.
+  ADMIN_CREATED
+  ADMIN_INVITATION_SENT
+  ADMIN_INVITATION_ACCEPTED
+  SUPER_ADMIN_BOOTSTRAPPED
+  // Notification centre: references, version and changed field names only, never subjects or text.
+  ANNOUNCEMENT_DRAFT_CREATED
+  ANNOUNCEMENT_DRAFT_UPDATED
+  // Step 2 test emails: ids, version, outcome and a safe error category only.
+  ANNOUNCEMENT_TEST_REQUESTED
+  ANNOUNCEMENT_TEST_COMPLETED
+  // Step 3: a read-only audience review (counts only; no addresses).
+  ANNOUNCEMENT_AUDIENCE_REVIEWED
+  // Step 4 customer broadcasts: ids, version, counts, outcome only; never content or addresses.
+  ANNOUNCEMENT_BROADCAST_REQUESTED
+  ANNOUNCEMENT_BROADCAST_QUEUED
+  ANNOUNCEMENT_BROADCAST_CANCEL_REQUESTED
+  ANNOUNCEMENT_BROADCAST_FINISHED
+  ANNOUNCEMENT_BROADCAST_RETRY_REQUESTED
+  // Step 7: consent, suppression and pilot audience. Ids, reasons and counts only; never addresses.
+  MARKETING_CONSENT_GRANTED
+  MARKETING_CONSENT_WITHDRAWN
+  EMAIL_SUPPRESSED
+  ANNOUNCEMENT_AUDIENCE_UPDATED
+  // Temporary IP blocks: the block id, masked network and duration only; the exact address stays on IpBlock.
+  IP_BLOCK_CREATED
+  IP_BLOCK_REVOKED
 }
 
 // Admin actors (Step 16), the Customer acting on their own account (Step 22)
@@ -170,6 +231,28 @@ enum AuditActorType {
   SUPER_ADMIN
   CUSTOMER
   TRUSTED_CONTACT
+  // Step 10: a verified Stripe webhook (actorUserId null).
+  SYSTEM
+}
+
+// Manual temporary exact-IP blocks (docs/admin.md §20a). The only table holding a
+// full IP address: shown to SUPER_ADMIN only, kept after expiry or revocation as
+// the operator's record. Plain ids, no FKs, like AuditLog.
+model IpBlock {
+  id String @id @default(uuid()) @db.Uuid
+
+  ip     String
+  reason String
+
+  createdById String   @db.Uuid
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime
+
+  revokedAt   DateTime?
+  revokedById String?   @db.Uuid
+
+  @@index([revokedAt, expiresAt])
+  @@index([createdAt])
 }
 
 // Generic append-only audit trail (Step 16). The migration adds a trigger that
@@ -274,7 +357,11 @@ model TrustedContactInvitation {
   trustedContactId String         @db.Uuid
   trustedContact   TrustedContact @relation(fields: [trustedContactId], references: [id], onDelete: Cascade)
 
-  emailNormalized String
+  // Where this link was sent: exactly one is set (CHECK in the migration).
+  // The link only works while it still matches the contact's current email
+  // (email invitation) or mobile (SMS invitation, E.164).
+  emailNormalized String?
+  mobile          String?
   tokenHash       String                         @unique
   status          TrustedContactInvitationStatus @default(PENDING)
   expiresAt       DateTime
@@ -344,12 +431,19 @@ model DeathVerificationCase {
   // Not proof that anything has been released.
   deathTriggersActivatedAt DateTime?
 
+  // Phase 19B: distinct Trusted Contact confirmations (reports by distinct
+  // reporter email) admin verify requires; snapshotted when the case opens and
+  // never recalculated. 1 or 2 (CHECK in the migration). NULL only on cases
+  // opened before 19B that were already closed: such a case is never verified.
+  requiredConfirmations Int?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   reports     DeathReport[]
   auditEvents DeathVerificationAuditEvent[]
   activations DeathTriggeredMessageActivation[]
+  evidence    DeathVerificationEvidence[]
 
   @@index([ownerUserId, openedAt])
   @@index([status])
@@ -368,6 +462,10 @@ enum DeathVerificationAuditEventType {
   ADMIN_REJECTED
   DEATH_TRIGGER_ACTIVATION_STARTED
   DEATH_TRIGGER_ACTIVATION_COMPLETED
+  // Phase 19A: a reporter's evidence file passed every check (READY), and an
+  // admin opened one. Supporting material only: neither changes the case.
+  EVIDENCE_UPLOADED
+  EVIDENCE_VIEWED_BY_ADMIN
 }
 
 enum DeathVerificationActorType {
@@ -443,8 +541,47 @@ model DeathReport {
 
   createdAt DateTime @default(now())
 
+  evidence DeathVerificationEvidence[]
+
   @@unique([deathVerificationCaseId, reportedByTrustedContactId])
   @@index([reportedByTrustedContactId])
+}
+
+// Phase 19A: a supporting file (death certificate etc.) a reporter attaches to
+// their own DeathReport while the case is open. Supporting material only: it
+// never verifies the case, changes the account or releases anything. Same
+// storage columns and upload checks as every media table, but not Customer
+// content: outside the storage quota and the Storage Manager. Cascades with
+// its report and case, like the report itself.
+model DeathVerificationEvidence {
+  id                      String                @id @default(uuid()) @db.Uuid
+  deathVerificationCaseId String                @db.Uuid
+  deathVerificationCase   DeathVerificationCase @relation(fields: [deathVerificationCaseId], references: [id], onDelete: Cascade)
+  deathReportId           String                @db.Uuid
+  deathReport             DeathReport           @relation(fields: [deathReportId], references: [id], onDelete: Cascade)
+
+  status     MediaAssetStatus @default(PENDING_UPLOAD)
+  storageKey String           @unique
+
+  storageProvider  MediaStorageProvider @default(IMAGEKIT)
+  // Provider's own id, set once the upload is verified (ImageKit fileId).
+  providerFileId   String?
+  // Set once the provider object is gone; a soft-deleted row without it is
+  // retried by the media cleanup reconciler.
+  storageDeletedAt DateTime?
+
+  originalFileName String // metadata only, never used as a path; admin-only
+  mimeType         String
+  sizeBytes        Int // expected size, verified against storage on complete
+
+  uploadedAt DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([deathVerificationCaseId, status])
+  @@index([deathReportId, status])
 }
 
 // Future values are defined now; the API only accepts TEXT until media exists.
@@ -475,6 +612,9 @@ model Message {
   contentType MessageContentType @default(TEXT)
   textContent String?
   status      MessageStatus      @default(DRAFT)
+  // Owner-only reminder (docs/private-notes.md): never released, shared,
+  // copied, searched, versioned or shown to anyone else.
+  privateNote String?
 
   recipients        MessageRecipient[]
   schedule          MessageSchedule?
@@ -484,6 +624,8 @@ model Message {
   deathActivation   DeathTriggeredMessageActivation?
   // Phase 16: BIRTHDAY / ANNIVERSARY / ANNUAL_AFTER_DEATH, per Recipient per year.
   recipientReleases MessageRecipientRelease[]
+  // Saved checkpoints of the written content (title, type, text), newest = current.
+  versions          MessageVersion[]
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -491,6 +633,33 @@ model Message {
 
   @@index([ownerUserId])
   @@index([ownerUserId, status])
+}
+
+enum MessageVersionReason {
+  CREATED
+  EDITED
+  RESTORED
+}
+
+// One row per explicit save (or restore) that changed title, contentType or
+// textContent. Immutable; media, recipients and schedule are not versioned
+// (deleted media is purged from storage, so it could not be restored).
+// Owned through the Message; removed with it.
+model MessageVersion {
+  id        String  @id @default(uuid()) @db.Uuid
+  messageId String  @db.Uuid
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  // 1, 2, 3... per message, assigned under the message row lock.
+  version     Int
+  reason      MessageVersionReason
+  title       String
+  contentType MessageContentType
+  textContent String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([messageId, version])
 }
 
 // "This message is intended for this Recipient", not "may read it now".
@@ -610,9 +779,13 @@ model RecipientMessageAccessGrant {
   recipient        Recipient      @relation(fields: [recipientId], references: [id], onDelete: Cascade)
 
   // Snapshots at release time. Email: trimmed + lowercased (same as the API).
-  // Mobile: as stored (no normalization exists yet; SMS OTP is deferred).
+  // Mobile: E.164 without formatting (matched by SMS sign-in).
   recipientEmailNormalized  String?
   recipientMobileNormalized String?
+  // Phase 18: the sender's display name ("First Last") when this Recipient got
+  // access, shown with the released Message. Never rewritten; null on grants
+  // created before 2026-10-16 or when the Customer had no name.
+  senderDisplayNameSnapshot String?
 
   // Step 24: the "a message is waiting for you" email, if the grant has an email.
   // Phase 16: several for recurring triggers (one per occurrence).
@@ -792,6 +965,9 @@ model MemoryVaultItem {
   title       String
   category    MemoryVaultCategory
   textContent String?
+  // Owner-only reminder (docs/private-notes.md): never released, shared,
+  // copied, searched, versioned or shown to anyone else.
+  privateNote String?
 
   mediaAssets MemoryVaultMediaAsset[]
   tags        MemoryVaultItemTag[]
@@ -884,6 +1060,9 @@ model MyStoryResponse {
   // Optional since Phase 14B: an answer may be photos/recordings or linked
   // memories only. The service never lets a saved answer be empty.
   textContent String?
+  // Owner-only reminder (docs/private-notes.md): never released, shared,
+  // copied, searched, versioned or shown to anyone else.
+  privateNote String?
 
   mediaAssets MyStoryMediaAsset[]
   memoryLinks MyStoryMemoryLink[]
@@ -958,6 +1137,9 @@ model MyWishResponse {
   // Optional since Phase 15B: a wish may be photos/recordings only. The
   // service never lets a saved wish be empty.
   textContent String?
+  // Owner-only reminder (docs/private-notes.md): never released, shared,
+  // copied, searched, versioned or shown to anyone else.
+  privateNote String?
 
   mediaAssets MyWishMediaAsset[]
 
@@ -999,6 +1181,38 @@ model MyWishMediaAsset {
 
   @@index([ownerUserId])
   @@index([myWishResponseId, status])
+}
+
+// Songs a Customer would like played at their funeral (My Wishes). Owner-only,
+// like every wish: never released, shared or shown to Recipients, Trusted
+// Contacts or admins. The link is stored only after server-side normalisation
+// (src/my-wishes/song-link.ts) and is never fetched. Hard deleted: no files,
+// nothing to restore.
+enum MyWishSongMoment {
+  ARRIVAL
+  REFLECTION
+  FAREWELL
+  OTHER
+}
+
+model MyWishSong {
+  id          String @id @default(uuid()) @db.Uuid
+  ownerUserId String @db.Uuid
+  owner       User   @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+
+  title       String
+  link        String?
+  moment      MyWishSongMoment?
+  // Only with moment OTHER.
+  momentOther String?
+  note        String?
+  // 0-based order in the Customer's list.
+  position    Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([ownerUserId, position])
 }
 
 // Phase 15A (approved 2026-10-08): a Customer read the My Wishes non-legal
@@ -1050,4 +1264,487 @@ model RecipientPhoto {
 
   @@index([ownerUserId])
   @@index([recipientId, status])
+}
+
+// Customer activity ("Recent changes"): the account owner's own meaningful
+// changes, in their own words. Not the admin AuditLog: no IP, device, actor
+// or content, and it goes with the account. Kept when the item it names is
+// deleted (no FK to it). Starts when the feature was enabled; never backfilled.
+enum CustomerActivityType {
+  PERSON_ADDED
+  PERSON_UPDATED
+  PERSON_REMOVED
+  TRUSTED_CONTACT_ADDED
+  TRUSTED_CONTACT_UPDATED
+  TRUSTED_CONTACT_REMOVED
+  MESSAGE_CREATED
+  MESSAGE_UPDATED
+  MESSAGE_DELETED
+  MESSAGE_SCHEDULED
+  MESSAGE_RESCHEDULED
+  MESSAGE_UNSCHEDULED
+  MEMORY_ADDED
+  MEMORY_UPDATED
+  MEMORY_DELETED
+  STORY_RESPONSE_ADDED
+  STORY_RESPONSE_UPDATED
+  STORY_RESPONSE_DELETED
+  WISH_RESPONSE_ADDED
+  WISH_RESPONSE_UPDATED
+  WISH_RESPONSE_DELETED
+  PROFILE_UPDATED
+  EMAIL_CHANGED
+  MESSAGE_VERSION_RESTORED
+}
+
+model CustomerActivity {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type     CustomerActivityType
+  // The item's id (a prompt key for My Story / My Wishes), for a link back
+  // while it still exists. Never a name, title or any content.
+  entityId String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt(sort: Desc), id(sort: Desc)])
+}
+
+enum DraftRecoveryType {
+  MESSAGE // key = Message id (an existing DRAFT)
+  NEW_MESSAGE // key = server-issued id; no Message row until Save
+  MY_STORY // key = prompt key
+  MY_WISHES // key = prompt key
+}
+
+// Autosave: the Customer's unsaved edits, kept server-side so they can be
+// recovered. Never the canonical content, never a version, never logged.
+// payload is validated per type (text fields only). Expires 30 days after
+// the last autosave; explicit Save or Discard deletes it.
+model DraftRecovery {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type         DraftRecoveryType
+  key          String
+  payload      Json
+  // What the editor started from (a Message version number, a hash of an
+  // answer's saved text, or "none"), to flag edits made elsewhere since.
+  baseRevision String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  expiresAt DateTime
+
+  @@unique([userId, type, key])
+}
+
+// Step 7: in-app support (docs/support.md). Text the Customer chose to send for
+// help, never linked to or copied from Messages, memories, stories or wishes.
+enum SupportCategory {
+  ACCOUNT_ACCESS
+  MESSAGES_RECIPIENTS
+  UPLOADS_STORAGE
+  MY_STORY_WISHES
+  TECHNICAL
+  OTHER
+}
+
+enum SupportStatus {
+  OPEN
+  IN_PROGRESS
+  WAITING_FOR_CUSTOMER
+  RESOLVED
+}
+
+enum SupportAuthorRole {
+  CUSTOMER
+  ADMIN
+}
+
+// Retention: an open policy; kept until the account is deleted (cascade, like
+// all owned data). clientRequestId makes a retried submission return the first.
+model SupportRequest {
+  id          String @id @default(uuid()) @db.Uuid
+  ownerUserId String @db.Uuid
+  owner       User   @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+
+  subject     String
+  category    SupportCategory
+  description String
+  status      SupportStatus   @default(OPEN)
+
+  clientRequestId      String   @db.Uuid
+  // Creation, follow-ups and public replies only; internal notes never touch it.
+  lastPublicActivityAt DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages      SupportMessage[]
+  internalNotes SupportInternalNote[]
+
+  @@unique([ownerUserId, clientRequestId])
+  @@index([ownerUserId, lastPublicActivityAt])
+  @@index([status, createdAt])
+  @@index([createdAt])
+}
+
+// The public conversation after the description: Customer follow-ups and admin
+// replies. Append-only in the API. authorUserId is a plain id (no FK), so an
+// admin's reply outlives their account.
+model SupportMessage {
+  id               String         @id @default(uuid()) @db.Uuid
+  supportRequestId String         @db.Uuid
+  supportRequest   SupportRequest @relation(fields: [supportRequestId], references: [id], onDelete: Cascade)
+
+  authorRole      SupportAuthorRole
+  authorUserId    String            @db.Uuid
+  body            String
+  clientRequestId String            @db.Uuid
+
+  createdAt DateTime @default(now())
+
+  @@unique([authorUserId, clientRequestId])
+  @@index([supportRequestId, createdAt])
+}
+
+// Admin-only notes in their own table, so no Customer query can reach them.
+model SupportInternalNote {
+  id               String         @id @default(uuid()) @db.Uuid
+  supportRequestId String         @db.Uuid
+  supportRequest   SupportRequest @relation(fields: [supportRequestId], references: [id], onDelete: Cascade)
+
+  authorUserId    String @db.Uuid
+  body            String
+  clientRequestId String @db.Uuid
+
+  createdAt DateTime @default(now())
+
+  @@unique([authorUserId, clientRequestId])
+  @@index([supportRequestId, createdAt])
+}
+
+// Step 10 billing (docs/billing.md). The app-run, card-free 7-day trial: one per
+// account (userId is unique), dates set by the server only.
+model CustomerTrial {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @unique @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  startedAt DateTime
+  endsAt    DateTime
+  createdAt DateTime @default(now())
+
+  @@index([endsAt])
+}
+
+// The Customer's Stripe mapping and last verified subscription state, copied
+// from Stripe's own object (never from a browser). One per account.
+model BillingAccount {
+  id                   String    @id @default(uuid()) @db.Uuid
+  userId               String    @unique @db.Uuid
+  user                 User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  stripeCustomerId     String    @unique
+  livemode             Boolean
+  stripeSubscriptionId String?   @unique
+  plan                 String?
+  // Stripe's subscription status as received (active, past_due, canceled, ...).
+  subscriptionStatus   String?
+  cancelAtPeriodEnd    Boolean   @default(false)
+  currentPeriodEnd     DateTime?
+  syncedAt             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([subscriptionStatus, currentPeriodEnd])
+}
+
+// Webhook idempotency: one row per processed Stripe event id, written in the
+// same transaction as its effect. No payload is kept.
+model StripeEvent {
+  id          String   @id
+  type        String
+  livemode    Boolean
+  processedAt DateTime @default(now())
+}
+
+// Notification centre, Step 1: email announcement drafts only (SUPER_ADMIN).
+// No recipients, deliveries or sends exist yet; the HTML is rendered on demand.
+enum AnnouncementStatus {
+  DRAFT
+}
+
+model EmailAnnouncement {
+  id     String             @id @default(uuid()) @db.Uuid
+  status AnnouncementStatus @default(DRAFT)
+
+  name           String // internal, admins only
+  subject        String
+  body           String // plain text
+  // Both or neither: a label and a key from the server allowlist (never a URL).
+  ctaLabel       String?
+  ctaDestination String?
+
+  // Optimistic concurrency: an edit names the version it started from.
+  version Int @default(1)
+
+  createdByUserId String @db.Uuid
+  createdBy       User   @relation("AnnouncementCreatedBy", fields: [createdByUserId], references: [id])
+  updatedByUserId String @db.Uuid
+  updatedBy       User   @relation("AnnouncementUpdatedBy", fields: [updatedByUserId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Step 7: who a send would reach. PILOT (default) = only the explicitly selected pilot members.
+  audience AnnouncementAudience @default(PILOT)
+
+  testSends    AnnouncementTestSend[]
+  sendRun      AnnouncementSendRun?
+  pilotMembers AnnouncementPilotMember[]
+
+  @@index([updatedAt, id])
+}
+
+// Step 2: a test email of a saved draft, to the requesting SUPER_ADMIN only.
+// QUEUED → PROCESSING (claimed) → ACCEPTED (by the provider; not proof of
+// delivery) | FAILED (provably not accepted) | UNKNOWN (may have been accepted:
+// never retried automatically, so no duplicate).
+enum AnnouncementTestStatus {
+  QUEUED
+  PROCESSING
+  ACCEPTED
+  FAILED
+  UNKNOWN
+}
+
+model AnnouncementTestSend {
+  id                  String            @id @default(uuid()) @db.Uuid
+  announcementId      String            @db.Uuid
+  announcement        EmailAnnouncement @relation(fields: [announcementId], references: [id])
+  announcementVersion Int
+
+  requestedByUserId String @db.Uuid
+  requestedBy       User   @relation(fields: [requestedByUserId], references: [id], onDelete: Cascade)
+  // One client operation = one request, per admin: a retried POST returns this row.
+  clientOperationId String @db.Uuid
+
+  // Immutable snapshot taken when the request was accepted; later draft edits never reach the worker.
+  toEmail        String
+  subject        String
+  body           String
+  ctaLabel       String?
+  ctaDestination String?
+
+  status            AnnouncementTestStatus @default(QUEUED)
+  attemptCount      Int                    @default(0)
+  // A safe category (e.g. rate_limit_exceeded), never a provider response.
+  lastErrorCode     String?
+  providerMessageId String?
+  acceptedAt        DateTime?
+  finishedAt        DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([requestedByUserId, clientOperationId])
+  @@index([requestedByUserId, createdAt])
+  @@index([status, createdAt])
+  @@index([announcementId, createdAt])
+}
+
+// Step 4: one customer broadcast of a saved announcement. PREPARING (audience
+// being written in keyset batches) → SENDING → COMPLETED | CANCELLED | BLOCKED
+// (gate or policy closed mid-run). Content is an immutable snapshot rendered at
+// confirmation; later draft edits never reach it. At most one run per
+// announcement (unique) and one active run at a time (partial unique index in
+// the migration). COMPLETED = processing finished, not "every customer received it".
+enum AnnouncementRunStatus {
+  PREPARING
+  SENDING
+  COMPLETED
+  CANCELLED
+  BLOCKED
+}
+
+model AnnouncementSendRun {
+  id                  String            @id @default(uuid()) @db.Uuid
+  announcementId      String            @unique @db.Uuid
+  announcement        EmailAnnouncement @relation(fields: [announcementId], references: [id])
+  announcementVersion Int
+
+  requestedByUserId String @db.Uuid
+  requestedBy       User   @relation("AnnouncementRunRequestedBy", fields: [requestedByUserId], references: [id])
+  // A retried confirmation with the same id returns this run.
+  clientOperationId String @db.Uuid
+
+  // Copied from the draft at confirmation. PILOT runs are prepared at confirmation (immutable member set).
+  audience AnnouncementAudience @default(PILOT)
+
+  // Snapshot: what was reviewed, rendered once (subject, HTML, text) plus the source fields.
+  subject        String
+  body           String
+  ctaLabel       String?
+  ctaDestination String?
+  html           String
+  text           String
+  // AnnouncementPolicy.version at confirmation; a different version at send time blocks the run.
+  policyVersion  String
+  // Eligible count the admin confirmed (server-issued review); informational.
+  reviewedCount  Int
+
+  status             AnnouncementRunStatus @default(PREPARING)
+  // Audience boundary: only Customers created at or before this instant; keyset cursor over User.id.
+  audienceBoundaryAt DateTime
+  prepareCursor      String?               @db.Uuid
+  preparedAt         DateTime?
+  // One driver at a time; also "paused until" (Retry-After, daily cap).
+  leaseOwner         String?
+  leaseUntil         DateTime?
+
+  cancelRequestedAt DateTime?
+  cancelledByUserId String?   @db.Uuid
+  cancelledBy       User?     @relation("AnnouncementRunCancelledBy", fields: [cancelledByUserId], references: [id])
+  // Safe reason for BLOCKED (e.g. broadcast_disabled, policy_blocked).
+  finishReason      String?
+  completedAt       DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  recipients AnnouncementRunRecipient[]
+  retries    AnnouncementRetry[]
+
+  @@unique([requestedByUserId, clientOperationId])
+  @@index([status, leaseUntil])
+}
+
+// Per Customer outcome. ACCEPTED = Microsoft accepted it for delivery (not
+// "delivered"); UNKNOWN = it may have been accepted, never retried
+// automatically; CANCELLED = stopped before any attempt.
+enum AnnouncementRecipientStatus {
+  QUEUED
+  PROCESSING
+  ACCEPTED
+  FAILED
+  UNKNOWN
+  SKIPPED
+  CANCELLED
+}
+
+model AnnouncementRunRecipient {
+  id     String              @id @default(uuid()) @db.Uuid
+  runId  String              @db.Uuid
+  run    AnnouncementSendRun @relation(fields: [runId], references: [id])
+  userId String              @db.Uuid
+  user   User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // sha256 of the lower-cased address prepared for this run; no address is stored. A
+  // different current address at send time = skipped (email_changed), never redirected.
+  emailHash String
+
+  status        AnnouncementRecipientStatus @default(QUEUED)
+  attemptCount  Int                         @default(0)
+  // Earliest next attempt after a provably-not-accepted failure (throttling).
+  nextAttemptAt DateTime?
+  attemptedAt   DateTime?
+  // A safe category (skip reason or provider error code), never a provider response.
+  reasonCode        String?
+  // Graph request id: the correlation id Microsoft support asks for.
+  providerMessageId String?
+  finishedAt        DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  retryItems AnnouncementRetryItem[]
+
+  @@unique([runId, userId])
+  @@unique([runId, emailHash])
+  @@index([runId, status, id])
+  @@index([attemptedAt])
+}
+
+// Notification centre: a SUPER_ADMIN's manual retry of FAILED recipients whose
+// failure is provably not accepted (throttling / sign-in, attempts exhausted).
+// Append-only history: the run's earlier state and each recipient's previous
+// outcome are kept here; the retried rows go back to QUEUED in the same run.
+model AnnouncementRetry {
+  id                String              @id @default(uuid()) @db.Uuid
+  runId             String              @db.Uuid
+  run               AnnouncementSendRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  requestedByUserId String              @db.Uuid
+  requestedBy       User                @relation(fields: [requestedByUserId], references: [id])
+  // A replayed confirmation (double click, network retry) returns this request.
+  clientOperationId String              @db.Uuid
+  // ONE (a single recipient) or ALL (every eligible failure at review time).
+  scope             String
+  // sha256 of the sorted recipient ids the admin reviewed; the server's fresh set must match.
+  setHash           String
+  recipientCount    Int
+  // The run as it was before this retry (a COMPLETED run reopens to SENDING).
+  previousRunStatus   AnnouncementRunStatus
+  previousCompletedAt DateTime?
+  createdAt           DateTime            @default(now())
+
+  items AnnouncementRetryItem[]
+
+  @@unique([requestedByUserId, clientOperationId])
+  @@index([runId, createdAt])
+}
+
+model AnnouncementRetryItem {
+  id                   String                   @id @default(uuid()) @db.Uuid
+  retryId              String                   @db.Uuid
+  retry                AnnouncementRetry        @relation(fields: [retryId], references: [id], onDelete: Cascade)
+  recipientId          String                   @db.Uuid
+  recipient            AnnouncementRunRecipient @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+  previousReasonCode   String?
+  previousAttemptCount Int
+  previousAttemptedAt  DateTime?
+  previousFinishedAt   DateTime?
+  createdAt            DateTime                 @default(now())
+
+  @@unique([retryId, recipientId])
+  @@index([recipientId])
+}
+
+// Step 7: optional announcements go to the explicitly selected pilot members, or (later) to
+// every eligible Customer. Either way every eligibility, consent and suppression rule applies.
+enum AnnouncementAudience {
+  PILOT
+  ALL_ELIGIBLE
+}
+
+// A Customer account a SUPER_ADMIN put in an announcement's pilot group (max 10, enforced in the service).
+model AnnouncementPilotMember {
+  announcementId  String            @db.Uuid
+  announcement    EmailAnnouncement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  userId          String            @db.Uuid
+  user            User              @relation("AnnouncementPilotMember", fields: [userId], references: [id], onDelete: Cascade)
+  addedByUserId   String            @db.Uuid
+  addedBy         User              @relation("AnnouncementPilotAddedBy", fields: [addedByUserId], references: [id])
+  createdAt       DateTime          @default(now())
+
+  @@id([announcementId, userId])
+}
+
+// Addresses that must never get optional email: unsubscribed, hard-bounced or complained.
+// Keyed by sha256(lower(email)) so no address is stored and a later account change cannot escape it.
+enum SuppressionReason {
+  UNSUBSCRIBED
+  HARD_BOUNCE
+  COMPLAINT
+}
+
+model EmailSuppression {
+  id        String            @id @default(uuid()) @db.Uuid
+  emailHash String            @unique
+  reason    SuppressionReason
+  // The account it came from, when known; the suppression outlives it.
+  userId    String?           @db.Uuid
+  user      User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+  createdAt DateTime          @default(now())
 }

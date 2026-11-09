@@ -8,6 +8,7 @@ import {
 } from '../audit/audit-log.service.js';
 import { EmailProvider } from '../email/email-provider.js';
 import {
+  adminInvitation,
   changeEmail,
   emailChanged,
   resetPassword,
@@ -23,6 +24,7 @@ import {
   UserStatus,
 } from '../generated/prisma/client.js';
 import { positiveInt } from '../media/media.service.js';
+import { recordActivity } from '../activity/customer-activity.js';
 import { errorCode, PrismaService } from '../prisma/prisma.service.js';
 import { maskEmail } from './dto/register.dto.js';
 
@@ -48,6 +50,8 @@ export const authTokenSettings = (config: ConfigService) => ({
     86_400,
   ),
   resetTtl: positiveInt(config, 'PASSWORD_RESET_TOKEN_TTL_SECONDS', 3_600),
+  // Admin invitations: 72 h by default.
+  inviteTtl: positiveInt(config, 'ADMIN_INVITATION_TTL_SECONDS', 259_200),
 });
 
 /**
@@ -84,7 +88,9 @@ export class AuthTokensService {
     const ttl =
       purpose === AuthTokenPurpose.PASSWORD_RESET
         ? this.settings.resetTtl
-        : this.settings.verifyTtl;
+        : purpose === AuthTokenPurpose.ADMIN_INVITATION
+          ? this.settings.inviteTtl
+          : this.settings.verifyTtl;
     return this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${userId}::uuid FOR UPDATE`;
       const recent = await tx.authToken.count({
@@ -259,6 +265,59 @@ export class AuthTokensService {
     return !!userId;
   }
 
+  /**
+   * Admin invitation: a new single-use link (older ones superseded) emailed to
+   * the invited ADMIN. 'sent' means the email provider accepted it, not that it
+   * was delivered. Never throws; the token is never logged or audited.
+   */
+  async sendAdminInvitation(user: Recipient, audit: AuditEntry): Promise<'sent' | 'not_sent' | 'capped'> {
+    try {
+      const token = await this.issue(user.id, AuthTokenPurpose.ADMIN_INVITATION, new Date(), { audit });
+      if (!token) return 'capped';
+      await this.email.send({
+        kind: 'admin-invitation',
+        to: user.email,
+        ...adminInvitation(this.emailConfig.settings.appBaseUrl, token, user.firstName, this.settings.inviteTtl),
+      });
+      this.logger.log(`admin_invitation_sent user ${user.id} ${maskEmail(user.email)}`);
+      return 'sent';
+    } catch (err) {
+      this.logger.error(`admin_invitation_failed user ${user.id} (code: ${errorCode(err)})`);
+      return 'not_sent';
+    }
+  }
+
+  /**
+   * Valid invitation link for an invited ADMIN who has never set a password →
+   * their password, email verified, every other invitation link used; audited.
+   * No session and no MFA here: the admin sign-in requires TOTP setup next.
+   */
+  async acceptAdminInvitation(token: string, passwordHash: string, meta: RequestMeta): Promise<boolean> {
+    const now = new Date();
+    const userId = await this.prisma.$transaction(async (tx) => {
+      const id = (await this.consume(tx, token, AuthTokenPurpose.ADMIN_INVITATION, now))?.userId;
+      if (!id) return null;
+      const { count } = await tx.user.updateMany({
+        where: { id, role: UserRole.ADMIN, status: UserStatus.ACTIVE, deletedAt: null, passwordChangedAt: null },
+        data: { passwordHash, passwordChangedAt: now, emailVerifiedAt: now },
+      });
+      if (!count) return null;
+      await tx.authToken.updateMany({
+        where: { userId: id, purpose: AuthTokenPurpose.ADMIN_INVITATION, consumedAt: null },
+        data: { consumedAt: now },
+      });
+      await writeAuditLog(tx, {
+        eventType: AuditEventType.ADMIN_INVITATION_ACCEPTED,
+        actor: { type: AuditActorType.ADMIN, userId: id, ...meta },
+        subjectType: 'User',
+        subjectId: id,
+      });
+      return id;
+    });
+    this.logger.log(userId ? `admin_invitation_accepted user ${userId}` : 'admin_invitation_invalid_token');
+    return !!userId;
+  }
+
   /** A new change-email link (older ones superseded). Null when capped this hour. */
   requestEmailChange(
     userId: string,
@@ -408,6 +467,8 @@ export class AuthTokensService {
           subjectType: 'User',
           subjectId: used.userId,
         });
+        // The Customer's own "Recent changes" (no addresses).
+        await recordActivity(tx, { userId: used.userId, type: 'EMAIL_CHANGED' });
         return {
           result: 'changed' as const,
           userId: used.userId,

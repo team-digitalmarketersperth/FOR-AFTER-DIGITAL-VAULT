@@ -6,7 +6,7 @@
 | | |
 |---|---|
 | **Built** | Customer ownership (Steps 2–11), Recipient grants (Step 13), Trusted Contact relationships (Step 14), death-verification decisions (Step 15), **admin backend with MFA-enforcing `AdminGuard`, role-safe user management and audit (Step 16)** |
-| **Planned** | RLS, Trusted Contact evidence/confirmation, admin re-authentication, role management |
+| **Planned** | RLS, Trusted Contact confirmation, admin re-authentication, role management |
 | **Related** | [Authentication](authentication.md) · [Security](security.md) · [Database](database.md) |
 
 ## 🧭 Contents
@@ -41,7 +41,9 @@
 - **As built (Step 14):** not a `User` role but a separate principal (email code, own session). Can list the Customers
   who name their email, see a display name, a `hasPreservedContent` true/false and the case status, and **file one
   death report** per relationship.
-- **Not built:** evidence upload, confirmation, editing recipient info.
+- **Phase 19A:** the reporter may upload supporting evidence to their own report on an open case and re-view their own
+  files; other contacts, the Customer and Recipients never see it ([death-verification.md §2A](death-verification.md#2a-supporting-evidence-phase-19a)).
+- **Not built:** confirmation, editing recipient info.
 - **Never:** Messages, media, Memory Vault, My Story, My Wishes, recipient lists, counts or titles, before or after a report.
 
 ### 🛠️ Admin / Super admin

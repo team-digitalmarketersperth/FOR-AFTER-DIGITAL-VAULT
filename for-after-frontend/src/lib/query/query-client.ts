@@ -2,7 +2,21 @@ import { MutationCache, QueryCache, QueryClient } from '@tanstack/react-query';
 import type { PromptArea } from '@/lib/api/prompts';
 import type { MediaScope, StorageFilters } from '@/lib/api/media';
 import type { MemoryFilters } from '@/lib/api/memory-vault';
-import type { AuditFilters, CaseFilters, DeadLetterFilters, UserFilters } from '@/lib/api/admin';
+import type {
+  AuditFilters,
+  BillingFilters,
+  AdminAccessFilters,
+  AiFilters,
+  SecurityFilters,
+  StorageAssetFilters,
+  AdminSupportFilters,
+  CaseFilters,
+  DeadLetterFilters,
+  DeliveryCategory,
+  DeliveryFilters,
+  ReleaseFilters,
+  UserFilters,
+} from '@/lib/api/admin';
 import { isApiError } from '@/lib/api/errors';
 
 /**
@@ -23,10 +37,15 @@ export const queryKeys = {
   messages: ['messages'] as const,
   message: (id: string) => ['messages', id] as const,
   schedule: (messageId: string) => ['messages', messageId, 'schedule'] as const,
+  versions: (messageId: string) => ['messages', messageId, 'versions'] as const,
+  version: (messageId: string, versionId: string) => ['messages', messageId, 'versions', versionId] as const,
+  // Unsaved autosaves; key 'latest' = the newest never-saved new message.
+  draft: (type: string, key: string | null) => ['drafts', type, key ?? 'latest'] as const,
   storage: ['storage'] as const,
   // Under 'storage', so one invalidation refreshes totals and the file list.
   storageItems: (filters: StorageFilters) => ['storage', 'items', filters] as const,
   wishesNotice: ['my-wishes', 'notice'] as const,
+  wishSongs: ['my-wishes', 'songs'] as const,
   memories: ['memory-vault'] as const,
   memoryList: (filters: MemoryFilters) => ['memory-vault', 'list', filters] as const,
   memoryTags: ['memory-vault', 'tags'] as const,
@@ -37,8 +56,24 @@ export const queryKeys = {
   mediaAccess: (scope: MediaScope, assetId: string) => [...scope.kind.split('/'), scope.id, 'media', assetId, 'access'],
   prompts: (area: PromptArea) => [area] as const,
   prompt: (area: PromptArea, key: string) => [area, key] as const,
+  // Under the My Story root, so saving or deleting an answer refreshes the book.
+  storyBook: ['my-story', 'book'] as const,
   // The signed-in Customer's own death-verification case (Step 15 safety UI).
   deathVerification: ['death-verification', 'me'] as const,
+  // Dashboard setup progress (GET /users/me/readiness).
+  readiness: ['readiness'] as const,
+  // Dashboard "Needs your attention" (GET /users/me/attention).
+  attention: ['attention'] as const,
+  // Read-only delivery plan (GET /users/me/delivery-timeline).
+  deliveryTimeline: ['delivery-timeline'] as const,
+  // The Customer's own Recent changes (GET /users/me/activity).
+  activity: (page: number, limit: number) => ['activity', page, limit] as const,
+  // Plan and access (Step 10); cleared on sign-out like every Customer query.
+  billing: ['billing'] as const,
+  // Customer support (cleared with every other Customer query on sign-out).
+  supportRequests: ['support'] as const,
+  supportPage: (page: number) => ['support', 'page', page] as const,
+  supportRequest: (id: string) => ['support', id] as const,
 };
 
 /**
@@ -54,6 +89,8 @@ export const portalKeys = {
   accounts: ['trusted-contact', 'accounts'] as const,
   caseStatus: (trustedContactId: string) =>
     ['trusted-contact', 'accounts', trustedContactId, 'death-verification'] as const,
+  evidence: (trustedContactId: string) =>
+    ['trusted-contact', 'accounts', trustedContactId, 'death-verification', 'evidence'] as const,
 };
 const isPortal = (value: unknown): value is Portal => value === 'recipient' || value === 'trusted-contact';
 
@@ -74,6 +111,7 @@ export const adminKeys = {
   challenge: ['admin', 'sign-in', 'challenge'] as const,
   expired: ['admin', 'sign-in', 'expired'] as const,
   dashboard: ['admin', 'dashboard'] as const,
+  announcements: ['admin', 'announcements'] as const,
   users: ['admin', 'users'] as const,
   userList: (f: UserFilters) => ['admin', 'users', 'list', f] as const,
   user: (id: string) => ['admin', 'users', id] as const,
@@ -88,6 +126,24 @@ export const adminKeys = {
   // Under queues: every queue refresh also re-reads dead letters.
   deadLetters: (f: DeadLetterFilters) => ['admin', 'queues', 'dead-letters', f] as const,
   deadLetter: (id: string) => ['admin', 'queues', 'dead-letters', id] as const,
+  releases: ['admin', 'releases'] as const,
+  releaseList: (f: ReleaseFilters) => ['admin', 'releases', 'list', f] as const,
+  release: (reference: string) => ['admin', 'releases', reference] as const,
+  deliveries: ['admin', 'deliveries'] as const,
+  systemHealth: ['admin', 'system', 'health'] as const,
+  billingAccounts: (f: BillingFilters) => ['admin', 'billing', f] as const,
+  adminAccounts: (f: AdminAccessFilters) => ['admin', 'access', 'list', f] as const,
+  adminAccount: (id: string) => ['admin', 'access', id] as const,
+  aiOperations: (f: AiFilters) => ['admin', 'system', 'ai', f] as const,
+  securityList: (f: SecurityFilters) => ['admin', 'security', 'list', f] as const,
+  securityEvent: (reference: string) => ['admin', 'security', reference] as const,
+  storageList: (f: StorageAssetFilters) => ['admin', 'storage', 'list', f] as const,
+  storageAsset: (reference: string) => ['admin', 'storage', reference] as const,
+  supportList: (f: AdminSupportFilters) => ['admin', 'support', 'list', f] as const,
+  supportRequests: ['admin', 'support'] as const,
+  supportRequest: (id: string) => ['admin', 'support', id] as const,
+  deliveryList: (f: DeliveryFilters) => ['admin', 'deliveries', 'list', f] as const,
+  delivery: (category: DeliveryCategory, reference: string) => ['admin', 'deliveries', category, reference] as const,
 };
 
 const isMe = (key: readonly unknown[]) => key[0] === 'auth' && key[1] === 'me';

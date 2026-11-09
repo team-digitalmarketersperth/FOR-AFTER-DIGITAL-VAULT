@@ -1,6 +1,7 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
+import { CompanionProvider } from '@/components/companion/companion';
 import type { Message, MessageSummary } from '@/lib/api/messages';
 import { json, renderWithClient, routeFetch, router, page } from '@/test/utils';
 import { MessageDetail } from './message-detail';
@@ -27,10 +28,12 @@ const message = (over: Partial<Message> = {}): Message => ({
   title: 'For your 18th',
   contentType: 'TEXT',
   textContent: 'Dear Sofia,',
+  privateNote: null,
   status: 'DRAFT',
   createdAt: '2026-09-01T00:00:00Z',
   updatedAt: '2026-09-02T00:00:00Z',
   recipients: [{ id: 'r1', firstName: 'Sofia', lastName: null, relationship: 'Daughter' }],
+  version: 1,
   ...over,
 });
 
@@ -68,6 +71,31 @@ describe('Messages', () => {
     expect(screen.queryByRole('region', { name: 'Released' })).not.toBeInTheDocument();
   });
 
+  it('Help me write: only the Message text is offered and replaced, after Use this draft; nothing is saved', async () => {
+    const api = routeFetch({
+      'GET /recipients': json(200, page([person('r1', 'Sofia')])),
+      'POST /assistant/reply': json(200, { reply: 'Dear Sofia, I am proud of you.', truncated: false, draft: true }),
+    });
+    renderWithClient(<CompanionProvider><NewMessage /></CompanionProvider>);
+    await userEvent.type(await screen.findByLabelText('Title'), 'For Sofia');
+    await userEvent.type(screen.getByLabelText(/^Message/), 'proud notes');
+    await userEvent.type(screen.getByLabelText(/^Private note to yourself/), 'Synthetic private reason');
+    await userEvent.click(screen.getByRole('button', { name: 'Help me write' }));
+    const p = await screen.findByRole('dialog', { name: /For After AI companion/ });
+    expect(p).toHaveTextContent('For: For Sofia');
+    await userEvent.click(within(p).getByRole('checkbox', { name: /Include the text in “Message”/ }));
+    expect(within(p).getByLabelText('Text that will be included')).toHaveTextContent('proud notes');
+    await userEvent.click(within(p).getByRole('button', { name: 'Polish my text' }));
+    expect(api.called('POST', '/assistant/reply')[0].body).toEqual({ page: 'messages', action: 'improve', source: 'proud notes', history: [] });
+    expect(JSON.stringify(api.calls)).not.toContain('Synthetic private reason');
+    await userEvent.click(await within(p).findByRole('button', { name: 'Use this draft' }));
+    expect(within(p).getByRole('status')).toHaveTextContent('The draft is in “Message”. It isn’t saved: review it, then choose Save draft.');
+    await userEvent.keyboard('{Escape}');
+    expect(screen.getByLabelText(/^Message/)).toHaveValue('Dear Sofia, I am proud of you.');
+    expect(screen.getByLabelText('Title')).toHaveValue('For Sofia');
+    expect(api.called('POST', '/messages')).toHaveLength(0);
+  });
+
   it('creates a draft with the chosen type and people; VIDEO is offered (Phase 12)', async () => {
     const api = routeFetch({
       'GET /recipients': json(200, page([person('r1', 'Sofia'), person('r2', 'Tom')])),
@@ -91,6 +119,7 @@ describe('Messages', () => {
       title: 'For your 18th',
       contentType: 'MIXED',
       textContent: 'Dear Tom,',
+      privateNote: null,
       recipientIds: ['r2'],
     });
   });
@@ -244,6 +273,27 @@ describe('Creating a draft, then going to scheduling', () => {
     await userEvent.type(screen.getByLabelText('Title'), 'For your 18th');
     await userEvent.type(screen.getByLabelText(/^Message/), 'Dear Sofia,');
   }
+
+  it('a private note is labelled owner-only, saved with the draft, and shown only on the detail', async () => {
+    const api = routeFetch({ ...people, 'POST /messages': json(201, message()) });
+    renderWithClient(<NewMessage />);
+    await fillTextDraft();
+    const note = screen.getByLabelText(/^Private note to yourself/);
+    expect(note).toHaveAccessibleDescription('Only you can see this.');
+    await userEvent.type(note, 'Rewrite after Sarah graduates.');
+    await userEvent.click(screen.getByRole('button', { name: 'Save draft' }));
+    await waitFor(() =>
+      expect(api.called('POST', '/messages')[0]?.body).toMatchObject({ textContent: 'Dear Sofia,', privateNote: 'Rewrite after Sarah graduates.' }),
+    );
+  });
+
+  it('the detail shows the owner their note', async () => {
+    routeFetch({ 'GET /messages/m1': json(200, message({ privateNote: 'Rewrite later.' })), 'GET /messages/m1/media': json(200, []) });
+    renderWithClient(<MessageDetail id="m1" />);
+    const note = await screen.findByRole('region', { name: 'Private note to yourself' });
+    expect(note).toHaveTextContent('Rewrite later.');
+    expect(note).toHaveTextContent('Only you can see this.');
+  });
 
   it('Save draft creates once and opens the draft as before', async () => {
     const api = routeFetch({ ...people, 'POST /messages': json(201, message()) });

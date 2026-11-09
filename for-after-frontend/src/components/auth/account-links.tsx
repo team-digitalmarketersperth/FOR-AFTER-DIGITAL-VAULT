@@ -14,6 +14,7 @@ import {
   useResendVerification,
   useResetPassword,
   useVerifyEmail,
+  useUnsubscribe,
 } from '@/hooks/use-auth';
 import type { ApiError } from '@/lib/api/errors';
 import {
@@ -193,7 +194,14 @@ export function ForgotPasswordForm() {
   );
 }
 
-function ResetLinkInvalid() {
+function ResetLinkInvalid({ admin }: { admin?: boolean }) {
+  if (admin) {
+    return (
+      <Notice title="This invitation link can't be used">
+        Invitation links work once and expire. Ask a super admin to resend your invitation.
+      </Notice>
+    );
+  }
   return (
     <div className="grid gap-6">
       <Notice title="This link can't be used">
@@ -206,15 +214,28 @@ function ResetLinkInvalid() {
   );
 }
 
-export function ResetPasswordForm({ token }: { token?: string }) {
-  const reset = useResetPassword();
+/** admin: the invited ADMIN's first password (then admin sign-in with two-factor setup). */
+export function ResetPasswordForm({ token, admin }: { token?: string; admin?: boolean }) {
+  const reset = useResetPassword(admin);
   const form = useForm<ResetPasswordValues>({
     resolver: zodResolver(resetPasswordSchema),
     defaultValues: { newPassword: '', confirmNewPassword: '' },
   });
   const { errors } = form.formState;
 
-  if (!token || isInvalidLink(reset.error)) return <ResetLinkInvalid />;
+  if (!token || isInvalidLink(reset.error)) return <ResetLinkInvalid admin={admin} />;
+  if (reset.isSuccess && admin) {
+    return (
+      <div className="grid gap-6">
+        <Notice title="Your password is set">
+          Sign in to the admin portal. You will set up two-factor authentication before you can use it.
+        </Notice>
+        <Button asChild size="lg" className="w-full">
+          <Link href="/admin/login">Go to admin sign-in</Link>
+        </Button>
+      </div>
+    );
+  }
   if (reset.isSuccess) {
     return (
       <div className="grid gap-6">
@@ -255,7 +276,7 @@ export function ResetPasswordForm({ token }: { token?: string }) {
       </fieldset>
       <Button type="submit" size="lg" className="mt-1 w-full" disabled={reset.isPending}>
         {reset.isPending && <Spinner />}
-        {reset.isPending ? 'Saving…' : 'Set new password'}
+        {reset.isPending ? 'Saving…' : admin ? 'Set password' : 'Set new password'}
       </Button>
     </form>
   );
@@ -327,6 +348,43 @@ export function VerifyEmailChange({ token }: { token?: string }) {
       </Notice>
       <Button asChild variant="outline" size="lg" className="w-full">
         <Link href="/settings">Back to Account settings</Link>
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * Step 7: from the link in an announcement email. Opening the page changes
+ * nothing (mail scanners open links); only the button unsubscribes. Works
+ * signed in or not; the token only allows unsubscribing that one address.
+ */
+export function Unsubscribe({ token }: { token?: string }) {
+  const unsubscribe = useUnsubscribe();
+  if (!token) {
+    return (
+      <Notice title="This link is incomplete">
+        Use the unsubscribe link from the email itself, or change your email preferences in Account settings.
+      </Notice>
+    );
+  }
+  if (unsubscribe.isSuccess) {
+    return (
+      <Notice title="You're unsubscribed">
+        You won&apos;t get news emails from For After any more. Important emails about your account and messages will still
+        arrive.
+      </Notice>
+    );
+  }
+  return (
+    <div className="grid gap-6">
+      <p className="text-foreground-secondary">
+        You&apos;ll stop getting optional news emails from For After. Important emails about your account, sign-in and
+        messages are not affected.
+      </p>
+      <FormError error={unsubscribe.error} />
+      <Button size="lg" className="w-full" disabled={unsubscribe.isPending} onClick={() => unsubscribe.mutate(token)}>
+        {unsubscribe.isPending && <Spinner />}
+        Unsubscribe
       </Button>
     </div>
   );

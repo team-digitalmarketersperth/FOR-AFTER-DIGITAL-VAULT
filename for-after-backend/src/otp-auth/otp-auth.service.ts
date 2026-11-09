@@ -2,6 +2,7 @@ import {
   HttpException,
   HttpStatus,
   Logger,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -20,20 +21,34 @@ import {
   trustedContactSignInCode,
 } from '../email/email-templates.js';
 import { positiveInt } from '../media/media.service.js';
+import { maskMobile } from '../recipients/dto/create-recipient.dto.js';
 import type { RedisService } from '../redis/redis.service.js';
+import {
+  SmsVerification,
+  SmsVerificationError,
+} from '../sms/sms-verification.js';
 
-// Shared passwordless email OTP + opaque Redis session engine. Each principal
-// type (Recipient, Trusted Contact) subclasses it with its own env prefix,
-// Redis namespace, cookie, pepper and eligibility rule, so one principal's
-// challenge or session can never authenticate another.
+// Shared passwordless sign-in (email OTP, SMS OTP through Twilio Verify) and
+// opaque Redis session engine. Each principal type (Recipient, Trusted
+// Contact) subclasses it with its own env prefix, Redis namespace, cookie,
+// pepper and eligibility rule, so one principal's challenge or session can
+// never authenticate another. Email and SMS end in the same session.
 
 // Same for wrong, expired, reused, exhausted and no-access.
 export const INVALID_CODE =
   'The code is invalid or has expired. Request a new code.';
 export const TOO_MANY = 'Too many requests. Please try again later.';
+export const SMS_UNAVAILABLE =
+  'Text message sign-in is unavailable right now. Try again later or use your email.';
 
 /** Everything an OTP session holds. Authorization is re-checked in PostgreSQL. */
 export type OtpPrincipal = { emailNormalized: string };
+/** A session proven by SMS code. E.164. */
+export type MobilePrincipal = { mobile: string };
+/** Email (email code) or mobile (SMS code): what the session was proven with. */
+export type SessionPrincipal = OtpPrincipal | MobilePrincipal;
+export const maskPrincipal = (p: SessionPrincipal) =>
+  'mobile' in p ? maskMobile(p.mobile) : maskEmail(p.emailNormalized);
 
 export type OtpDeliveryInput = {
   email: string;
@@ -108,6 +123,8 @@ export type OtpAuthOptions = {
   kind: string;
   /** Generic request-otp message; identical for known and unknown emails. */
   requestedMessage: string;
+  /** Generic request-sms-otp message; identical for known and unknown mobiles. */
+  smsRequestedMessage: string;
 };
 
 const sha256 = (value: string) =>
@@ -137,6 +154,7 @@ export abstract class OtpAuthService {
     private readonly delivery: OtpDelivery,
     private readonly config: ConfigService,
     private readonly options: OtpAuthOptions,
+    private readonly sms: SmsVerification,
   ) {
     const { prefix, kind } = options;
     this.logger = new Logger(new.target.name);
@@ -156,8 +174,11 @@ export abstract class OtpAuthService {
     };
   }
 
-  /** Whether this email may currently sign in. Checked at request and verify. */
-  protected abstract hasAccess(emailNormalized: string): Promise<boolean>;
+  /**
+   * Whether this email or mobile may currently sign in. Checked at request
+   * and verify, by the same rule for both.
+   */
+  protected abstract hasAccess(principal: SessionPrincipal): Promise<boolean>;
 
   /**
    * Same response for every valid email, known or not. A code is only sent
@@ -182,7 +203,7 @@ export abstract class OtpAuthService {
 
     const challengeId = token();
     const code = randomInt(0, 1_000_000).toString().padStart(6, '0');
-    const eligible = await this.hasAccess(emailNormalized);
+    const eligible = await this.hasAccess({ emailNormalized });
     const key = this.keys.challenge(challengeId);
     await this.redis.client
       .multi()
@@ -213,7 +234,7 @@ export abstract class OtpAuthService {
     challengeId: string,
     code: string,
     ip = 'unknown',
-  ): Promise<{ sessionId: string; principal: OtpPrincipal }> {
+  ): Promise<{ sessionId: string; principal: SessionPrincipal }> {
     const { kind } = this.options;
     const { maxAttempts, verifyIpLimit } = this.settings;
     if (await this.overLimit('verify-ip', ip, verifyIpLimit)) {
@@ -248,7 +269,7 @@ export abstract class OtpAuthService {
       throw await fail('already used', false);
     }
     // Re-checked now: access may have changed since the code was requested.
-    if (!(await this.hasAccess(challenge.email))) {
+    if (!(await this.hasAccess({ emailNormalized: challenge.email }))) {
       throw await fail('no eligible access', false);
     }
 
@@ -259,7 +280,86 @@ export abstract class OtpAuthService {
     return { sessionId: await this.createSession(principal), principal };
   }
 
-  async createSession(principal: OtpPrincipal): Promise<string> {
+  /**
+   * Same response for every valid mobile, known or not. Twilio is only asked
+   * to text eligible mobiles (no SMS relay for arbitrary numbers), without
+   * awaiting it, so the response time does not reveal eligibility either.
+   * Twilio generates and stores the code; we never see it.
+   */
+  async requestSmsOtp(
+    mobile: string,
+    ip = 'unknown',
+  ): Promise<{ message: string }> {
+    const { kind } = this.options;
+    const { requestLimit, ipRequestLimit } = this.settings;
+    if (
+      (await this.overLimit('request-ip', ip, ipRequestLimit)) ||
+      (await this.overLimit('request-mobile', mobile, requestLimit))
+    ) {
+      this.logger.warn(
+        `${kind}_sms_otp_rate_limited request ${maskMobile(mobile)}`,
+      );
+      throw new HttpException(TOO_MANY, HttpStatus.TOO_MANY_REQUESTS);
+    }
+    const eligible = await this.hasAccess({ mobile });
+    this.logger.log(
+      `${kind}_sms_otp_requested ${maskMobile(mobile)} eligible ${eligible}`,
+    );
+    if (eligible) {
+      this.sms
+        .send(mobile)
+        .catch((error: unknown) =>
+          this.logger.error(
+            `${kind}_sms_otp_delivery_failed ${maskMobile(mobile)} ${smsErrorCode(error)}`,
+          ),
+        );
+    }
+    return { message: this.options.smsRequestedMessage };
+  }
+
+  /** Twilio approves the code -> the same session as email sign-in. */
+  async verifySmsOtp(
+    mobile: string,
+    code: string,
+    ip = 'unknown',
+  ): Promise<{ sessionId: string; principal: SessionPrincipal }> {
+    const { kind } = this.options;
+    const { maxAttempts, requestLimit, verifyIpLimit } = this.settings;
+    if (
+      (await this.overLimit('verify-ip', ip, verifyIpLimit)) ||
+      // Each code a mobile may request gets maxAttempts tries.
+      (await this.overLimit('verify-mobile', mobile, maxAttempts * requestLimit))
+    ) {
+      this.logger.warn(
+        `${kind}_sms_otp_rate_limited verify ${maskMobile(mobile)}`,
+      );
+      throw new HttpException(TOO_MANY, HttpStatus.TOO_MANY_REQUESTS);
+    }
+    const fail = (reason: string) => {
+      this.logger.warn(`${kind}_sms_otp_invalid ${maskMobile(mobile)}: ${reason}`);
+      return new UnauthorizedException(INVALID_CODE);
+    };
+    // Ineligible mobiles never reach Twilio.
+    if (!(await this.hasAccess({ mobile }))) throw fail('no eligible access');
+    let approved: boolean;
+    try {
+      approved = await this.sms.check(mobile, code);
+    } catch (error) {
+      this.logger.error(
+        `${kind}_sms_otp_check_failed ${maskMobile(mobile)} ${smsErrorCode(error)}`,
+      );
+      throw new ServiceUnavailableException(SMS_UNAVAILABLE);
+    }
+    if (!approved) throw fail('not approved');
+    // Re-checked now: access may have changed while the code was out.
+    if (!(await this.hasAccess({ mobile }))) throw fail('no eligible access');
+
+    this.logger.log(`${kind}_sms_otp_verified ${maskMobile(mobile)}`);
+    const principal = { mobile };
+    return { sessionId: await this.createSession(principal), principal };
+  }
+
+  async createSession(principal: SessionPrincipal): Promise<string> {
     const sessionId = token();
     await this.redis.client.set(
       this.keys.session(sessionId),
@@ -267,16 +367,23 @@ export abstract class OtpAuthService {
       { expiration: { type: 'EX', value: this.settings.sessionTtl } },
     );
     this.logger.log(
-      `${this.options.kind}_session_created ${maskEmail(principal.emailNormalized)}`,
+      `${this.options.kind}_session_created ${maskPrincipal(principal)}`,
     );
     return sessionId;
   }
 
-  async getSession(sessionId: string): Promise<OtpPrincipal | null> {
+  async getSession(sessionId: string): Promise<SessionPrincipal | null> {
     const raw = await this.redis.client.get(this.keys.session(sessionId));
-    if (!raw) return null;
-    const { emailNormalized } = JSON.parse(raw) as OtpPrincipal;
-    return typeof emailNormalized === 'string' ? { emailNormalized } : null;
+    return raw ? this.toPrincipal(JSON.parse(raw) as Record<string, unknown>) : null;
+  }
+
+  /** Stored session -> principal: exactly one of email or mobile. */
+  private toPrincipal({
+    emailNormalized,
+    mobile,
+  }: Record<string, unknown>): SessionPrincipal | null {
+    if (typeof emailNormalized === 'string') return { emailNormalized };
+    return typeof mobile === 'string' ? { mobile } : null;
   }
 
   async destroySession(sessionId: string): Promise<void> {
@@ -309,7 +416,7 @@ export abstract class OtpAuthService {
   }
 
   // Fixed window per key, shared by every API instance through Redis.
-  private async overLimit(scope: string, id: string, limit: number) {
+  protected async overLimit(scope: string, id: string, limit: number) {
     const key = this.keys.rate(scope, id);
     const [count] = (await this.redis.client
       .multi()
@@ -319,3 +426,6 @@ export abstract class OtpAuthService {
     return count > limit;
   }
 }
+
+const smsErrorCode = (error: unknown) =>
+  error instanceof SmsVerificationError ? error.code : 'unknown';

@@ -11,6 +11,16 @@ import { MessageSchedulesModule } from './message-schedules/message-schedules.mo
 import { MessagesModule } from './messages/messages.module.js';
 import { MyStoryModule } from './my-story/my-story.module.js';
 import { MyWishesModule } from './my-wishes/my-wishes.module.js';
+import { AnnouncementsModule } from './announcements/announcements.module.js';
+import { CommunicationsModule } from './communications/communications.module.js';
+import { SupportModule } from './support/support.module.js';
+import { BillingModule } from './billing/billing.module.js';
+import { ActivityModule } from './activity/activity.module.js';
+import { AssistantModule } from './assistant/assistant.module.js';
+import { DraftRecoveryModule } from './draft-recovery/draft-recovery.module.js';
+import { AttentionModule } from './attention/attention.module.js';
+import { DeliveryTimelineModule } from './delivery-timeline/delivery-timeline.module.js';
+import { ReadinessModule } from './readiness/readiness.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { RecipientAuthModule } from './recipient-auth/recipient-auth.module.js';
 import { RecipientPortalModule } from './recipient-portal/recipient-portal.module.js';
@@ -37,6 +47,16 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
     MemoryVaultModule,
     MyStoryModule,
     MyWishesModule,
+    SupportModule,
+    AnnouncementsModule,
+    CommunicationsModule,
+    BillingModule,
+    ReadinessModule,
+    ActivityModule,
+    DraftRecoveryModule,
+    AssistantModule,
+    DeliveryTimelineModule,
+    AttentionModule,
     RecipientAuthModule,
     RecipientPortalModule,
     TrustedContactAuthModule,

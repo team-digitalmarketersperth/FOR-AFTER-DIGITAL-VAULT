@@ -87,7 +87,10 @@ const setup = (updated = 1) => {
   };
   const messageRelease = { count: vi.fn().mockResolvedValue(0) };
   const recipientMessageAccessGrant = { count: vi.fn().mockResolvedValue(0) };
+  // Recent changes (customer activity): recorded, not asserted here.
+  const customerActivity = { create: vi.fn(async () => ({})) };
   const tx = {
+    customerActivity,
     recipientMessageAccessGrant,
     message,
     messageSchedule,

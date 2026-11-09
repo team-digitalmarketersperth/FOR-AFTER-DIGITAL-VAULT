@@ -1,4 +1,10 @@
-import { Injectable, Logger, Module } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  Module,
+  type OnApplicationBootstrap,
+  type OnModuleDestroy,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Job, Worker } from 'bullmq';
 import { isUUID } from 'class-validator';
@@ -69,6 +75,13 @@ const ENTITY: Record<DeadLetterQueue, (d: JobIds) => [string, unknown]> = {
 // Worker outcomes are short categories (released, stale, already_sent, …).
 const OUTCOME = /^[a-z_]{1,40}$/;
 
+// Alert reconciler bounds: a failed (or crash-interrupted) alert is retried at
+// most once per cooldown, only for dead letters from the last day (older ones
+// stay visible in the admin view), a few rows per pass.
+export const ALERT_RETRY_COOLDOWN_MS = 15 * 60_000;
+export const ALERT_RETRY_MAX_AGE_MS = 24 * 3_600_000;
+export const ALERT_RETRY_BATCH = 20;
+
 /**
  * Phase 17A. Durable dead letters in PostgreSQL for jobs whose automatic
  * retries are exhausted, plus one operational alert per new terminal failure.
@@ -77,11 +90,22 @@ const OUTCOME = /^[a-z_]{1,40}$/;
  * Idempotent by the (queueName, jobId) unique key: a repeated callback for the
  * same failure changes nothing; a new terminal failure after a requeue reopens
  * the row and alerts once more. Never throws into the worker.
+ *
+ * Alert reconciler (worker only: this module is loaded by QueueWorkersModule,
+ * never by the API): on startup and every OPS_ALERT_RECONCILE_INTERVAL_SECONDS
+ * (default 300, 0 = off) it retries PENDING / FAILED alerts directly through
+ * EmailProvider, never through the email-delivery queue.
  */
 @Injectable()
-export class DeadLetterService {
+export class DeadLetterService
+  implements OnApplicationBootstrap, OnModuleDestroy
+{
   private readonly logger = new Logger(DeadLetterService.name);
   private readonly alertTo: string | null;
+  private readonly reconcileIntervalMs: number;
+  private timer?: NodeJS.Timeout;
+  private running?: Promise<number>;
+  private stopping = false;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -91,6 +115,74 @@ export class DeadLetterService {
     this.alertTo = config.get<string>('OPS_ALERT_EMAIL')?.trim() || null;
     if (this.alertTo && !/^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+$/.test(this.alertTo))
       throw new Error('OPS_ALERT_EMAIL must be an email address.');
+    const seconds = Number(
+      config.get('OPS_ALERT_RECONCILE_INTERVAL_SECONDS') ?? 300,
+    );
+    if (!Number.isInteger(seconds) || seconds < 0)
+      throw new Error(
+        'OPS_ALERT_RECONCILE_INTERVAL_SECONDS must be a whole number (0 = off).',
+      );
+    this.reconcileIntervalMs = seconds * 1000;
+  }
+
+  onApplicationBootstrap(): void {
+    if (!this.reconcileIntervalMs) return;
+    void this.reconcileAlerts();
+    this.timer = setInterval(
+      () => void this.reconcileAlerts(),
+      this.reconcileIntervalMs,
+    );
+    this.timer.unref();
+  }
+
+  // Stop the timer, then let a running pass finish (graceful worker shutdown).
+  async onModuleDestroy(): Promise<void> {
+    this.stopping = true;
+    clearInterval(this.timer);
+    await this.running;
+  }
+
+  /** One bounded pass; returns how many alerts it attempted. Never throws. */
+  reconcileAlerts(now = new Date()): Promise<number> {
+    this.running ??= this.retryAlerts(now).finally(
+      () => (this.running = undefined),
+    );
+    return this.running;
+  }
+
+  private async retryAlerts(now: Date): Promise<number> {
+    if (!this.alertTo) return 0;
+    const retryable = {
+      alertStatus: { in: [OpsAlertStatus.PENDING, OpsAlertStatus.FAILED] },
+      status: { not: DeadLetterStatus.RESOLVED },
+      failedAt: { gt: new Date(now.getTime() - ALERT_RETRY_MAX_AGE_MS) },
+      // Also keeps clear of a record() call that is alerting right now.
+      updatedAt: { lt: new Date(now.getTime() - ALERT_RETRY_COOLDOWN_MS) },
+    };
+    let attempted = 0;
+    try {
+      const rows = await this.prisma.deadLetterJob.findMany({
+        where: retryable,
+        orderBy: { failedAt: 'asc' },
+        take: ALERT_RETRY_BATCH,
+      });
+      for (const row of rows) {
+        if (this.stopping) break;
+        // Claim (bumps updatedAt): another worker instance skips this row.
+        const { count } = await this.prisma.deadLetterJob.updateMany({
+          where: { id: row.id, ...retryable },
+          data: { alertStatus: OpsAlertStatus.PENDING },
+        });
+        if (!count) continue;
+        attempted++;
+        await this.alert(row);
+      }
+      if (attempted)
+        this.logger.log(`ops_alert_reconcile attempted ${attempted}`);
+    } catch (e) {
+      this.logger.warn(`ops_alert_reconcile_failed (code: ${errorCode(e)})`);
+    }
+    return attempted;
   }
 
   /** Hooks a worker: terminal failure → dead letter; completion → resolved. */
@@ -244,8 +336,7 @@ export class DeadLetterService {
         );
       }
     }
-    // ponytail: a crash right here leaves alertStatus PENDING (visible in the
-    // admin view); add an alert reconciler if that ever matters.
+    // A crash right here leaves alertStatus PENDING: the reconciler retries it.
     await this.prisma.deadLetterJob.update({
       where: { id: row.id },
       data: {

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { EmailProvider } from '../email/email-provider.js';
 import { EmailConfig, EmailModule } from '../email/email.module.js';
+import { MediaModule } from '../media/media.module.js';
 import { MessageReleaseModule } from '../message-release/message-release.module.js';
 import { UsersModule } from '../users/users.module.js';
 import {
@@ -13,6 +14,7 @@ import {
   AdminDeathVerificationController,
   CustomerDeathVerificationController,
 } from './death-verification.controller.js';
+import { DeathVerificationEvidenceService } from './death-verification-evidence.service.js';
 import { DeathVerificationService } from './death-verification.service.js';
 
 // The safeguard workflow and its producer queue, shared by the API and the
@@ -37,14 +39,18 @@ export class DeathVerificationQueueModule {}
 
 // Reports arrive through the Trusted Contact portal (Step 14). Step 15 adds
 // the Customer confirm-alive routes and the minimal admin decision routes.
-// UsersModule backs SessionAuthGuard.
+// UsersModule backs SessionAuthGuard. MediaModule: evidence files (Phase 19A).
 @Module({
-  imports: [UsersModule, DeathVerificationQueueModule],
+  imports: [UsersModule, DeathVerificationQueueModule, MediaModule],
   controllers: [
     CustomerDeathVerificationController,
     AdminDeathVerificationController,
   ],
-  providers: [DeathVerificationService],
-  exports: [DeathVerificationService, DeathVerificationQueueModule],
+  providers: [DeathVerificationService, DeathVerificationEvidenceService],
+  exports: [
+    DeathVerificationService,
+    DeathVerificationEvidenceService,
+    DeathVerificationQueueModule,
+  ],
 })
 export class DeathVerificationModule {}

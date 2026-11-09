@@ -17,7 +17,9 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { AdminGuard } from '../auth/guards/admin.guard.js';
 import { CustomerGuard } from '../auth/guards/customer.guard.js';
 import { SessionAuthGuard } from '../auth/guards/session-auth.guard.js';
+import type { AccessUrlResponse } from '../media/media.service.js';
 import type { SafeUser } from '../users/users.service.js';
+import { DeathVerificationEvidenceService } from './death-verification-evidence.service.js';
 import {
   DeathVerificationService,
   type CustomerDeathVerificationStatus,
@@ -69,7 +71,25 @@ export class CustomerDeathVerificationController {
 @Controller('admin/death-verifications')
 @UseGuards(SessionAuthGuard, AdminGuard)
 export class AdminDeathVerificationController {
-  constructor(private readonly cases: DeathVerificationService) {}
+  constructor(
+    private readonly cases: DeathVerificationService,
+    private readonly evidence: DeathVerificationEvidenceService,
+  ) {}
+
+  // Phase 19A: one READY evidence file, short-lived signed URL; the view is
+  // recorded on the case timeline. Supporting material: never verifies.
+  @Get(':caseId/evidence/:evidenceId/access-url')
+  evidenceAccessUrl(
+    @Param('caseId', ParseUUIDPipe) caseId: string,
+    @Param('evidenceId', ParseUUIDPipe) evidenceId: string,
+    @Req() req: Request,
+  ): Promise<AccessUrlResponse> {
+    return this.evidence.adminAccessUrl(
+      caseId,
+      evidenceId,
+      adminActor(req).userId,
+    );
+  }
 
   @Get()
   list(@Query() query: DeathVerificationListQueryDto) {

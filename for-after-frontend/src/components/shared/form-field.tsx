@@ -95,6 +95,11 @@ export function FormError({ error, title }: { error: ApiError | null; title?: st
       {title && <AlertTitle>{title}</AlertTitle>}
       <AlertDescription>
         <p>{error.message}</p>
+        {error.kind === 'plan_required' && (
+          <Link href="/settings/plan" className="underline underline-offset-2">
+            Choose a plan
+          </Link>
+        )}
         {error.details.length > 0 && (
           <ul className="mt-1 list-disc pl-4">
             {error.details.map((detail) => (
@@ -226,12 +231,14 @@ export function ChoiceGroup({
 export function FilterChips({
   label,
   chips,
+  className,
 }: {
   label: string;
   chips: { label: string; href: string; active: boolean }[];
+  className?: string;
 }) {
   return (
-    <nav aria-label={label} className="-mx-1 mb-8 flex flex-wrap gap-2 px-1">
+    <nav aria-label={label} className={cn('-mx-1 mb-8 flex flex-wrap gap-2 px-1', className)}>
       {chips.map((chip) => (
         <Link
           key={chip.href}
@@ -239,7 +246,7 @@ export function FilterChips({
           scroll={false}
           aria-current={chip.active ? 'true' : undefined}
           className={cn(
-            'inline-flex min-h-10 items-center rounded-full border px-4 text-sm outline-none transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
+            'inline-flex min-h-10 shrink-0 items-center rounded-full border px-4 text-sm whitespace-nowrap outline-none transition-colors focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring',
             chip.active
               ? 'border-primary bg-primary text-primary-foreground'
               : 'border-border bg-surface text-foreground-secondary hover:border-border-strong',

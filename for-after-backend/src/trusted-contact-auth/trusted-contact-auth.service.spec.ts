@@ -1,5 +1,9 @@
 import { HttpException, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import {
+  DisabledSmsVerification,
+  SmsVerificationError,
+} from '../sms/sms-verification.js';
 import type { EmailProvider } from '../email/email-provider.js';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
@@ -21,6 +25,7 @@ import type { RedisService } from '../redis/redis.service.js';
 import {
   activeRelationship,
   TRUSTED_CONTACT_OTP_REQUESTED,
+  TRUSTED_CONTACT_SMS_OTP_REQUESTED,
   TRUSTED_CONTACT_SESSION_COOKIE,
   TrustedContactAuthService,
   trustedContactOtpDeliveryFactory,
@@ -32,6 +37,9 @@ import {
 
 const PEPPER = 'tc-test-pepper-not-a-secret-00000000000';
 const DAVID = 'david@example.com';
+// Mobile-only contact (no email): signs in by SMS. Fake, non-real number.
+const MAYA = '+61400000456';
+const SMS_CODE = '135790';
 
 const setup = (
   env: Record<string, string | undefined> = {},
@@ -44,6 +52,12 @@ const setup = (
     }),
   };
   const count = vi.fn().mockResolvedValue(contacts);
+  // Twilio Verify stand-in: approves SMS_CODE only.
+  const sms = {
+    name: 'fake',
+    send: vi.fn(async (_to: string) => undefined),
+    check: vi.fn(async (_to: string, code: string) => code === SMS_CODE),
+  };
   const service = new TrustedContactAuthService(
     { trustedContact: { count } } as unknown as PrismaService,
     { client: redis.client } as unknown as RedisService,
@@ -53,13 +67,14 @@ const setup = (
       NODE_ENV: 'test',
       ...env,
     }),
+    sms,
   );
   const request = async (email = DAVID, ip = '1.1.1.1') => {
     const res = await service.requestOtp(email, ip);
     await new Promise((r) => setImmediate(r));
     return { ...res, code: sent.at(-1)?.code };
   };
-  return { service, redis, sent, count, request };
+  return { service, redis, sent, count, request, sms };
 };
 const wrongCode = (code: string) => (code === '000000' ? '111111' : '000000');
 
@@ -88,7 +103,9 @@ describe('TrustedContactAuthService: request OTP', () => {
       },
       take: 1,
     });
-    expect(activeRelationship(DAVID)).toMatchObject({ deletedAt: null });
+    expect(activeRelationship({ emailNormalized: DAVID })).toMatchObject({
+      deletedAt: null,
+    });
   });
 
   it('normalizes email (trim + lowercase) with the shared DTO', async () => {
@@ -214,6 +231,7 @@ describe('TrustedContactAuthService: verify OTP', () => {
       { client: redis.client } as unknown as RedisService,
       { sendOtp: async (i: OtpDeliveryInput) => void recipientSent.push(i) },
       new ConfigService({ RECIPIENT_OTP_PEPPER: PEPPER, NODE_ENV: 'test' }),
+      new DisabledSmsVerification(),
     );
     const r = await recipient.requestOtp(DAVID);
     await new Promise((res) => setImmediate(res));
@@ -225,6 +243,92 @@ describe('TrustedContactAuthService: verify OTP', () => {
     await expect(recipient.verifyOtp(t.challengeId, t.code!)).rejects.toThrow(
       INVALID_CODE,
     );
+  });
+});
+
+describe('TrustedContactAuthService: SMS sign-in (shared Twilio Verify service)', () => {
+  const sessionKeys = (redis: ReturnType<typeof fakeRedis>) =>
+    [...redis.store.keys()].filter((k) => k.includes('trusted_contact_sess'));
+  const flush = () => new Promise((r) => setImmediate(r));
+
+  it('mobile-only contact: same generic body as an unknown mobile; only the eligible one is texted', async () => {
+    const known = setup();
+    const unknown = setup({}, { contacts: 0 });
+    const a = await known.service.requestSmsOtp(MAYA, 'ip');
+    const b = await unknown.service.requestSmsOtp('+61400000999', 'ip');
+    await flush();
+    expect(a).toEqual({ message: TRUSTED_CONTACT_SMS_OTP_REQUESTED });
+    expect(b).toEqual(a);
+    expect(known.sms.send).toHaveBeenCalledExactlyOnceWith(MAYA);
+    expect(unknown.sms.send).not.toHaveBeenCalled(); // no SMS relay
+  });
+
+  it('eligibility is the email rule on the mobile: active row of an active Customer', async () => {
+    const { service, count } = setup();
+    await service.requestSmsOtp(MAYA, 'ip');
+    expect(count).toHaveBeenCalledWith({
+      where: { mobile: MAYA, deletedAt: null, owner: { deletedAt: null } },
+      take: 1,
+    });
+  });
+
+  it('approved code -> a Trusted Contact session holding only the mobile', async () => {
+    const { service, redis, sms } = setup();
+    const { sessionId, principal } = await service.verifySmsOtp(MAYA, SMS_CODE);
+    expect(sms.check).toHaveBeenCalledExactlyOnceWith(MAYA, SMS_CODE);
+    expect(principal).toEqual({ mobile: MAYA });
+    expect(await service.getSession(sessionId)).toEqual({ mobile: MAYA });
+    const [key] = sessionKeys(redis);
+    expect(Object.keys(JSON.parse(redis.store.get(key) as string)).sort()).toEqual([
+      'authenticatedAt',
+      'mobile',
+    ]);
+  });
+
+  it('not approved, ineligible, or removed after approval -> generic 401 and no session', async () => {
+    const wrong = setup();
+    await expect(wrong.service.verifySmsOtp(MAYA, '000000')).rejects.toThrow(
+      new UnauthorizedException(INVALID_CODE),
+    );
+    expect(sessionKeys(wrong.redis)).toHaveLength(0);
+
+    const ineligible = setup({}, { contacts: 0 });
+    await expect(ineligible.service.verifySmsOtp(MAYA, SMS_CODE)).rejects.toThrow(INVALID_CODE);
+    expect(ineligible.sms.check).not.toHaveBeenCalled();
+
+    const removed = setup();
+    removed.count.mockResolvedValueOnce(1).mockResolvedValueOnce(0);
+    await expect(removed.service.verifySmsOtp(MAYA, SMS_CODE)).rejects.toThrow(INVALID_CODE);
+    expect(sessionKeys(removed.redis)).toHaveLength(0);
+  });
+
+  it('provider error -> 503 with a safe message; rate limits per mobile and IP (429)', async () => {
+    const down = setup();
+    down.sms.check.mockRejectedValue(new SmsVerificationError('twilio_20003'));
+    const err = await down.service.verifySmsOtp(MAYA, SMS_CODE).catch((e: unknown) => e);
+    expect((err as HttpException).getStatus()).toBe(503);
+    expect((err as HttpException).message).not.toMatch(/twilio|20003|AC|VA/);
+
+    const limited = setup({ TRUSTED_CONTACT_OTP_REQUEST_LIMIT: '1' });
+    await limited.service.requestSmsOtp(MAYA, 'a');
+    const tooMany = await limited.service.requestSmsOtp(MAYA, 'b').catch((e: unknown) => e);
+    expect((tooMany as HttpException).getStatus()).toBe(429);
+  });
+
+  it('SMS logs mask the mobile and never contain the code', async () => {
+    const spies = (['log', 'warn', 'error'] as const).map((m) =>
+      vi.spyOn(Logger.prototype, m).mockImplementation(() => undefined),
+    );
+    const { service } = setup();
+    await service.requestSmsOtp(MAYA, 'ip');
+    await flush();
+    await service.verifySmsOtp(MAYA, SMS_CODE);
+    const logged = JSON.stringify(spies.map((s) => s.mock.calls));
+    expect(logged).toContain('trusted_contact_sms_otp_requested +61******456');
+    expect(logged).toContain('trusted_contact_sms_otp_verified +61******456');
+    expect(logged).not.toContain(MAYA);
+    expect(logged).not.toContain(SMS_CODE);
+    spies.forEach((s) => s.mockRestore());
   });
 });
 
@@ -366,6 +470,7 @@ describe('TrustedContactSessionAuthGuard', () => {
       { client: redis.client } as unknown as RedisService,
       { sendOtp: async () => undefined },
       new ConfigService({ RECIPIENT_OTP_PEPPER: PEPPER, NODE_ENV: 'test' }),
+      new DisabledSmsVerification(),
     );
     const recipientSession = await recipient.createSession({
       emailNormalized: DAVID,

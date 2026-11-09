@@ -76,7 +76,8 @@ describe('Dead letters', () => {
     expect(await dl.findByText(DL.jobId)).toBeInTheDocument();
     expect(dl.getByText('Message 00000000…')).toHaveAttribute('title', MESSAGE_ID);
     expect(dl.getByText('3 times')).toBeInTheDocument();
-    expect(dl.getByText('Open')).toBeInTheDocument();
+    // The row's status badge (the status filter has an "Open" option too).
+    expect(dl.getAllByText('Open').filter((el) => el.tagName !== 'OPTION')).toHaveLength(1);
     expect(dl.queryByText('connect ECONNREFUSED [url]')).not.toBeInTheDocument();
     expect(urls[0].searchParams.get('status')).toBe('OPEN');
     expect(urls[0].searchParams.has('queue')).toBe(false);

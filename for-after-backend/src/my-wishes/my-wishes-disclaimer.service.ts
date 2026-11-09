@@ -10,8 +10,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 /**
  * The My Wishes notice, version 1. Approved by the product owner on
  * 2026-10-08 (Phase 15A); formal legal review is a separate, open item.
- * Changing a word of it means a new version (and Customers acknowledge
- * again before their next write).
+ * Changing a word of it means a new version.
  */
 export const MY_WISHES_DISCLAIMER_V1 =
   'My Wishes records personal preferences and guidance only. It is not a will, legal document, medical directive, financial instruction or substitute for professional advice.';
@@ -23,15 +22,13 @@ export class MyWishesDisclaimer {
   readonly text: string = MY_WISHES_DISCLAIMER_V1;
 }
 
-export const DISCLAIMER_NOT_ACKNOWLEDGED =
-  'Please acknowledge the current My Wishes notice before saving.';
 export const DISCLAIMER_OUTDATED =
   'The My Wishes notice has changed. Please read the current version.';
 
 export type DisclaimerStatus = {
   version: number;
   text: string;
-  requiresAcknowledgement: true;
+  requiresAcknowledgement: false;
   acknowledged: boolean;
   acknowledgedAt: Date | null;
 };
@@ -39,12 +36,12 @@ export type DisclaimerStatus = {
 type Db = PrismaService | Prisma.TransactionClient;
 
 /**
- * Phase 15A (approved policy): the backend is the only source of the notice;
- * a Customer acknowledges it once per version before creating or editing
- * wishes (enforced here, not by the UI). Reading and deleting never need it.
- * An acknowledgement is a record that this version was shown and confirmed,
- * nothing more: never consent, a waiver or legal advice. Rows are kept as
- * history; existing users have none until they acknowledge.
+ * Phase 15A: the backend is the only source of the notice. Since 2026-10-14
+ * it is informational only: nothing about My Wishes waits for an
+ * acknowledgement and the UI no longer asks for one. The acknowledgement
+ * endpoint stays for older clients; rows (Phase 15A history) are kept, never
+ * required. An acknowledgement was a record that a version was shown and
+ * confirmed, nothing more: never consent, a waiver or legal advice.
  */
 @Injectable()
 export class MyWishesDisclaimerService {
@@ -71,7 +68,7 @@ export class MyWishesDisclaimerService {
     return {
       version: this.disclaimer.version,
       text: this.disclaimer.text,
-      requiresAcknowledgement: true,
+      requiresAcknowledgement: false,
       acknowledged: !!ack,
       acknowledgedAt: ack?.acknowledgedAt ?? null,
     };
@@ -106,12 +103,5 @@ export class MyWishesDisclaimerService {
       }
     });
     return this.status(userId);
-  }
-
-  /** Before any wish is created or changed: 409 without a current acknowledgement. */
-  async assertAcknowledged(userId: string, db: Db = this.prisma) {
-    if (!(await this.acknowledgement(db, userId))) {
-      throw new ConflictException(DISCLAIMER_NOT_ACKNOWLEDGED);
-    }
   }
 }

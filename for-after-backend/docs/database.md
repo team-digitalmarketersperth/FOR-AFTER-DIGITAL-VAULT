@@ -221,7 +221,8 @@ model RecipientMessageAccessGrant {
   messageId                 String         @db.Uuid  // onDelete: Cascade
   recipientId               String         @db.Uuid  // onDelete: Cascade (hard delete only via account deletion)
   recipientEmailNormalized  String?        // trimmed + lowercased at release; used by email OTP
-  recipientMobileNormalized String?        // as stored, trimmed; SMS OTP deferred
+  recipientMobileNormalized String?        // E.164, formatting stripped; used by SMS OTP (2026-10-16)
+  senderDisplayNameSnapshot String?        // owner "First Last" at release, never rewritten (Phase 18)
   createdAt                 DateTime       @default(now())
 
   @@unique([messageReleaseId, recipientId]) // retries cannot duplicate

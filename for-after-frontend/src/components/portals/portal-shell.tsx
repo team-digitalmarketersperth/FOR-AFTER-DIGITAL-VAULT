@@ -8,6 +8,7 @@ import { BrandLogo } from '@/components/layout/brand-logo';
 import { ErrorState, PageLoader, Spinner } from '@/components/shared/states';
 import { Button } from '@/components/ui/button';
 import { usePortalLogout, usePortalSession } from '@/hooks/use-portals';
+import { portalMeLabel } from '@/lib/api/portals';
 import type { Portal } from '@/lib/query/query-client';
 import { cn } from '@/lib/utils';
 
@@ -55,7 +56,7 @@ export function PortalGate({ portal, children }: { portal: Portal; children: Rea
     );
   }
   return (
-    <PortalShell portal={portal} email={session.data.email}>
+    <PortalShell portal={portal} email={portalMeLabel(session.data)}>
       {children}
     </PortalShell>
   );
@@ -86,10 +87,12 @@ export function PortalShell({ portal, email, children }: { portal: Portal; email
   const router = useRouter();
   const logout = usePortalLogout(portal);
   const onHome = pathname === config.home;
+  // A released message reads on one warm ivory page, with no utility footer.
+  const reading = pathname.startsWith('/recipient/messages/');
 
   return (
-    <div className="flex min-h-dvh flex-col">
-      <header className="border-b border-border bg-surface/90 backdrop-blur">
+    <div className={cn('flex min-h-dvh flex-col', reading && 'bg-[#f8f6f2]')}>
+      <header className={cn('border-b border-border backdrop-blur', reading ? 'bg-[#f8f6f2]/90' : 'bg-surface/90')}>
         <div className="mx-auto flex h-18 max-w-4xl items-center gap-4 px-4 sm:px-6">
           <BrandLogo href={config.home} className="h-7 sm:h-8" />
           <span className="hidden rounded-full bg-primary-soft px-3 py-1 text-xs font-medium text-primary sm:inline">
@@ -124,9 +127,11 @@ export function PortalShell({ portal, email, children }: { portal: Portal; email
       <main id="main" className="mx-auto w-full max-w-4xl flex-1 px-4 pt-10 pb-20 sm:px-6 sm:pt-14">
         {children}
       </main>
-      <footer className="border-t border-border py-6 text-center text-xs text-foreground-muted">
-        For After · Private and secure
-      </footer>
+      {!reading && (
+        <footer className="border-t border-border py-6 text-center text-xs text-foreground-muted">
+          For After · Private and secure
+        </footer>
+      )}
     </div>
   );
 }

@@ -1,3 +1,4 @@
+import { RequiresPlan } from '../billing/billing-access.js';
 import {
   Body,
   Controller,
@@ -19,6 +20,7 @@ import { SessionAuthGuard } from '../auth/guards/session-auth.guard.js';
 import type { SafeUser } from '../users/users.service.js';
 import { CreateMessageDto } from './dto/create-message.dto.js';
 import { UpdateMessageDto } from './dto/update-message.dto.js';
+import { MessageVersionsService } from './message-versions.service.js';
 import {
   type MessagePage,
   type MessageResponse,
@@ -31,8 +33,12 @@ import { AUTH } from '../config/swagger.js';
 @ApiCookieAuth(AUTH.customer)
 @Controller('messages')
 @UseGuards(SessionAuthGuard, CustomerGuard)
+@RequiresPlan()
 export class MessagesController {
-  constructor(private readonly messages: MessagesService) {}
+  constructor(
+    private readonly messages: MessagesService,
+    private readonly versions: MessageVersionsService,
+  ) {}
 
   @Post()
   create(
@@ -67,6 +73,36 @@ export class MessagesController {
     @Body() dto: UpdateMessageDto,
   ): Promise<MessageResponse> {
     return this.messages.update(user.id, id, dto);
+  }
+
+  // Version history: metadata list (newest first), one version's content,
+  // and restore (DRAFT only). Owner-only, like every route here.
+  @Get(':id/versions')
+  listVersions(
+    @CurrentUser() user: SafeUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: PageQueryDto,
+  ) {
+    return this.versions.list(user.id, id, query.page, query.limit);
+  }
+
+  @Get(':id/versions/:versionId')
+  getVersion(
+    @CurrentUser() user: SafeUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('versionId', ParseUUIDPipe) versionId: string,
+  ) {
+    return this.versions.get(user.id, id, versionId);
+  }
+
+  @Post(':id/versions/:versionId/restore')
+  @HttpCode(200)
+  restoreVersion(
+    @CurrentUser() user: SafeUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('versionId', ParseUUIDPipe) versionId: string,
+  ): Promise<MessageResponse> {
+    return this.versions.restore(user.id, id, versionId);
   }
 
   @Delete(':id')

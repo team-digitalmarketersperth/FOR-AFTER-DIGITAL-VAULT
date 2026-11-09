@@ -14,6 +14,7 @@ import { trim } from '../../auth/dto/register.dto.js';
 import { MemoryVaultCategory } from '../../generated/prisma/client.js';
 import {
   IfDefined,
+  PrivateNote,
   TextContent,
   Title,
 } from '../../messages/dto/create-message.dto.js';
@@ -64,6 +65,9 @@ export class CreateMemoryVaultItemDto {
 
   @TextContent()
   textContent?: string | null;
+
+  @PrivateNote()
+  privateNote?: string | null;
 
   @Tags()
   tags?: string[];

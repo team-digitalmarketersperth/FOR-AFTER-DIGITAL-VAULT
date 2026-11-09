@@ -9,14 +9,20 @@ import { generate } from 'otplib';
 import request from 'supertest';
 import { adminSignIn } from './admin-sign-in.js';
 import { AdminModule } from '../src/admin/admin.module.js';
+import { BillingModule } from '../src/billing/billing.module.js';
 import { AuthModule } from '../src/auth/auth.module.js';
+import { ConfigService } from '@nestjs/config';
+import { SNAPSHOT_MS, SystemHealthService } from '../src/admin/system-health.service.js';
 import { configureApp } from '../src/config/app.setup.js';
+import { AssistantMetrics } from '../src/assistant/assistant-metrics.js';
+import { StorageQuota } from '../src/media/storage-quota.service.js';
+import { WorkerHeartbeat } from '../src/health/worker-heartbeat.js';
 import {
   DeathNoticeDelivery,
   type SafetyNoticeInput,
 } from '../src/death-verification/death-verification-notice.js';
 import { DeathVerificationModule } from '../src/death-verification/death-verification.module.js';
-import { releaseJobId } from '../src/message-release/message-release-queue.service.js';
+import { MessageReleaseQueue, releaseJobId } from '../src/message-release/message-release-queue.service.js';
 import { MessageReleaseService } from '../src/message-release/message-release.service.js';
 import { MessageSchedulesModule } from '../src/message-schedules/message-schedules.module.js';
 import { MessagesModule } from '../src/messages/messages.module.js';
@@ -159,6 +165,7 @@ describe('Admin backend (e2e)', () => {
         TrustedContactPortalModule,
         DeathVerificationModule,
         AdminModule,
+        BillingModule,
       ],
     })
       // Many sign-ins exceed the 5/min login limit; the limit itself is
@@ -396,6 +403,8 @@ describe('Admin backend (e2e)', () => {
       for (let i = 0; i < 5; i++) {
         await http()
           .post(api('/admin-auth/totp/verify'))
+          // Untrusted outside production (no trust proxy): never the recorded source.
+          .set('X-Forwarded-For', '198.51.100.77')
           .send({ challengeId, code: '000000' })
           .expect(401);
       }
@@ -529,6 +538,19 @@ describe('Admin backend (e2e)', () => {
         '/admin/audit-logs',
         '/admin/system/queues',
         '/admin/death-verifications',
+        '/admin/releases',
+        `/admin/releases/${ids.lisaMessage}`,
+        '/admin/deliveries',
+        '/admin/system/health',
+        '/admin/security/events',
+        `/admin/security/events/${ids.lisaMessage}`,
+        '/admin/storage/assets',
+        `/admin/storage/assets/${ids.lisaMessage}`,
+        '/admin/system/ai',
+        '/admin/access/admins',
+        `/admin/access/admins/${ids.admin}`,
+        `/admin/deliveries/release-emails/${ids.lisaMessage}`,
+        `/admin/deliveries/safety-notices/${ids.lisaMessage}`,
         '/admin-auth/me',
       ]) {
         // The Customer cookie is never read on admin routes: no admin session.
@@ -559,6 +581,13 @@ describe('Admin backend (e2e)', () => {
         .expect(201);
       agents.david = await otpSignIn('trusted-contact-auth', DAVID);
       await agents.david.get(api('/admin/users')).expect(401);
+      await agents.david.get(api('/admin/releases')).expect(401);
+      await agents.david.get(api('/admin/deliveries')).expect(401);
+      await agents.david.get(api('/admin/system/health')).expect(401);
+      await agents.david.get(api('/admin/security/events')).expect(401);
+      await agents.david.get(api('/admin/storage/assets')).expect(401);
+      await agents.david.get(api('/admin/system/ai')).expect(401);
+      await agents.david.get(api('/admin/access/admins')).expect(401);
       await agents.david.get(api('/admin-auth/me')).expect(401);
       await agents.david
         .post(api('/admin-auth/totp/setup'))
@@ -569,6 +598,15 @@ describe('Admin backend (e2e)', () => {
     it('unauthenticated: 401 everywhere', async () => {
       await http().get(api('/admin/users')).expect(401);
       await http().get(api('/admin/system/queues')).expect(401);
+      await http().get(api('/admin/releases')).expect(401);
+      await http().get(api(`/admin/releases/${ids.lisaMessage}`)).expect(401);
+      await http().get(api('/admin/deliveries')).expect(401);
+      await http().get(api('/admin/system/health')).expect(401);
+      await http().get(api('/admin/security/events')).expect(401);
+      await http().get(api('/admin/storage/assets')).expect(401);
+      await http().get(api('/admin/system/ai')).expect(401);
+      await http().get(api('/admin/access/admins')).expect(401);
+      await http().get(api(`/admin/deliveries/safety-notices/${ids.lisaMessage}`)).expect(401);
     });
   });
 
@@ -1036,6 +1074,9 @@ describe('Admin backend (e2e)', () => {
       const sofia = await otpSignIn('recipient-auth', SOFIA);
       await sofia.get(api('/recipient/messages')).expect(200);
       await sofia.get(api('/admin/users')).expect(401);
+      await sofia.get(api('/admin/releases')).expect(401);
+      await sofia.get(api('/admin/deliveries')).expect(401);
+      await sofia.get(api('/admin/system/health')).expect(401);
       await sofia.get(api('/admin-auth/me')).expect(401);
     });
 
@@ -1052,14 +1093,536 @@ describe('Admin backend (e2e)', () => {
     });
   });
 
-  it('dashboard: real aggregates only (no billing or delivery data)', async () => {
-    const res = await agents.admin.get(api('/admin/dashboard')).expect(200);
-    expect(Object.keys(res.body).sort()).toEqual([
-      'deathVerification',
-      'queues',
-      'users',
+  it('dashboard: counts and statuses only; reading it releases and sends nothing', async () => {
+    const before = await Promise.all([
+      prisma.messageRelease.count(),
+      prisma.releaseNotification.count(),
+      prisma.messageRecipientRelease.count({ where: { releasedAt: { not: null } } }),
     ]);
-    expect(res.body.users.passed).toBeGreaterThanOrEqual(1);
-    expect(res.body.users.total).toBeGreaterThanOrEqual(6);
+    const res = await agents.admin.get(api('/admin/dashboard')).expect(200);
+    await agents.admin.get(api('/admin/dashboard')).expect(200);
+    expect(Object.keys(res.body).sort()).toEqual([
+      'customers',
+      'deadLetters',
+      'deathVerification',
+      'generatedAt',
+      'queues',
+      'releaseEmails',
+      'releases',
+      'security',
+      'services',
+    ]);
+    expect(Date.parse(res.body.generatedAt)).not.toBeNaN();
+    // Recorded rows (this run's wrong codes), never null while PostgreSQL is up.
+    expect(res.body.security.adminMfaFailuresLast7Days).toBeGreaterThan(0);
+    expect(res.body.customers).toEqual({
+      total: expect.any(Number),
+      active: expect.any(Number),
+      suspended: expect.any(Number),
+      passed: expect.any(Number),
+      deleted: expect.any(Number),
+      newLast7Days: expect.any(Number),
+    });
+    expect(res.body.customers.passed).toBeGreaterThanOrEqual(1);
+    // Customers only: never more than the CUSTOMER rows (admins excluded).
+    expect(res.body.customers.total).toBeLessThan(await prisma.user.count());
+    // Messages, counted exactly as /admin/releases?pastDue=true lists them.
+    expect(res.body.releases).toEqual({ pastDue: expect.any(Number) });
+    expect(res.body.releaseEmails).toEqual({ retrying: expect.any(Number), failed: expect.any(Number) });
+    expect(res.body.queues).toEqual({
+      waiting: expect.any(Number),
+      active: expect.any(Number),
+      delayed: expect.any(Number),
+      failed: expect.any(Number),
+    });
+    expect(res.body.deadLetters).toEqual({ open: expect.any(Number) });
+    // The System Health snapshot (scanner: a closed port in e2e; no worker reports on this suite's queue).
+    expect(res.body.services).toEqual({
+      database: 'ok',
+      redis: 'ok',
+      worker: 'missing',
+      malwareScanner: 'failed',
+    });
+    const body = JSON.stringify(res.body);
+    expect(body).not.toContain(PRIVATE_TEXT);
+    expect(body).not.toMatch(/@example\.test|"id"|textContent|privateNote|[Tt]oken|[Uu]rl|payload/);
+    expect(
+      await Promise.all([
+        prisma.messageRelease.count(),
+        prisma.releaseNotification.count(),
+        prisma.messageRecipientRelease.count({ where: { releasedAt: { not: null } } }),
+      ]),
+    ).toEqual(before);
+  });
+
+  it('releases: read-only metadata with current assessments; never content; no-store', async () => {
+    const lisaRecipient = (
+      await agents.lisa.post(api('/recipients')).send({ firstName: 'Ruth' }).expect(201)
+    ).body.id as string;
+    const make = async (title: string) =>
+      (
+        await agents.lisa
+          .post(api('/messages'))
+          .send({ title, textContent: PRIVATE_TEXT, recipientIds: [lisaRecipient] })
+          .expect(201)
+      ).body.id as string;
+    const future = await make('Fictional future title');
+    const onDeath = await make('Fictional on-death title');
+    await agents.lisa
+      .post(api(`/messages/${future}/schedule`))
+      .send({ triggerType: 'FIXED_DATE', scheduledFor: new Date(Date.now() + 30 * 86_400_000).toISOString() })
+      .expect(201);
+    // Created long ago or not, an after-death schedule is never "past due".
+    await agents.lisa.post(api(`/messages/${onDeath}/schedule`)).send({ triggerType: 'ON_DEATH' }).expect(201);
+    const released = await prisma.message.findFirstOrThrow({
+      where: { owner: { email: users.noah }, status: 'RELEASED' },
+      select: { id: true },
+    });
+    const before = await Promise.all([
+      prisma.messageRelease.count(),
+      prisma.releaseNotification.count(),
+      prisma.recipientMessageAccessGrant.count(),
+      prisma.message.groupBy({ by: ['status'], where: { ownerUserId: ids.lisa }, _count: { _all: true } }),
+    ]);
+
+    const list = await agents.admin.get(api(`/admin/releases?accountId=${ids.lisa}&sort=createdAt&dir=asc`)).expect(200);
+    expect(list.headers['cache-control']).toBe('no-store');
+    expect(list.body.items.map((i: { reference: string }) => i.reference)).toEqual([future, onDeath]);
+    expect(list.body.items[0]).toMatchObject({
+      accountId: ids.lisa,
+      status: 'SCHEDULED',
+      triggerType: 'FIXED_DATE',
+      assessment: 'scheduled',
+    });
+    expect(list.body.items[1]).toMatchObject({ triggerType: 'ON_DEATH', assessment: 'awaiting_death_verification' });
+    // The draft is not release work.
+    expect(JSON.stringify(list.body)).not.toContain(ids.lisaMessage);
+    const pastDue = await agents.admin.get(api(`/admin/releases?accountId=${ids.lisa}&pastDue=true`)).expect(200);
+    expect(pastDue.body.items).toEqual([]);
+    // The Overview counts exactly what the Releases filter lists.
+    const [dash, allPastDue] = await Promise.all([
+      agents.admin.get(api('/admin/dashboard')).expect(200),
+      agents.admin.get(api('/admin/releases?pastDue=true&limit=1')).expect(200),
+    ]);
+    expect(allPastDue.body.pagination.total).toBe(dash.body.releases.pastDue);
+
+    const one = await agents.admin.get(api(`/admin/releases?reference=${released.id}`)).expect(200);
+    expect(one.body.items).toEqual([expect.objectContaining({ status: 'RELEASED', assessment: 'released' })]);
+    const detail = await agents.admin.get(api(`/admin/releases/${released.id}`)).expect(200);
+    expect(detail.headers['cache-control']).toBe('no-store');
+    expect(detail.body).toMatchObject({
+      reference: released.id,
+      status: 'RELEASED',
+      assessment: 'released',
+      release: { triggerType: 'ON_DEATH', accessGrants: 1 },
+      deathActivation: { triggerType: 'ON_DEATH' },
+      deathCase: { status: 'VERIFIED' },
+    });
+    expect(detail.body.history.map((h: { event: string }) => h.event)).toEqual(
+      expect.arrayContaining(['released', 'death_trigger_activated', 'schedule_saved']),
+    );
+
+    for (const body of [list.body, one.body, detail.body]) {
+      const text = JSON.stringify(body);
+      expect(text).not.toContain(PRIVATE_TEXT);
+      expect(text).not.toMatch(/Fictional (future|on-death) title|On death|@example\.test|textContent|privateNote|errorMessage/);
+    }
+
+    await agents.admin.get(api('/admin/releases/not-a-uuid')).expect(400);
+    await agents.admin.get(api(`/admin/releases/${ZERO}`)).expect(404);
+    await agents.admin.get(api(`/admin/releases/${ids.lisaMessage}`)).expect(404);
+    await agents.admin.get(api('/admin/releases?sort=title')).expect(400);
+    await agents.admin.get(api('/admin/releases?status=DRAFT')).expect(400);
+    await agents.admin
+      .get(api('/admin/releases?scheduledFrom=2026-11-01T00:00:00Z&scheduledTo=2026-10-01T00:00:00Z'))
+      .expect(400);
+
+    // Reading released, queued, sent and changed nothing.
+    expect(
+      await Promise.all([
+        prisma.messageRelease.count(),
+        prisma.releaseNotification.count(),
+        prisma.recipientMessageAccessGrant.count(),
+        prisma.message.groupBy({ by: ['status'], where: { ownerUserId: ids.lisa }, _count: { _all: true } }),
+      ]),
+    ).toEqual(before);
+  });
+
+  it('deliveries: stored records only; accepted is not delivered; no addresses; reading changes nothing', async () => {
+    const released = await prisma.message.findFirstOrThrow({
+      where: { owner: { email: users.noah }, status: 'RELEASED' },
+      select: { id: true },
+    });
+    const kase = await prisma.deathVerificationCase.findFirstOrThrow({
+      where: { owner: { email: users.noah } },
+      select: { id: true },
+    });
+    const before = await Promise.all([
+      prisma.releaseNotification.groupBy({ by: ['status', 'attemptCount'], _count: { _all: true } }),
+      prisma.deathVerificationCase.findUniqueOrThrow({
+        where: { id: kase.id },
+        select: { safetyNoticeAttemptCount: true, safetyNoticeSentAt: true, status: true },
+      }),
+      prisma.messageRelease.count(),
+    ]);
+
+    const list = await agents.admin
+      .get(api(`/admin/deliveries?category=release_email&releaseReference=${released.id}`))
+      .expect(200);
+    expect(list.headers['cache-control']).toBe('no-store');
+    expect(list.body.items).toHaveLength(1);
+    const [row] = list.body.items;
+    expect(row).toMatchObject({ channel: 'EMAIL', releaseReference: released.id });
+    expect(['queued', 'retrying', 'provider_accepted', 'failed']).toContain(row.status);
+    // Masked by the API: first character only, top-level domain kept.
+    expect(row.destination).toBe('a***@e***.test'); // adm.sofia.<tag>@example.test
+    expect(row.recipientReference).toMatch(/^[0-9a-f-]{36}$/);
+    // Email is disabled in tests: never "accepted", let alone delivered.
+    expect(row.status).not.toBe('provider_accepted');
+
+    const detail = await agents.admin.get(api(`/admin/deliveries/release-emails/${row.reference}`)).expect(200);
+    expect(detail.body).toMatchObject({ reference: row.reference, releaseReference: released.id, category: 'release_email' });
+    expect(detail.body.history.map((h: { event: string }) => h.event)).toContain('intent_created');
+
+    const notices = await agents.admin
+      .get(api(`/admin/deliveries?category=safety_notice&reference=${kase.id}`))
+      .expect(200);
+    expect(notices.body.items).toEqual([
+      expect.objectContaining({ reference: kase.id, status: 'provider_accepted', channel: 'EMAIL' }),
+    ]);
+    const notice = await agents.admin.get(api(`/admin/deliveries/safety-notices/${kase.id}`)).expect(200);
+    expect(notice.body.caseEvents.length).toBeGreaterThanOrEqual(1);
+
+    for (const body of [list.body, detail.body, notices.body, notice.body]) {
+      const text = JSON.stringify(body);
+      expect(text).not.toContain(SOFIA);
+      expect(text).not.toMatch(/@example\.test|https?:|"(subject|html|text|token|tokenHash|payload|errorMessage|lastErrorCode)":/);
+    }
+
+    // The Overview counts exactly what these filters list.
+    const [dash, retrying, failed] = await Promise.all([
+      agents.admin.get(api('/admin/dashboard')).expect(200),
+      agents.admin.get(api('/admin/deliveries?status=retrying&limit=1')).expect(200),
+      agents.admin.get(api('/admin/deliveries?status=failed&limit=1')).expect(200),
+    ]);
+    expect(retrying.body.pagination.total).toBe(dash.body.releaseEmails.retrying);
+    expect(failed.body.pagination.total).toBe(dash.body.releaseEmails.failed);
+
+    await agents.admin.get(api('/admin/deliveries?category=sms')).expect(400);
+    await agents.admin.get(api('/admin/deliveries?category=safety_notice&status=retrying')).expect(400);
+    await agents.admin.get(api('/admin/deliveries?errorCategory=raw_provider_text')).expect(400);
+    await agents.admin.get(api('/admin/deliveries/release-emails/not-a-uuid')).expect(400);
+    await agents.admin.get(api(`/admin/deliveries/release-emails/${ZERO}`)).expect(404);
+    await agents.admin.get(api(`/admin/deliveries/safety-notices/${ZERO}`)).expect(404);
+
+    expect(
+      await Promise.all([
+        prisma.releaseNotification.groupBy({ by: ['status', 'attemptCount'], _count: { _all: true } }),
+        prisma.deathVerificationCase.findUniqueOrThrow({
+          where: { id: kase.id },
+          select: { safetyNoticeAttemptCount: true, safetyNoticeSentAt: true, status: true },
+        }),
+        prisma.messageRelease.count(),
+      ]),
+    ).toEqual(before);
+  });
+
+  it('Cache-Control: no-store on every admin JSON response (errors too), not on Customer routes', async () => {
+    for (const path of [
+      '/admin/dashboard',
+      '/admin/users',
+      `/admin/users/${ids.lisa}`,
+      '/admin/audit-logs',
+      '/admin/system/queues',
+      '/admin/system/dead-letters',
+      '/admin/death-verifications',
+      '/admin/releases',
+      '/admin/deliveries',
+      '/admin/system/health',
+      '/admin/security/events',
+      '/admin/storage/assets',
+      '/admin/system/ai',
+      '/admin/access/admins',
+      '/admin-auth/me',
+    ]) {
+      const res = await agents.admin.get(api(path)).expect(200);
+      expect([path, res.headers['cache-control']]).toEqual([path, 'no-store']);
+    }
+    // Error responses on admin routes are private too.
+    expect((await http().get(api('/admin/users')).expect(401)).headers['cache-control']).toBe('no-store');
+    expect((await agents.admin.get(api(`/admin/releases/${ZERO}`)).expect(404)).headers['cache-control']).toBe('no-store');
+    // Not global: a Customer route keeps its own (no) caching policy.
+    expect((await agents.lisa.get(api('/auth/me')).expect(200)).headers['cache-control']).toBeUndefined();
+  });
+
+  it('security activity: recorded security rows only, explicit fields, verified accounts, bounded; reading writes nothing', async () => {
+    const before = await prisma.auditLog.count();
+    const res = await agents.admin
+      .get(api('/admin/security/events'))
+      .query({ category: 'mfa_failure', limit: 100 })
+      .expect(200);
+    expect(res.headers['cache-control']).toBe('no-store');
+    // This run's wrong codes, attributed to the password-verified admin.
+    const mine = res.body.items.filter((e: { accountId: string }) => e.accountId === ids.admin);
+    expect(mine.length).toBeGreaterThan(0);
+    expect(mine[0]).toEqual({
+      reference: expect.any(String),
+      recordedAt: expect.any(String),
+      eventType: 'ADMIN_MFA_FAILED',
+      category: 'mfa_failure',
+      outcome: 'failed',
+      actorType: 'ADMIN',
+      actorUserId: ids.admin,
+      accountId: ids.admin,
+      network: expect.stringMatching(/\/(24|48)$/),
+      // Attribution is unset in this suite: no row is trusted.
+      sourceTrusted: false,
+      reason: { method: expect.any(String), code: expect.any(String), challengeInvalidated: expect.any(Boolean) },
+    });
+    expect(res.body.counts.mfa_failure).toBeGreaterThanOrEqual(mine.length);
+    const text = JSON.stringify(res.body);
+    for (const s of [secret, password, ...recoveryCodes, 'userAgent', 'metadata', '198.51.100.']) expect(text).not.toContain(s);
+    // Suspension reasons (free text) never appear; the row is still listed.
+    const status = await agents.admin.get(api('/admin/security/events')).query({ category: 'account_status', accountId: ids.lisa }).expect(200);
+    expect(status.body.items.length).toBeGreaterThan(0);
+    expect(status.body.items.every((e: { reason: unknown }) => e.reason === null)).toBe(true);
+    // Detail of a security row; a non-security audit row (a page view) is 404.
+    await agents.admin.get(api(`/admin/security/events/${mine[0].reference}`)).expect(200);
+    const view = await prisma.auditLog.findFirstOrThrow({ where: { eventType: 'ADMIN_VIEWED_USER' } });
+    await agents.admin.get(api(`/admin/security/events/${view.id}`)).expect(404);
+    // Exact reference; stable newest-first order with an id tie-breaker.
+    const one = await agents.admin.get(api('/admin/security/events')).query({ reference: mine[0].reference }).expect(200);
+    expect(one.body.items.map((e: { reference: string }) => e.reference)).toEqual([mine[0].reference]);
+    const all = (await agents.admin.get(api('/admin/security/events')).query({ limit: 100 }).expect(200)).body.items as { recordedAt: string; reference: string }[];
+    for (let i = 1; i < all.length; i++) {
+      const [a, b] = [all[i - 1]!, all[i]!];
+      expect(a.recordedAt > b.recordedAt || (a.recordedAt === b.recordedAt && a.reference > b.reference)).toBe(true);
+    }
+    // Validation and bounds.
+    await agents.admin.get(api('/admin/security/events')).query({ category: 'brute_force' }).expect(400);
+    await agents.admin.get(api('/admin/security/events')).query({ email: users.lisa }).expect(400);
+    await agents.admin.get(api('/admin/security/events')).query({ limit: 101 }).expect(400);
+    await agents.admin
+      .get(api('/admin/security/events'))
+      .query({ from: '2024-01-01T00:00:00Z', to: '2026-01-01T00:00:00Z' })
+      .expect(400);
+    await agents.admin.get(api('/admin/security/events/not-a-uuid')).expect(400);
+    // Reading is not an audited action and changes nothing.
+    expect(await prisma.auditLog.count()).toBe(before);
+  });
+
+  it('storage & scans: stored-file metadata only, quota-consistent bytes, honest states; reading changes nothing', async () => {
+    // Fictional rows on Lisa's draft (no files exist anywhere; this app has no media provider at all).
+    const base = { ownerUserId: ids.lisa, messageId: ids.lisaMessage, kind: 'PHOTO' as const, mimeType: 'image/png' };
+    const mk = (over: object) =>
+      prisma.mediaAsset.create({
+        data: { ...base, storageKey: `test/${run}/${randomUUID()}`, originalFileName: 'Grandma secret.png', sizeBytes: 1, ...over },
+        select: { id: true },
+      });
+    const ready = await mk({ status: 'READY', sizeBytes: 1000, uploadedAt: new Date(), providerFileId: 'pf-secret' });
+    const pending = await mk({ status: 'PENDING_UPLOAD', sizeBytes: 300 });
+    const failed = await mk({ status: 'FAILED', sizeBytes: 50 });
+    const removing = await mk({ status: 'READY', sizeBytes: 70, deletedAt: new Date() });
+    const removed = await mk({ status: 'READY', sizeBytes: 90, deletedAt: new Date(), storageDeletedAt: new Date() });
+    try {
+      const snapshot = () => prisma.mediaAsset.findMany({ where: { ownerUserId: ids.lisa }, orderBy: { id: 'asc' } });
+      const before = await snapshot();
+      const res = await agents.admin.get(api('/admin/storage/assets')).query({ accountId: ids.lisa, limit: 100 }).expect(200);
+      expect(res.headers['cache-control']).toBe('no-store');
+      const byRef = Object.fromEntries(res.body.items.map((i: { reference: string }) => [i.reference, i]));
+      expect(byRef[ready.id]).toMatchObject({ source: 'MESSAGE', uploadState: 'ready', sizeBytes: 1000, sizeVerified: true, deletion: 'active' });
+      // Declared (reserved) size, not verified; no scan outcome implied.
+      expect(byRef[pending.id]).toMatchObject({ uploadState: 'pending', sizeVerified: false, verifiedAt: null });
+      expect(byRef[pending.id]).not.toHaveProperty('scan');
+      // FAILED is failed verification (reason not stored), queued for removal; not "malware".
+      expect(byRef[failed.id]).toMatchObject({ uploadState: 'failed', deletion: 'pending' });
+      // Soft delete is "removal pending"; only storageDeletedAt is "removal recorded".
+      expect(byRef[removing.id]).toMatchObject({ deletion: 'pending', storageDeletedAt: null });
+      expect(byRef[removed.id]).toMatchObject({ deletion: 'confirmed' });
+      const text = JSON.stringify(res.body);
+      for (const s of ['Grandma', 'pf-secret', `test/${run}`, 'storageKey', 'image/png', 'http']) expect(text).not.toContain(s);
+      // Same definitions as the customer quota: live READY = used, live PENDING_UPLOAD = reserved.
+      const usage = await new StorageQuota(prisma, app.get(ConfigService)).usage(ids.lisa);
+      const items = res.body.items as { uploadState: string; deletedAt: string | null; sizeBytes: number }[];
+      const live = (state: string) => items.filter((i) => i.uploadState === state && !i.deletedAt).reduce((n, i) => n + i.sizeBytes, 0);
+      expect(live('ready')).toBe(usage.usedBytes);
+      expect(live('pending')).toBe(usage.reservedBytes);
+      // Platform summary includes these rows, each counted once.
+      expect(res.body.summary.MESSAGE.verifiedBytes).toBeGreaterThanOrEqual(1000);
+      expect(res.body.summary.MESSAGE.deletionConfirmed).toBeGreaterThanOrEqual(1);
+      // Filters, detail, validation.
+      const failedOnly = await agents.admin.get(api('/admin/storage/assets')).query({ accountId: ids.lisa, uploadState: 'failed' }).expect(200);
+      expect(failedOnly.body.items.map((i: { reference: string }) => i.reference)).toEqual([failed.id]);
+      await agents.admin.get(api(`/admin/storage/assets/${ready.id}`)).expect(200);
+      await agents.admin.get(api(`/admin/storage/assets/${ZERO}`)).expect(404);
+      await agents.admin.get(api('/admin/storage/assets')).query({ fileName: 'Grandma' }).expect(400);
+      await agents.admin.get(api('/admin/storage/assets')).query({ uploadState: 'infected' }).expect(400);
+      await agents.admin.get(api('/admin/storage/assets')).query({ from: '2024-01-01T00:00:00Z', to: '2026-01-01T00:00:00Z' }).expect(400);
+      // Stable newest-first order with an id tie-breaker.
+      const all = (await agents.admin.get(api('/admin/storage/assets')).query({ limit: 100 }).expect(200)).body.items as { createdAt: string; reference: string }[];
+      for (let i = 1; i < all.length; i++) {
+        const [a, b] = [all[i - 1]!, all[i]!];
+        expect(a.createdAt > b.createdAt || (a.createdAt === b.createdAt && a.reference > b.reference)).toBe(true);
+      }
+      // Reading changed no row (status, dates, deletion markers).
+      expect(await snapshot()).toEqual(before);
+    } finally {
+      await prisma.mediaAsset.deleteMany({ where: { id: { in: [ready, pending, failed, removing, removed].map((r) => r.id) } } });
+    }
+  });
+
+  it('AI operations: shared Redis aggregates from two replicas; settings without the key; no provider call; no-store', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const get = async (query: object = {}) => {
+      const res = await agents.admin.get(api('/admin/system/ai')).query(query).expect(200);
+      expect(res.headers['cache-control']).toBe('no-store');
+      return res.body;
+    };
+    const before = await get({ area: 'memory-vault' });
+    expect(before.monitoring).toBe('available');
+    // Two recorders on the same Redis, as two API instances would be.
+    const [a, b] = [new AssistantMetrics(app.get(RedisService)), new AssistantMetrics(app.get(RedisService))];
+    await a.request('memory-vault', 'caption', 'reply', 1000);
+    await b.request('memory-vault', 'caption', 'provider_failure', 3000);
+    await a.attempt('memory-vault', 'caption', 'ok', 900, false, { input: 10, output: 5, total: 15 });
+    await b.attempt('memory-vault', 'caption', 'provider_5xx', 2000, false);
+    await b.attempt('memory-vault', 'caption', 'network', 900, true);
+    const after = await get({ area: 'memory-vault' });
+    expect(after.requests.total - before.requests.total).toBe(2);
+    expect(after.requests.byOutcome.provider_failure - before.requests.byOutcome.provider_failure).toBe(1);
+    expect(after.attempts.total - before.attempts.total).toBe(3);
+    expect(after.attempts.retries - before.attempts.retries).toBe(1);
+    expect(after.tokens.reportedAttempts - before.tokens.reportedAttempts).toBe(1);
+    expect(after.tokens.unknownAttempts - before.tokens.unknownAttempts).toBe(2);
+    expect(Date.parse(after.period.from)).toBeLessThan(Date.parse(after.period.to));
+    expect(after.lastReplyAt).not.toBeNull();
+    // Configuration presence and limits only: never the key or anything derived from it.
+    const key = app.get(ConfigService).get<string>('GROQ_API_KEY') ?? '';
+    expect(after.configuration).toEqual({
+      configured: key.trim() !== '',
+      provider: 'Groq',
+      model: expect.any(String),
+      perUserHour: expect.any(Number),
+      globalAttemptsPerMinute: expect.any(Number),
+      maxConcurrent: expect.any(Number),
+      budgetMs: 25_000,
+      maxAttempts: 2,
+      maxCompletionTokens: 700,
+    });
+    if (key.trim()) expect(JSON.stringify(after)).not.toContain(key.trim().slice(0, 6));
+    await agents.admin.get(api('/admin/system/ai')).query({ window: '30d' }).expect(400);
+    await agents.admin.get(api('/admin/system/ai')).query({ area: 'admin' }).expect(400);
+    await agents.admin.get(api('/admin/system/ai')).query({ userId: ids.lisa }).expect(400);
+    expect((await get({ window: '7d' })).window).toBe('7d');
+    // Opening or refreshing the page never calls the AI provider.
+    expect(fetchSpy.mock.calls.filter(([url]) => (url instanceof Request ? url.url : String(url as string | URL)).includes('groq'))).toHaveLength(0);
+    fetchSpy.mockRestore();
+  });
+
+  it('admin access: read-only list/detail of admin accounts; permissions from the enforcing rules; no secrets; no mutation route', async () => {
+    // A fictional admin that never finished sign-in: not enrolled, no sign-in recorded.
+    const fresh = await prisma.user.create({
+      data: { email: `adm.fresh.${run}@example.test`, passwordHash: 'not-a-real-hash', firstName: 'Fresh', lastName: 'Admin', role: 'ADMIN', status: 'ACTIVE' },
+      select: { id: true },
+    });
+    try {
+      const list = await agents.admin.get(api('/admin/access/admins')).query({ limit: 100 }).expect(200);
+      expect(list.headers['cache-control']).toBe('no-store');
+      const byId = Object.fromEntries(list.body.items.map((a: { id: string }) => [a.id, a]));
+      // Admin roles only: Customers never appear.
+      expect(list.body.items.every((a: { role: string }) => ['ADMIN', 'SUPER_ADMIN'].includes(a.role))).toBe(true);
+      expect(byId[ids.lisa]).toBeUndefined();
+      expect(byId[ids.admin]).toMatchObject({ role: 'ADMIN', status: 'ACTIVE', mfaEnrolled: true, lastSignInAt: expect.any(String) });
+      expect(byId[fresh.id]).toMatchObject({ mfaEnrolled: false, lastSignInAt: null });
+      expect(Object.keys(byId[ids.admin]).sort()).toEqual(['createdAt', 'email', 'firstName', 'id', 'invitationPending', 'lastName', 'lastSignInAt', 'mfaEnrolled', 'role', 'status']);
+      const text = JSON.stringify(list.body);
+      for (const s of [secret, password, ...recoveryCodes, 'passwordHash', 'totpSecret', 'codeHash', 'not-a-real-hash']) expect(text).not.toContain(s);
+
+      // Filters, bounds, validation.
+      const notEnrolled = await agents.admin.get(api('/admin/access/admins')).query({ mfa: 'not_enrolled', limit: 100 }).expect(200);
+      expect(notEnrolled.body.items.map((a: { id: string }) => a.id)).toContain(fresh.id);
+      expect(notEnrolled.body.items.map((a: { id: string }) => a.id)).not.toContain(ids.admin);
+      const supers = await agents.admin.get(api('/admin/access/admins')).query({ role: 'SUPER_ADMIN' }).expect(200);
+      expect(supers.body.items.map((a: { id: string }) => a.id)).toEqual([ids.root]);
+      await agents.admin.get(api('/admin/access/admins')).query({ role: 'CUSTOMER' }).expect(400);
+      await agents.admin.get(api('/admin/access/admins')).query({ role: 'OWNER' }).expect(400);
+      await agents.admin.get(api('/admin/access/admins')).query({ sort: 'passwordHash' }).expect(400);
+      await agents.admin.get(api('/admin/access/admins')).query({ limit: 101 }).expect(400);
+
+      // Detail: effective permissions come from the enforcing rules; history is explicit fields only.
+      const admin2 = (await agents.admin.get(api(`/admin/access/admins/${ids.admin2}`)).expect(200)).body;
+      expect(admin2.permissions).toEqual({ adminPortal: true, manageCustomerAccounts: true, manageAdminAccounts: false, manageSuperAdminAccounts: false, changeRoles: false });
+      expect(admin2.status).toBe('SUSPENDED'); // suspended by the SUPER_ADMIN earlier in this run
+      expect(admin2.history[0]).toEqual({
+        reference: expect.any(String),
+        eventType: 'USER_SUSPENDED',
+        actorType: 'SUPER_ADMIN',
+        actorUserId: ids.root,
+        previousStatus: 'ACTIVE',
+        newStatus: 'SUSPENDED',
+        recordedAt: expect.any(String),
+      });
+      expect(JSON.stringify(admin2)).not.toContain('Fictional access review'); // the free-text reason stays on the audit log
+      // Whether the viewer may manage this account on the Users page: the Users page's own rule.
+      expect(admin2.viewerCanManage).toBe(false); // ADMIN viewing an ADMIN
+      expect((await agents.root.get(api(`/admin/access/admins/${ids.admin2}`)).expect(200)).body.viewerCanManage).toBe(true);
+      expect((await agents.root.get(api(`/admin/access/admins/${ids.root}`)).expect(200)).body).toMatchObject({
+        viewerCanManage: false, // never yourself
+        permissions: { manageAdminAccounts: true, manageSuperAdminAccounts: false, changeRoles: false },
+      });
+      const freshDetail = (await agents.admin.get(api(`/admin/access/admins/${fresh.id}`)).expect(200)).body;
+      expect(freshDetail).toMatchObject({ mfaEnrolled: false, mfaEnrolledAt: null, lastSignInAt: null, history: [] });
+      // Customers are not administrators here; malformed ids are 400.
+      await agents.admin.get(api(`/admin/access/admins/${ids.lisa}`)).expect(404);
+      await agents.admin.get(api('/admin/access/admins/not-a-uuid')).expect(400);
+
+      // Read-only: no write route exists on this resource.
+      for (const method of ['post', 'patch', 'put', 'delete'] as const) {
+        await agents.root[method](api(`/admin/access/admins/${ids.admin}`)).send({ role: 'SUPER_ADMIN' }).expect(404);
+      }
+      expect((await prisma.user.findUniqueOrThrow({ where: { id: ids.admin } })).role).toBe('ADMIN');
+    } finally {
+      await prisma.user.delete({ where: { id: fresh.id } });
+    }
+  });
+
+  it('system health: real checks from this API instance; statuses and times only; no-store', async () => {
+    const res = await agents.admin.get(api('/admin/system/health')).expect(200);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(Object.keys(res.body).sort()).toEqual(['api', 'checkedAt', 'database', 'malwareScanner', 'redis', 'worker']);
+    expect(res.body.api).toEqual({ status: 'ok', checkedAt: expect.any(String) });
+    expect(res.body.database).toEqual({ status: 'ok', checkedAt: expect.any(String), durationMs: expect.any(Number) });
+    expect(res.body.redis).toMatchObject({ status: 'ok' });
+    // The e2e config points the scanner at a closed local port: an honest failure, never a fake success.
+    expect(res.body.malwareScanner).toMatchObject({ status: 'failed', durationMs: expect.any(Number) });
+    const text = JSON.stringify(res.body);
+    expect(text).not.toMatch(/127\.0\.0\.1|localhost|redis:\/\/|postgres|for_after:|worker-heartbeats|CLAMAV|password|stack/i);
+    // The Overview reads the same snapshot.
+    const dash = await agents.admin.get(api('/admin/dashboard')).expect(200);
+    expect(dash.body.services).toEqual({
+      database: res.body.database.status,
+      redis: res.body.redis.status,
+      worker: res.body.worker.status,
+      malwareScanner: res.body.malwareScanner.status,
+    });
+  });
+
+  it('worker heartbeat round trip through real Redis: recent while beating, missing after shutdown', async () => {
+    const health = app.get(SystemHealthService);
+    const heartbeat = new WorkerHeartbeat(app.get(MessageReleaseQueue), app.get(ConfigService));
+    // Each read past the previous snapshot window, so it is a new probe.
+    let shift = 0;
+    const fresh = () => health.check(Date.now() + (shift += 2 * SNAPSHOT_MS));
+    // This suite's own queue name: no real worker ever reports here.
+    expect((await fresh()).worker).toMatchObject({ status: 'missing', reportingWorkers: 0, lastSeenAt: null });
+    await heartbeat.beat();
+    const second = new WorkerHeartbeat(app.get(MessageReleaseQueue), app.get(ConfigService));
+    await second.beat();
+    const beating = (await fresh()).worker;
+    expect(beating).toMatchObject({ status: 'ok', reportingWorkers: 2, staleAfterSeconds: 45 });
+    expect(Date.parse(beating.lastSeenAt!)).toBeGreaterThan(Date.now() - 10_000);
+    await heartbeat.onModuleDestroy();
+    await second.onModuleDestroy();
+    expect((await fresh()).worker).toMatchObject({ status: 'missing', reportingWorkers: 0 });
   });
 });

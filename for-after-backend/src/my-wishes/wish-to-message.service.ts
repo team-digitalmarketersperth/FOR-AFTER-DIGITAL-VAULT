@@ -22,8 +22,7 @@ export const INVALID_WISH_MEDIA = 'One or more wish files are invalid.';
  * same as Memory → Message and Story → Message). The wish stays private and
  * is only read. Recipients, schedule (ON_DEATH / AFTER_DEATH for after-death
  * sharing), verified-death release, grants and the Recipient Portal are the
- * normal Message ones; one wish can make any number of messages. Reading a
- * wish needs no notice acknowledgement (Phase 15A gates writing wishes only).
+ * normal Message ones; one wish can make any number of messages.
  */
 @Injectable()
 export class WishToMessageService {

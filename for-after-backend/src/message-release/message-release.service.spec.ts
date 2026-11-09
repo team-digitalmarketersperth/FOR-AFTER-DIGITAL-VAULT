@@ -3,6 +3,7 @@ import type { PrismaService } from '../prisma/prisma.service.js';
 import {
   createAccessGrants,
   MessageReleaseService,
+  senderDisplayName,
 } from './message-release.service.js';
 
 const ID = '11111111-1111-4111-8111-111111111111';
@@ -29,6 +30,8 @@ const message = (over: object = {}) => ({
   schedule: { triggerType: 'FIXED_DATE', scheduledFor: DUE },
   release: null,
   _count: { recipients: 1 },
+  // Read for the sender display-name snapshot (Phase 18).
+  owner: { firstName: ' Lisa ', lastName: 'Bridgett' },
   ...over,
 });
 
@@ -248,6 +251,7 @@ describe('MessageReleaseService', () => {
           // Same normalization as the API: trimmed + lowercased.
           recipientEmailNormalized: 'sofia@example.com',
           recipientMobileNormalized: null,
+          senderDisplayNameSnapshot: 'Lisa Bridgett',
         },
         {
           // Mobile-only: still granted; mobile kept as stored (trimmed).
@@ -255,11 +259,33 @@ describe('MessageReleaseService', () => {
           messageId: ID,
           recipientId: JENNY,
           recipientEmailNormalized: null,
-          recipientMobileNormalized: '+61 400 000 000',
+          recipientMobileNormalized: '+61400000000',
+          senderDisplayNameSnapshot: 'Lisa Bridgett',
         },
       ],
       skipDuplicates: true,
     });
+  });
+
+  it('the sender snapshot is the display name only, read inside the release transaction', async () => {
+    const { tx, service } = setup();
+    await service.release(ID, NOW);
+    expect(tx.message.findUniqueOrThrow).toHaveBeenCalledWith({
+      where: { id: ID },
+      select: { owner: { select: { firstName: true, lastName: true } } },
+    });
+    const written = JSON.stringify(tx.recipientMessageAccessGrant.createMany.mock.calls);
+    expect(written).not.toMatch(/ownerUserId|"email"|lisa@|password/);
+  });
+
+  it.each([
+    [{ firstName: 'Lisa', lastName: null }, 'Lisa'],
+    [{ firstName: null, lastName: 'Bridgett' }, 'Bridgett'],
+    [{ firstName: '  Mary   Ann ', lastName: ' de  Souza ' }, 'Mary Ann de Souza'],
+    [{ firstName: null, lastName: null }, null],
+    [{ firstName: '   ', lastName: '' }, null],
+  ])('sender display name for %j -> %j', (owner, expected) => {
+    expect(senderDisplayName(owner)).toBe(expected);
   });
 
   it('grants snapshot contact details only (no notes, birthday, relationship, content)', async () => {

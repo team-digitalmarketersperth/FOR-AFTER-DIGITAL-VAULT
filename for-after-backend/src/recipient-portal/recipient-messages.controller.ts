@@ -33,7 +33,7 @@ export class RecipientMessagesController {
   findAll(
     @CurrentRecipient() recipient: RecipientPrincipal,
   ): Promise<RecipientMessageSummary[]> {
-    return this.messages.findAll(recipient.emailNormalized);
+    return this.messages.findAll(recipient);
   }
 
   @Get(':messageId')
@@ -41,7 +41,7 @@ export class RecipientMessagesController {
     @CurrentRecipient() recipient: RecipientPrincipal,
     @Param('messageId', ParseUUIDPipe) messageId: string,
   ): Promise<RecipientMessageDetail> {
-    return this.messages.findOne(recipient.emailNormalized, messageId);
+    return this.messages.findOne(recipient, messageId);
   }
 
   @Get(':messageId/media')
@@ -49,7 +49,7 @@ export class RecipientMessagesController {
     @CurrentRecipient() recipient: RecipientPrincipal,
     @Param('messageId', ParseUUIDPipe) messageId: string,
   ): Promise<RecipientMediaResponse[]> {
-    return this.messages.findMedia(recipient.emailNormalized, messageId);
+    return this.messages.findMedia(recipient, messageId);
   }
 
   @Get(':messageId/media/:mediaAssetId/access-url')
@@ -59,7 +59,7 @@ export class RecipientMessagesController {
     @Param('mediaAssetId', ParseUUIDPipe) id: string,
   ): Promise<AccessUrlResponse> {
     return this.messages.createMediaAccessUrl(
-      recipient.emailNormalized,
+      recipient,
       messageId,
       id,
     );

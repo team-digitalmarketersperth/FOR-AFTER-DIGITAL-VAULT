@@ -7,6 +7,7 @@ export type ApiErrorKind =
   | 'rate_limited' // 429
   | 'server' // 5xx
   | 'network' // no response at all
+  | 'plan_required' // 402: billing gate; reading and deleting stay open
   | 'unknown'; // any other status
 
 /**
@@ -33,6 +34,7 @@ const DEFAULT_MESSAGES: Record<ApiErrorKind, string> = {
   not_found: "We couldn't find what you were looking for.",
   conflict: 'This conflicts with something that already exists.',
   rate_limited: 'Too many attempts. Please try again shortly.',
+  plan_required: 'Your free trial or plan has ended. Choose a plan to continue.',
   server: 'Something went wrong on our side. Please try again.',
   network: "We couldn't connect to For After. Please try again.",
   unknown: 'Something went wrong. Please try again.',
@@ -46,6 +48,7 @@ const TRUST_BACKEND_MESSAGE = new Set<ApiErrorKind>([
   'forbidden',
   'not_found',
   'conflict',
+  'plan_required',
 ]);
 
 // NestJS falls back to the HTTP reason phrase when a handler sets no message
@@ -62,6 +65,7 @@ const REASON_PHRASES = new Set([
 function kindFor(status: number): ApiErrorKind {
   if (status === 400) return 'validation';
   if (status === 401) return 'unauthenticated';
+  if (status === 402) return 'plan_required';
   if (status === 403) return 'forbidden';
   if (status === 404) return 'not_found';
   if (status === 409) return 'conflict';

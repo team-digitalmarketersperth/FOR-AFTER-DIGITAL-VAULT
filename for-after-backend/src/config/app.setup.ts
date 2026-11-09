@@ -94,6 +94,14 @@ export function configureApp(
   // Health checks stay at /health/* for load balancers.
   app.setGlobalPrefix('api/v1', { exclude: ['health/*path'] });
   app.use(helmet());
+  // Admin JSON (every /admin and /admin-auth route, errors included) is
+  // private operational data, and support conversations (Step 7) are private
+  // too: never stored by a browser or proxy. Other Customer, public and health
+  // routes are unaffected.
+  app.use(['/api/v1/admin', '/api/v1/admin-auth', '/api/v1/support', '/api/v1/billing'], (_req: Request, res: Response, next: NextFunction) => {
+    res.setHeader('Cache-Control', 'no-store');
+    next();
+  });
   app.enableCors({ origin: origins, credentials: true });
   // CSRF defence in depth. SameSite=Lax keeps the cookies off cross-site
   // requests, but not off same-site ones (another subdomain, another localhost
@@ -156,6 +164,11 @@ export function configureApp(
 
 /** Observe's tracer (for the trace id in 500s), or null when Observe is off. */
 const currentTracer = (app: NestExpressApplication) => {
+  // Same condition as AppModule. In main.ts, app.get() of a missing provider
+  // exits the process (Nest's abortOnError) before the catch below can run.
+  if (!process.env.OBSERVE_APP_KEY || !process.env.OBSERVE_APP_SECRET) {
+    return null;
+  }
   try {
     return app.get(TracerService, { strict: false });
   } catch {

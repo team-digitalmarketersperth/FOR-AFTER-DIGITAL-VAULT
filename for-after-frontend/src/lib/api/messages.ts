@@ -12,10 +12,14 @@ export type Message = {
   title: string;
   contentType: ContentType;
   textContent: string | null;
+  /** Owner-only reminder; never released, versioned or in summaries. */
+  privateNote: string | null;
   status: MessageStatus;
   createdAt: string;
   updatedAt: string;
   recipients: { id: string; firstName: string; lastName: string | null; relationship: string | null }[];
+  /** The current version number; 0 for a message from before version history. */
+  version: number;
 };
 
 // Mirrors MessageSummary: a GET /messages item. No full text, only a short
@@ -28,7 +32,10 @@ export type MessageInput = {
   title: string;
   contentType: ContentType;
   textContent: string | null;
+  privateNote?: string | null;
   recipientIds: string[];
+  /** Create only: the new-message autosave this save replaces (it is cleared). */
+  recoveryDraftKey?: string;
 };
 
 export const TEXT_CONTENT_MAX = 20_000;
@@ -37,6 +44,30 @@ export const messagesApi = {
   ...resource<Message, MessageInput>('/messages'),
   /** Every summary: the Messages page groups them all by status. */
   list: (signal?: AbortSignal) => allPages<MessageSummary>('/messages', signal),
+};
+
+// Version history: saved checkpoints of the written content (title, type,
+// text). Media, recipients and schedule are not versioned.
+export type VersionReason = 'CREATED' | 'EDITED' | 'RESTORED';
+export type MessageVersionSummary = {
+  id: string;
+  version: number;
+  reason: VersionReason;
+  createdAt: string;
+  isCurrent: boolean;
+};
+export type MessageVersion = MessageVersionSummary & Pick<Message, 'title' | 'contentType' | 'textContent'>;
+
+const versionsPath = (messageId: string) => `/messages/${messageId}/versions`;
+
+export const versionsApi = {
+  /** Newest first, metadata only. */
+  list: (messageId: string, signal?: AbortSignal) => allPages<MessageVersionSummary>(versionsPath(messageId), signal),
+  get: (messageId: string, versionId: string, signal?: AbortSignal) =>
+    apiRequest<MessageVersion>(`${versionsPath(messageId)}/${versionId}`, { signal }),
+  /** DRAFT only (409 otherwise); returns the message with the restored content. */
+  restore: (messageId: string, versionId: string) =>
+    apiRequest<Message>(`${versionsPath(messageId)}/${versionId}/restore`, { method: 'POST' }),
 };
 
 // Every trigger the API executes (Phase 16). BIRTHDAY, ANNIVERSARY and

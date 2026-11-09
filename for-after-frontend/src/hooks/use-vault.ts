@@ -14,15 +14,19 @@ import {
 import {
   messagesApi,
   scheduleApi,
+  versionsApi,
   type Message,
   type MessageInput,
   type MessageSummary,
+  type MessageVersion,
+  type MessageVersionSummary,
   type Schedule,
   type ScheduleInput,
 } from '@/lib/api/messages';
 import {
   recipientsApi,
   trustedContactsApi,
+  type InvitationChannel,
   type Page,
   type Recipient,
   type RecipientInput,
@@ -31,11 +35,16 @@ import {
 } from '@/lib/api/people';
 import {
   promptsApi,
+  storyBookApi,
+  type StoryBook,
   wishesNoticeApi,
+  wishSongsApi,
   type AnswerInput,
   type Prompt,
   type PromptArea,
   type WishesNotice,
+  type WishSong,
+  type WishSongInput,
 } from '@/lib/api/prompts';
 import { queryKeys } from '@/lib/query/query-client';
 
@@ -118,20 +127,25 @@ export const recipients = {
       placeholderData: keepPreviousData,
     }),
 };
+// Adding, editing (email) or removing a contact changes the dashboard's readiness step.
 const trustedContactHooks = resourceHooks<TrustedContact, TrustedContactInput>(
   queryKeys.trustedContacts,
   trustedContactsApi,
+  [queryKeys.trustedContacts, queryKeys.readiness],
 );
 export const trustedContacts = {
   ...trustedContactHooks,
-  /** Phase 10: send or resend the email invitation. */
+  /** Phase 10: send or resend the invitation, by the channel the Customer chose. */
   useInvite: (id: string) => {
     const qc = useQueryClient();
-    return useMutation<TrustedContact, ApiError, void>({
-      mutationFn: () => trustedContactsApi.invite(id),
+    return useMutation<TrustedContact, ApiError, InvitationChannel>({
+      mutationFn: (channel) => trustedContactsApi.invite(id, channel),
       onSuccess: (item) => {
         qc.setQueryData(queryKeys.trustedContact(id), item);
-        return qc.invalidateQueries({ queryKey: queryKeys.trustedContacts, exact: true });
+        return Promise.all([
+          qc.invalidateQueries({ queryKey: queryKeys.trustedContacts, exact: true }),
+          qc.invalidateQueries({ queryKey: queryKeys.readiness }),
+        ]);
       },
     });
   },
@@ -209,6 +223,36 @@ export function useScheduleMutation(messageId: string) {
   });
 }
 
+// Version history. Under the message's key, so any message change refreshes it.
+export const useVersions = (messageId: string, enabled: boolean) =>
+  useQuery<MessageVersionSummary[], ApiError>({
+    queryKey: queryKeys.versions(messageId),
+    queryFn: ({ signal }) => versionsApi.list(messageId, signal),
+    enabled,
+  });
+
+export const useVersion = (messageId: string, versionId: string | null) =>
+  useQuery<MessageVersion, ApiError>({
+    queryKey: queryKeys.version(messageId, versionId ?? ''),
+    queryFn: ({ signal }) => versionsApi.get(messageId, versionId!, signal),
+    enabled: !!versionId,
+  });
+
+/** DRAFT only; the restored message replaces the cached one. */
+export function useRestoreVersion(messageId: string) {
+  const qc = useQueryClient();
+  return useMutation<Message, ApiError, string>({
+    mutationFn: (versionId) => versionsApi.restore(messageId, versionId),
+    onSuccess: (message) => {
+      qc.setQueryData(queryKeys.message(messageId), message);
+      return Promise.all([
+        qc.invalidateQueries({ queryKey: queryKeys.versions(messageId) }),
+        qc.invalidateQueries({ queryKey: queryKeys.messages, exact: true }),
+      ]);
+    },
+  });
+}
+
 export function usePrompts(area: PromptArea) {
   return useQuery<Prompt[], ApiError>({
     queryKey: queryKeys.prompts(area),
@@ -223,6 +267,15 @@ export function usePrompt(area: PromptArea, key: string) {
   });
 }
 
+/** The owner's My Story book (chapters from saved answers); refetched on every visit. */
+export function useStoryBook() {
+  return useQuery<StoryBook, ApiError>({
+    queryKey: queryKeys.storyBook,
+    queryFn: ({ signal }) => storyBookApi.get(signal),
+    staleTime: 0,
+  });
+}
+
 /** Save (create/update/restore) or delete one answer. */
 export function useAnswerMutation(area: PromptArea, key: string) {
   const qc = useQueryClient();
@@ -233,7 +286,7 @@ export function useAnswerMutation(area: PromptArea, key: string) {
   });
 }
 
-/** Phase 15A: the My Wishes notice and this Customer's acknowledgement of its current version. */
+/** Phase 15A: the My Wishes notice (informational; never gates My Wishes). */
 export function useWishesNotice() {
   return useQuery<WishesNotice, ApiError>({
     queryKey: queryKeys.wishesNotice,
@@ -241,13 +294,43 @@ export function useWishesNotice() {
   });
 }
 
-export function useAcknowledgeNotice() {
+/**
+ * Funeral songs (My Wishes). Every write refetches the list afterwards, so a
+ * failed save or reorder always shows what the server really holds.
+ */
+function useWishSongWrite<V, R = unknown>(fn: (v: V) => Promise<R>) {
   const qc = useQueryClient();
-  return useMutation<WishesNotice, ApiError, number>({
-    mutationFn: (version) => wishesNoticeApi.acknowledge(version),
-    onSuccess: (notice) => qc.setQueryData(queryKeys.wishesNotice, notice),
+  return useMutation<R, ApiError, V>({
+    mutationFn: fn,
+    onSettled: () => qc.invalidateQueries({ queryKey: queryKeys.wishSongs }),
   });
 }
+
+export const wishSongs = {
+  useList: () =>
+    useQuery<WishSong[], ApiError>({ queryKey: queryKeys.wishSongs, queryFn: ({ signal }) => wishSongsApi.list(signal) }),
+  /** Create (no id) or update one song. */
+  useSave: () =>
+    useWishSongWrite(({ id, input }: { id?: string; input: WishSongInput }) =>
+      id ? wishSongsApi.update(id, input) : wishSongsApi.create(input),
+    ),
+  useRemove: () => useWishSongWrite((id: string) => wishSongsApi.remove(id)),
+  /** Shows the new order at once; a failure restores the server's order. */
+  useReorder: () => {
+    const qc = useQueryClient();
+    return useMutation<WishSong[], ApiError, WishSong[], { previous?: WishSong[] }>({
+      mutationFn: (songs) => wishSongsApi.reorder(songs.map((s) => s.id)),
+      onMutate: async (songs) => {
+        await qc.cancelQueries({ queryKey: queryKeys.wishSongs });
+        const previous = qc.getQueryData<WishSong[]>(queryKeys.wishSongs);
+        qc.setQueryData(queryKeys.wishSongs, songs);
+        return { previous };
+      },
+      onError: (_error, _songs, context) => qc.setQueryData(queryKeys.wishSongs, context?.previous),
+      onSettled: () => qc.invalidateQueries({ queryKey: queryKeys.wishSongs }),
+    });
+  },
+};
 
 /** Phase 14B / 15B: a new draft from a My Story answer or a wish; it joins the Messages lists. */
 export function useAnswerMessage(area: PromptArea, key: string) {

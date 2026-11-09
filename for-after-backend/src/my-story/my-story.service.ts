@@ -6,8 +6,10 @@ import {
 import { MediaAssetStatus, Prisma } from '../generated/prisma/client.js';
 import { MediaCleanup } from '../media/media-cleanup.service.js';
 import { isNoMatch, storedRefSelect } from '../media/media.service.js';
+import { recordActivity } from '../activity/customer-activity.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import {
+  MY_STORY_CATEGORIES,
   MY_STORY_PROMPTS,
   type MyStoryCategory,
   type MyStoryPrompt,
@@ -23,6 +25,8 @@ const responseSelect = {
   promptTextSnapshot: true,
   promptVersion: true,
   textContent: true,
+  // Owner-only; never shared, and not content (hasContent ignores it).
+  privateNote: true,
   createdAt: true,
   updatedAt: true,
   memoryLinks: {
@@ -52,6 +56,27 @@ export type StoryResponse = Omit<ResponseRow, 'memoryLinks' | '_count'> & {
 export type PromptWithResponse = MyStoryPrompt & {
   answered: boolean;
   response: StoryResponse | null;
+};
+
+/**
+ * The owner's private reading view (2026-10-19): saved answers grouped into
+ * chapters, nothing rewritten. No private notes; media is fetched per answer
+ * through the existing media endpoints.
+ */
+export type BookEntry = {
+  promptKey: string;
+  /** The wording the answer was written for (its snapshot). */
+  prompt: string;
+  textContent: string | null;
+  mediaCount: number;
+  memories: StoryResponse['memories'];
+  updatedAt: Date;
+};
+export type StoryBook = {
+  /** Catalogue category order; only categories with saved content. */
+  chapters: { category: MyStoryCategory; entries: BookEntry[] }[];
+  /** Answers whose prompt key is no longer in the catalogue: kept, never dropped. */
+  unsorted: BookEntry[];
 };
 
 // Same message whether it was never answered, deleted, or (for another
@@ -112,6 +137,7 @@ export async function liveResponseId(
     promptTextSnapshot: prompt.prompt,
     promptVersion: prompt.version,
     textContent: null,
+    privateNote: null,
   };
   const created = await tx.myStoryResponse.upsert({
     where: unique,
@@ -161,6 +187,46 @@ export class MyStoryService {
       .filter((p) => !p.retired || p.answered);
   }
 
+  /**
+   * Every live answer with content, in catalogue order (category, then
+   * prompt). Same content rule as "answered" (hasContent), so progress is
+   * untouched. Unknown keys go to `unsorted`, oldest first.
+   */
+  async book(ownerUserId: string): Promise<StoryBook> {
+    const rows = await this.prisma.myStoryResponse.findMany({
+      where: { ownerUserId, deletedAt: null },
+      orderBy: { createdAt: 'asc' },
+      select: responseSelect,
+    });
+    const position = new Map(MY_STORY_PROMPTS.map((p, i) => [p.key, i]));
+    const entries = rows
+      .map(toResponse)
+      .filter(hasContent)
+      .map((r) => {
+        const at = position.get(r.promptKey);
+        const entry: BookEntry = {
+          promptKey: r.promptKey,
+          prompt: r.promptTextSnapshot,
+          textContent: r.textContent,
+          mediaCount: r.mediaCount,
+          memories: r.memories,
+          updatedAt: r.updatedAt,
+        };
+        return { at, category: at === undefined ? undefined : MY_STORY_PROMPTS[at].category, entry };
+      });
+    const chapters = MY_STORY_CATEGORIES.map((category) => ({
+      category,
+      entries: entries
+        .filter((e) => e.category === category)
+        .sort((a, b) => a.at! - b.at!)
+        .map((e) => e.entry),
+    })).filter((c) => c.entries.length > 0);
+    return {
+      chapters,
+      unsorted: entries.filter((e) => e.at === undefined).map((e) => e.entry),
+    };
+  }
+
   async getPrompt(
     ownerUserId: string,
     prompt: MyStoryPrompt,
@@ -201,9 +267,13 @@ export class MyStoryService {
   async save(
     ownerUserId: string,
     prompt: MyStoryPrompt,
-    input: { textContent?: string | null; memoryVaultItemIds?: string[] },
+    input: {
+      textContent?: string | null;
+      memoryVaultItemIds?: string[];
+      privateNote?: string | null;
+    },
   ): Promise<StoryResponse> {
-    const { textContent, memoryVaultItemIds: links } = input;
+    const { textContent, memoryVaultItemIds: links, privateNote } = input;
     const unique = {
       ownerUserId_promptKey: { ownerUserId, promptKey: prompt.key },
     };
@@ -223,10 +293,10 @@ export class MyStoryService {
       let id: string;
       if (existing && !existing.deletedAt) {
         id = existing.id;
-        if (textContent !== undefined) {
+        if (textContent !== undefined || privateNote !== undefined) {
           await tx.myStoryResponse.update({
             where: { id },
-            data: { textContent },
+            data: { textContent, privateNote },
             select: { id: true },
           });
         }
@@ -236,6 +306,7 @@ export class MyStoryService {
           promptTextSnapshot: prompt.prompt,
           promptVersion: prompt.version,
           textContent: textContent ?? null,
+          privateNote: privateNote ?? null,
         };
         // Atomic on (ownerUserId, promptKey): creates, or restores a deleted one.
         ({ id } = await tx.myStoryResponse.upsert({
@@ -263,6 +334,15 @@ export class MyStoryService {
         }),
       );
       if (!hasContent(saved)) throw new BadRequestException(EMPTY_ANSWER);
+      // The explicit save replaces any autosaved draft of this answer.
+      await tx.draftRecovery.deleteMany({
+        where: { userId: ownerUserId, type: 'MY_STORY', key: prompt.key },
+      });
+      await recordActivity(tx, {
+        userId: ownerUserId,
+        type: existing && !existing.deletedAt ? 'STORY_RESPONSE_UPDATED' : 'STORY_RESPONSE_ADDED',
+        entityId: prompt.key,
+      });
       return saved;
     });
   }
@@ -298,6 +378,7 @@ export class MyStoryService {
         await tx.myStoryMemoryLink.deleteMany({
           where: { myStoryResponseId: row.id },
         });
+        await recordActivity(tx, { userId: ownerUserId, type: 'STORY_RESPONSE_DELETED', entityId: prompt.key });
         return row;
       }));
     } catch (err) {

@@ -1,3 +1,4 @@
+import { RequiresPlan } from '../billing/billing-access.js';
 import {
   BadRequestException,
   Body,
@@ -46,6 +47,7 @@ import {
 import {
   MyStoryService,
   type PromptWithResponse,
+  type StoryBook,
   type StoryResponse,
 } from './my-story.service.js';
 import { AUTH } from '../config/swagger.js';
@@ -66,11 +68,27 @@ export class PromptKeyPipe implements PipeTransform<string, MyStoryPrompt> {
   }
 }
 
+/** The owner's chaptered reading view: the session user's own answers, read-only. */
+@ApiTags('My Story')
+@ApiCookieAuth(AUTH.customer)
+@Controller('my-story')
+@UseGuards(SessionAuthGuard, CustomerGuard)
+@RequiresPlan()
+export class MyStoryBookController {
+  constructor(private readonly story: MyStoryService) {}
+
+  @Get('book')
+  book(@CurrentUser() user: SafeUser): Promise<StoryBook> {
+    return this.story.book(user.id);
+  }
+}
+
 // The owner is always the session user; ownership is enforced in the service.
 @ApiTags('My Story')
 @ApiCookieAuth(AUTH.customer)
 @Controller('my-story/prompts')
 @UseGuards(SessionAuthGuard, CustomerGuard)
+@RequiresPlan()
 export class MyStoryController {
   constructor(
     private readonly story: MyStoryService,

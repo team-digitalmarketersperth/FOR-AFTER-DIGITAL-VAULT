@@ -38,8 +38,11 @@ import { TrustedContactAuthModule } from '../src/trusted-contact-auth/trusted-co
 import {
   TRUSTED_CONTACT_OTP_REQUESTED,
   TRUSTED_CONTACT_SESSION_COOKIE,
+  TRUSTED_CONTACT_SMS_OTP_REQUESTED,
   TrustedContactOtpDelivery,
 } from '../src/trusted-contact-auth/trusted-contact-auth.service.js';
+import { confirmationState } from '../src/death-verification/death-verification.service.js';
+import { SmsVerification } from '../src/sms/sms-verification.js';
 import { TrustedContactPortalModule } from '../src/trusted-contact-portal/trusted-contact-portal.module.js';
 import { TrustedContactsModule } from '../src/trusted-contacts/trusted-contacts.module.js';
 
@@ -69,6 +72,19 @@ describe('Trusted Contact auth + death report intake (e2e)', () => {
     }),
   };
   const storage = new FakeMediaStorage();
+  // Twilio Verify stand-in: never sends. Like Verify, one pending
+  // verification per number (a resend reuses it), approved once.
+  const SMS_CODE = '864213';
+  const pending = new Set<string>();
+  const sms = {
+    name: 'fake',
+    send: vi.fn(async (to: string) => void pending.add(to)),
+    check: vi.fn(
+      async (to: string, code: string) => code === SMS_CODE && pending.delete(to),
+    ),
+  } satisfies SmsVerification;
+  // Per run: rate-limit windows outlive a local rerun.
+  const mobile = (n: number) => `+614${n}${String(Date.now()).slice(-7)}`;
 
   type Agent = ReturnType<typeof request.agent>;
   let lisa: Agent;
@@ -162,6 +178,8 @@ describe('Trusted Contact auth + death report intake (e2e)', () => {
       .useValue(delivery)
       .overrideProvider(RecipientOtpDelivery)
       .useValue({ sendOtp: async () => undefined })
+      .overrideProvider(SmsVerification)
+      .useValue(sms)
       .compile();
     app = moduleRef.createNestApplication<NestExpressApplication>();
     configureApp(app, new session.MemoryStore());
@@ -510,7 +528,7 @@ describe('Trusted Contact auth + death report intake (e2e)', () => {
         reporterFirstNameSnapshot: 'David',
         reporterLastNameSnapshot: 'Test',
         reporterEmailNormalized: DAVID,
-        reporterMobileNormalized: '+61 400 000 111',
+        reporterMobileNormalized: '+61400000111', // E.164 snapshot
         note: 'Fictional test report.',
       });
       expect(stored.reportedDateOfDeath!.toISOString().slice(0, 10)).toBe(
@@ -527,6 +545,8 @@ describe('Trusted Contact auth + death report intake (e2e)', () => {
         reportedByYou: true,
         openedAt: expect.any(String),
         canReport: false,
+        // Phase 19A: only the reporter of an open case.
+        canUploadEvidence: true,
       });
       const list = await david
         .get(api('/trusted-contact/accounts'))
@@ -584,6 +604,7 @@ describe('Trusted Contact auth + death report intake (e2e)', () => {
         .expect(200);
       expect(Object.keys(status.body).sort()).toEqual([
         'canReport',
+        'canUploadEvidence',
         'openedAt',
         'reportedByYou',
         'status',
@@ -618,13 +639,133 @@ describe('Trusted Contact auth + death report intake (e2e)', () => {
       expect(stored).toMatchObject({
         reporterFirstNameSnapshot: 'David',
         reporterLastNameSnapshot: 'Test',
-        reporterMobileNormalized: '+61 400 000 111',
+        reporterMobileNormalized: '+61400000111', // E.164 snapshot
       });
     });
 
     it('David can report independently for John', async () => {
       const res = await report(david, ids.davidForJohn).expect(201);
       expect(res.body.caseId).not.toBe(ids.case);
+    });
+  });
+
+  describe('SMS sign-in for a mobile-only Trusted Contact (Twilio Verify, faked)', () => {
+    const MAYA = mobile(5);
+    const requestSms = (to: unknown, extra = {}) =>
+      http().post(api('/trusted-contact-auth/request-sms-otp')).send({ mobile: to, ...extra });
+    const verifySms = (to: string, code: string, agent?: Agent) =>
+      (agent ?? http()).post(api('/trusted-contact-auth/verify-sms-otp')).send({ mobile: to, code });
+    const smsSignIn = async (to: string) => {
+      await requestSms(to).expect(202);
+      const agent = request.agent(app.getHttpServer());
+      await verifySms(to, SMS_CODE, agent).expect(200);
+      return agent;
+    };
+
+    beforeAll(async () => {
+      // No email at all: John's second contact (max two).
+      ids.maya = await addContact(john, {
+        firstName: 'Maya',
+        relationship: 'Cousin',
+        mobile: `${MAYA.slice(0, 3)} ${MAYA.slice(3, 6)} ${MAYA.slice(6)}`,
+      });
+    });
+
+    it('the contact is stored mobile-only, in E.164; a mobile without country code is refused', async () => {
+      expect(
+        await prisma.trustedContact.findUniqueOrThrow({
+          where: { id: ids.maya },
+          select: { email: true, mobile: true },
+        }),
+      ).toEqual({ email: null, mobile: MAYA });
+      await john
+        .patch(api(`/trusted-contacts/${ids.maya}`))
+        .send({ mobile: '0400 000 000' })
+        .expect(400);
+    });
+
+    it('known and unknown mobiles get the same 202; only the contact is texted; bad input -> 400', async () => {
+      sms.send.mockClear();
+      const known = await requestSms(MAYA).expect(202);
+      const unknown = await requestSms(mobile(9)).expect(202);
+      expect(known.body).toEqual({ message: TRUSTED_CONTACT_SMS_OTP_REQUESTED });
+      expect(unknown.body).toEqual(known.body);
+      await new Promise((r) => setImmediate(r));
+      expect(sms.send).toHaveBeenCalledExactlyOnceWith(MAYA);
+      for (const bad of ['0400 000 000', 'abc', 42]) await requestSms(bad).expect(400);
+      await requestSms(MAYA, { trustedContactId: ids.maya }).expect(400);
+    });
+
+    it('wrong code -> 401 and no cookie; approved -> the Trusted Contact cookie; reuse -> 401', async () => {
+      await requestSms(MAYA).expect(202);
+      const bad = await verifySms(MAYA, '000000').expect(401);
+      expect(bad.headers['set-cookie']).toBeUndefined();
+      const ok = await verifySms(MAYA, SMS_CODE).expect(200);
+      expect(ok.body).toEqual({
+        authenticated: true,
+        mobile: `+61******${MAYA.slice(-3)}`,
+      });
+      const cookie = String(ok.headers['set-cookie']);
+      expect(cookie).toMatch(new RegExp(`^${TRUSTED_CONTACT_SESSION_COOKIE}=`));
+      expect(cookie).toMatch(/HttpOnly/);
+      expect(cookie).toMatch(/SameSite=Lax/);
+      await verifySms(MAYA, SMS_CODE).expect(401);
+    });
+
+    it('same permissions as email sign-in: only the relationship, no content, no other portal', async () => {
+      const maya = await smsSignIn(MAYA);
+      const accounts = (await maya.get(api('/trusted-contact/accounts')).expect(200)).body;
+      // Exactly the email sign-in fields: no content, contact details or other contacts.
+      expect(accounts).toHaveLength(1);
+      expect(Object.keys(accounts[0]).sort()).toEqual([
+        'accountHolder',
+        'deathVerificationStatus',
+        'hasPreservedContent',
+        'relationship',
+        'trustedContactId',
+      ]);
+      expect(accounts[0]).toMatchObject({
+        trustedContactId: ids.maya,
+        accountHolder: { displayName: 'John Test' },
+        relationship: 'Cousin',
+        hasPreservedContent: expect.any(Boolean), // a flag, never the content
+      });
+      // Lisa's relationships stay out of reach.
+      await maya.get(api(`/trusted-contact/accounts/${ids.david}/death-verification`)).expect(404);
+      for (const path of ['/messages', '/recipients', '/memory-vault', '/recipient/messages', '/recipient-auth/me', '/auth/me']) {
+        expect((await maya.get(api(path))).status, path).toBe(401);
+      }
+      // And no other principal's cookie opens this portal.
+      await john.get(api('/trusted-contact/accounts')).expect(401);
+    });
+
+    it("a mobile-only report counts as its own person's confirmation (Phase 19B)", async () => {
+      const maya = await smsSignIn(MAYA);
+      // John's case was opened by David earlier; Maya reports into it.
+      const res = await report(maya, ids.maya).expect(201);
+      const reports = await prisma.deathReport.findMany({
+        where: { deathVerificationCaseId: res.body.caseId },
+        select: { reporterEmailNormalized: true, reporterMobileNormalized: true },
+      });
+      expect(reports).toContainEqual({ reporterEmailNormalized: null, reporterMobileNormalized: MAYA });
+      expect(confirmationState(2, reports).receivedConfirmations).toBe(2);
+    });
+
+    it('removing the contact ends access at once, whatever the sign-in method', async () => {
+      const maya = await smsSignIn(MAYA);
+      await john.delete(api(`/trusted-contacts/${ids.maya}`)).expect(204);
+      expect((await maya.get(api('/trusted-contact/accounts')).expect(200)).body).toEqual([]);
+      await maya.get(api(`/trusted-contact/accounts/${ids.maya}/death-verification`)).expect(404);
+      sms.check.mockClear();
+      await requestSms(MAYA).expect(202);
+      await verifySms(MAYA, SMS_CODE).expect(401);
+      expect(sms.check).not.toHaveBeenCalled(); // ineligible: never reaches Twilio
+    });
+
+    it('too many requests for one mobile -> 429', async () => {
+      const burst = mobile(8);
+      for (let i = 0; i < 10; i++) await requestSms(burst).expect(202);
+      await requestSms(burst).expect(429);
     });
   });
 });

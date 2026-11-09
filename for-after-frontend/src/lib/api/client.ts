@@ -5,6 +5,8 @@ type RequestOptions = {
   method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
   body?: unknown;
   signal?: AbortSignal;
+  /** Lets the request finish after the page is gone (autosave on pagehide). */
+  keepalive?: boolean;
 };
 
 /**
@@ -17,7 +19,7 @@ type RequestOptions = {
  */
 export async function apiRequest<T>(
   path: string,
-  { method = 'GET', body, signal }: RequestOptions = {},
+  { method = 'GET', body, signal, keepalive }: RequestOptions = {},
 ): Promise<T> {
   let response: Response;
   try {
@@ -30,6 +32,7 @@ export async function apiRequest<T>(
       },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal,
+      keepalive,
     });
   } catch (error) {
     if (signal?.aborted) throw error;

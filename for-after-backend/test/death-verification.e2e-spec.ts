@@ -1,4 +1,5 @@
 import { ConfigModule } from '@nestjs/config';
+import { senderSnapshots } from './sender-snapshots.js';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import { ThrottlerGuard } from '@nestjs/throttler';
@@ -66,6 +67,9 @@ describe('Death verification workflow (e2e)', () => {
     vera: at('dv.vera'),
     cora: at('dv.cora'),
     admin: at('dv.admin'),
+    // Phase 24 (§50 duplicate death approval): a second admin and a Customer.
+    admin2: at('dv.admin2'),
+    dupe: at('dv.dupe'),
   };
   const DAVID = at('dv.david');
   const SOFIA = at('dv.sofia');
@@ -255,14 +259,14 @@ describe('Death verification workflow (e2e)', () => {
         .expect(201);
     }
     // Admins cannot self-register: an operator sets the role.
-    await prisma.user.update({
-      where: { email: users.admin },
+    await prisma.user.updateMany({
+      where: { email: { in: [users.admin, users.admin2] } },
       data: { role: 'ADMIN' },
     });
     for (const [key, email] of Object.entries(users)) {
       // Step 16: an admin session needs password + TOTP.
       agents[key] =
-        key === 'admin'
+        key === 'admin' || key === 'admin2'
           ? (await adminSignIn(app, email, password)).agent
           : await signIn(email);
     }
@@ -354,11 +358,14 @@ describe('Death verification workflow (e2e)', () => {
         .expect(200);
       expect(Object.keys(tc.body).sort()).toEqual([
         'canReport',
+        'canUploadEvidence',
         'openedAt',
         'reportedByYou',
         'status',
       ]);
       expect(tc.body.canReport).toBe(false);
+      // Phase 19A: the reporter of an open case may add evidence.
+      expect(tc.body.canUploadEvidence).toBe(true);
     });
 
     it('admin cannot verify during the safeguard (409), no override exists', async () => {
@@ -820,6 +827,45 @@ describe('Death verification workflow (e2e)', () => {
     });
   });
 
+  describe('§50 duplicate death approval (Phase 24)', () => {
+    it('two admins verifying at once: one VERIFIED, one 409; one activation, one release, one grant', async () => {
+      const setup = await setupCustomer('dupe', [
+        { title: 'Dupe on death', schedule: { triggerType: 'ON_DEATH' } },
+      ]);
+      const { body } = await report(setup.tcId);
+      await toReadyForReview(users.dupe);
+      const [a, b] = await Promise.all([
+        verify(body.caseId),
+        verify(body.caseId, {}, agents.admin2),
+      ]);
+      expect([a.status, b.status].sort((x, y) => x - y)).toEqual([200, 409]);
+      expect((await caseOf(users.dupe)).status).toBe('VERIFIED');
+      expect(
+        await prisma.deathVerificationAuditEvent.count({
+          where: {
+            deathVerificationCaseId: body.caseId,
+            eventType: 'ADMIN_VERIFIED',
+          },
+        }),
+      ).toBe(1);
+      expect(
+        await prisma.deathTriggeredMessageActivation.count({
+          where: { deathVerificationCaseId: body.caseId },
+        }),
+      ).toBe(1);
+      const [messageId] = setup.messageIds;
+      await until(async () => (await statusOf(messageId)) === 'RELEASED');
+      // A late third approval changes nothing.
+      await verify(body.caseId).expect(409);
+      await app.get(MessageReleaseReconciler).reconcile();
+      await sleep(1500);
+      expect(await prisma.messageRelease.count({ where: { messageId } })).toBe(1);
+      expect(
+        await prisma.recipientMessageAccessGrant.count({ where: { messageId } }),
+      ).toBe(1);
+    });
+  });
+
   describe('notice failure and reconciliation', () => {
     it('a failed notice keeps PENDING_VERIFICATION; the reconciler starts the safeguard later', async () => {
       const email = users.olga;
@@ -983,6 +1029,11 @@ describe('Death verification workflow (e2e)', () => {
       await toReadyForReview(users.ivan);
       expect(await statusOf(messageIds[0])).toBe('SCHEDULED');
       expect(await accountStatus(users.ivan)).toBe('ACTIVE');
+      // Phase 19B: two contacts → two confirmations. Eve's report alone is not
+      // enough; David's independent report on case 2 completes it.
+      await verify(second.caseId).expect(409);
+      await report(tcId);
+      expect(await accountStatus(users.ivan)).toBe('ACTIVE');
       await verify(second.caseId).expect(200);
       expect(await accountStatus(users.ivan)).toBe('PASSED');
       await until(async () => (await statusOf(messageIds[0])) === 'RELEASED');
@@ -1073,5 +1124,18 @@ describe('Death verification workflow (e2e)', () => {
       }
       expect(await openCount(users.cora)).toBeLessThanOrEqual(1);
     });
+  });
+
+  // Phase 18: every grant this suite released carries its sender's display
+  // name, snapshotted inside the release transaction, for each trigger path.
+  it('every access grant snapshots the sender display name (ON_DEATH, AFTER_DEATH, ANNUAL_AFTER_DEATH)', async () => {
+    const rows = await senderSnapshots(prisma, Object.values(users));
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row.snapshot, row.trigger).toBe(row.current);
+      expect(row.snapshot, row.trigger).not.toBeNull();
+    }
+    const triggers = new Set(rows.map((r) => r.trigger));
+    for (const t of ['ON_DEATH', 'AFTER_DEATH', 'ANNUAL_AFTER_DEATH']) expect(triggers, t).toContain(t);
   });
 });

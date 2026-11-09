@@ -18,6 +18,9 @@ import type { MessageReleaseQueue } from '../message-release/message-release-que
 import type { PrismaService } from '../prisma/prisma.service.js';
 import type { ReleaseNotificationQueue } from '../release-notifications/release-notification-queue.service.js';
 import {
+  ALERT_RETRY_BATCH,
+  ALERT_RETRY_COOLDOWN_MS,
+  ALERT_RETRY_MAX_AGE_MS,
   DeadLetterService,
   isTerminalFailure,
   safeErrorCode,
@@ -46,6 +49,8 @@ const fakeDb = () => {
       if (v && typeof v === 'object' && !(v instanceof Date)) {
         if ('not' in v) return r[k] !== (v as { not: unknown }).not;
         if ('lt' in v) return (r[k] as Date) < (v as { lt: Date }).lt;
+        if ('gt' in v) return (r[k] as Date) > (v as { gt: Date }).gt;
+        if ('in' in v) return (v as { in: unknown[] }).in.includes(r[k]);
       }
       return r[k] === v;
     });
@@ -83,9 +88,14 @@ const fakeDb = () => {
       }),
       updateMany: vi.fn(async ({ where, data }: { where: Where; data: Row }) => {
         const hit = rows.filter((r) => matches(r, where));
-        hit.forEach((r) => apply(r, data));
+        // Like Prisma's @updatedAt.
+        hit.forEach((r) => apply(r, { ...data, updatedAt: new Date() }));
         return { count: hit.length };
       }),
+      findMany: vi.fn(
+        async ({ where, take }: { where: Where; take: number }) =>
+          rows.filter((r) => matches(r, where)).slice(0, take).map((r) => ({ ...r })),
+      ),
       findUniqueOrThrow: vi.fn(
         async ({ where }: { where: { queueName_jobId: Row } }) => {
           const k = where.queueName_jobId;
@@ -130,10 +140,12 @@ class Inbox extends EmailProvider {
   });
 }
 
-const setup = (alertTo: string | null = OPS) => {
+const setup = (alertTo: string | null = OPS, env: Record<string, string> = {}) => {
   const db = fakeDb();
   const inbox = new Inbox();
-  const config = { get: () => alertTo } as unknown as ConfigService;
+  const config = {
+    get: (k: string) => (k === 'OPS_ALERT_EMAIL' ? alertTo : env[k]),
+  } as unknown as ConfigService;
   const service = new DeadLetterService(
     db.prisma as unknown as PrismaService,
     inbox,
@@ -520,5 +532,132 @@ describe('AdminQueuesService dead letters', () => {
     await expect(t.admin.retryDeadLetter(id, actor)).rejects.toThrow(
       ConflictException,
     );
+  });
+});
+
+// Phase 17 alert reconciler: retries PENDING / FAILED alerts directly, bounded.
+describe('DeadLetterService alert reconciler', () => {
+  const NOW = new Date('2026-10-17T12:00:00Z');
+  const ago = (ms: number) => new Date(NOW.getTime() - ms);
+  const stale = ago(ALERT_RETRY_COOLDOWN_MS + 1000);
+  const seed = (rows: Row[], over: Row = {}) => {
+    const row = {
+      id: randomUUID(),
+      queueName: 'email-delivery',
+      jobId: `email-delivery-${randomUUID()}`,
+      jobName: 'deliver',
+      entityType: 'ReleaseNotification',
+      entityId: NOTE_ID,
+      attemptsMade: 5,
+      errorCode: 'ECONNREFUSED',
+      failureCount: 1,
+      status: 'OPEN',
+      alertStatus: 'FAILED',
+      alertedAt: null,
+      failedAt: ago(3_600_000),
+      updatedAt: stale,
+      ...over,
+    };
+    rows.push(row);
+    return row;
+  };
+
+  it('retries only PENDING / FAILED, unresolved, recent, past the cooldown; one direct send each', async () => {
+    const t = setup();
+    const failed = seed(t.rows);
+    const pending = seed(t.rows, { alertStatus: 'PENDING' });
+    seed(t.rows, { alertStatus: 'SENT' });
+    seed(t.rows, { alertStatus: 'NOT_CONFIGURED' });
+    seed(t.rows, { status: 'RESOLVED' });
+    seed(t.rows, { updatedAt: ago(60_000) }); // inside the cooldown (or being alerted now)
+    seed(t.rows, { failedAt: ago(ALERT_RETRY_MAX_AGE_MS + 1000) }); // too old
+    expect(await t.service.reconcileAlerts(NOW)).toBe(2);
+    expect(t.inbox.sent.map((m) => m.kind)).toEqual(['ops-alert', 'ops-alert']);
+    expect(t.inbox.sent.every((m) => m.to === OPS)).toBe(true);
+    expect(failed.alertStatus).toBe('SENT');
+    expect(pending.alertStatus).toBe('SENT');
+    expect(t.inbox.sent[0].idempotencyKey).toBe(`dead-letter/${failed.id}/1`);
+    // Safe content only: ids and codes, no payloads or error text.
+    expect(t.inbox.sent[0].text).not.toMatch(/Dear|ECONNREFUSED postgresql|@/);
+  });
+
+  it('deduplicated: a second pass (or a second worker) sends nothing more', async () => {
+    const t = setup();
+    seed(t.rows);
+    await Promise.all([t.service.reconcileAlerts(NOW), t.service.reconcileAlerts(NOW)]);
+    await t.service.reconcileAlerts(NOW);
+    expect(t.inbox.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('provider still failing: row kept, FAILED again, retried only after the next cooldown', async () => {
+    const t = setup();
+    const row = seed(t.rows);
+    t.inbox.fail = new EmailSendError('rate_limit_exceeded', true);
+    expect(await t.service.reconcileAlerts(NOW)).toBe(1);
+    expect(row).toMatchObject({ alertStatus: 'FAILED', status: 'OPEN', alertedAt: null });
+    expect(t.rows).toHaveLength(1);
+    // Immediately again: inside the cooldown, so no tight loop.
+    expect(await t.service.reconcileAlerts(new Date())).toBe(0);
+    expect(t.inbox.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('bounded batch; no destination → does nothing; DB error → no throw', async () => {
+    const t = setup();
+    for (let i = 0; i < ALERT_RETRY_BATCH + 5; i++) seed(t.rows);
+    expect(await t.service.reconcileAlerts(NOW)).toBe(ALERT_RETRY_BATCH);
+
+    const off = setup(null);
+    seed(off.rows);
+    expect(await off.service.reconcileAlerts(NOW)).toBe(0);
+    expect(off.prisma.deadLetterJob.findMany).not.toHaveBeenCalled();
+
+    const broken = setup();
+    broken.prisma.deadLetterJob.findMany.mockRejectedValueOnce(dbDown);
+    await expect(broken.service.reconcileAlerts(NOW)).resolves.toBe(0);
+  });
+
+  it('lifecycle: startup pass + interval; shutdown stops the timer and awaits a running pass; 0 = off', async () => {
+    vi.useFakeTimers();
+    try {
+      const t = setup(OPS, { OPS_ALERT_RECONCILE_INTERVAL_SECONDS: '60' });
+      const spy = vi.spyOn(t.service, 'reconcileAlerts');
+      t.service.onApplicationBootstrap();
+      expect(spy).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(spy).toHaveBeenCalledTimes(2);
+      await t.service.onModuleDestroy();
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(spy).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(0);
+
+      const off = setup(OPS, { OPS_ALERT_RECONCILE_INTERVAL_SECONDS: '0' });
+      const offSpy = vi.spyOn(off.service, 'reconcileAlerts');
+      off.service.onApplicationBootstrap();
+      expect(offSpy).not.toHaveBeenCalled();
+      expect(() => setup(OPS, { OPS_ALERT_RECONCILE_INTERVAL_SECONDS: '-1' })).toThrow(
+        /OPS_ALERT_RECONCILE_INTERVAL_SECONDS/,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shutdown during a pass: finishes the current alert, starts no more', async () => {
+    const t = setup();
+    for (let i = 0; i < 3; i++) seed(t.rows);
+    let release!: () => void;
+    t.inbox.send.mockImplementationOnce(
+      (m: EmailMessage) =>
+        new Promise((r) => {
+          release = () => (t.inbox.sent.push(m), r({ providerMessageId: 'x' }));
+        }),
+    );
+    const pass = t.service.reconcileAlerts(NOW);
+    await vi.waitFor(() => expect(t.inbox.send).toHaveBeenCalledTimes(1));
+    const stopped = t.service.onModuleDestroy();
+    release();
+    await stopped;
+    expect(await pass).toBe(1);
+    expect(t.inbox.send).toHaveBeenCalledTimes(1);
   });
 });

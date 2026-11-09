@@ -1,6 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { maskEmail } from '../auth/dto/register.dto.js';
+import { maskPrincipal } from '../otp-auth/otp-auth.service.js';
 import {
   MediaAssetStatus,
   MediaKind,
@@ -14,7 +14,10 @@ import {
 } from '../media/media.service.js';
 import { MediaStorage } from '../media/storage/media-storage.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { eligibleGrant } from '../recipient-auth/recipient-auth.service.js';
+import {
+  grantFor,
+  type RecipientPrincipal,
+} from '../recipient-auth/recipient-auth.service.js';
 
 // READY, live PHOTO/AUDIO only; VIDEO stays unsupported.
 const visibleMedia = {
@@ -49,6 +52,12 @@ export type RecipientMessageSummary = {
   contentType: MessageContentType;
   releasedAt: Date;
   hasMedia: boolean;
+  /**
+   * Phase 18: who it is from, as snapshotted when this Recipient got access.
+   * Display name only (never the Customer's email, mobile or id); null for
+   * grants from before the snapshot existed or a Customer with no name.
+   */
+  senderDisplayName: string | null;
 };
 export type RecipientMessageDetail = RecipientMessageSummary & {
   textContent: string | null;
@@ -65,7 +74,7 @@ const MEDIA_NOT_FOUND = 'Media not found.';
 /**
  * Read-only access to released Messages for an authenticated Recipient.
  * Authorization is always an eligible RecipientMessageAccessGrant for the
- * session's verified email, re-checked in PostgreSQL on every request; ids
+ * session's verified email or mobile, re-checked in PostgreSQL on every request; ids
  * from the URL are only ever looked up inside that grant.
  */
 @Injectable()
@@ -81,18 +90,19 @@ export class RecipientMessagesService {
     this.accessTtl = mediaSettings(config).accessTtl;
   }
 
-  // Newest release first. The same email may hold grants from several
+  // Newest release first. The same email or mobile may hold grants from several
   // Customers (expected) or twice for one Message (shown once).
   // ponytail: unpaginated; add take/cursor if a Recipient gets hundreds.
-  async findAll(email: string): Promise<RecipientMessageSummary[]> {
+  async findAll(recipient: RecipientPrincipal): Promise<RecipientMessageSummary[]> {
     const grants = await this.prisma.recipientMessageAccessGrant.findMany({
-      where: eligibleGrant(email),
+      where: grantFor(recipient),
       orderBy: [
         { messageRelease: { releasedAt: 'desc' } },
         { messageId: 'asc' },
       ],
       select: {
         messageRelease: { select: { releasedAt: true } },
+        senderDisplayNameSnapshot: true,
         message: { select: messageSelect },
       },
     });
@@ -106,17 +116,17 @@ export class RecipientMessagesService {
   }
 
   async findOne(
-    email: string,
+    recipient: RecipientPrincipal,
     messageId: string,
   ): Promise<RecipientMessageDetail> {
-    return toDetail(await this.authorize(email, messageId));
+    return toDetail(await this.authorize(recipient, messageId));
   }
 
   async findMedia(
-    email: string,
+    recipient: RecipientPrincipal,
     messageId: string,
   ): Promise<RecipientMediaResponse[]> {
-    await this.authorize(email, messageId);
+    await this.authorize(recipient, messageId);
     return this.prisma.mediaAsset.findMany({
       where: { messageId, ...visibleMedia },
       orderBy: { createdAt: 'asc' },
@@ -126,11 +136,11 @@ export class RecipientMessagesService {
 
   // Signed only after the grant check. The URL is never stored or logged.
   async createMediaAccessUrl(
-    email: string,
+    recipient: RecipientPrincipal,
     messageId: string,
     id: string,
   ): Promise<AccessUrlResponse> {
-    await this.authorize(email, messageId);
+    await this.authorize(recipient, messageId);
     const asset = await this.prisma.mediaAsset.findFirst({
       where: { id, messageId, ...visibleMedia },
       select: { storageKey: true, storageProvider: true, providerFileId: true },
@@ -143,15 +153,16 @@ export class RecipientMessagesService {
     return { url, expiresAt: expiresAt(this.accessTtl) };
   }
 
-  private async authorize(email: string, messageId: string) {
+  private async authorize(recipient: RecipientPrincipal, messageId: string) {
     const grant = await this.prisma.recipientMessageAccessGrant.findFirst({
-      where: { ...eligibleGrant(email), messageId },
+      where: { ...grantFor(recipient), messageId },
       select: {
         messageRelease: { select: { releasedAt: true } },
+        senderDisplayNameSnapshot: true,
         message: { select: messageSelect },
       },
     });
-    const who = `${maskEmail(email)} message ${messageId}`;
+    const who = `${maskPrincipal(recipient)} message ${messageId}`;
     if (!grant) {
       this.logger.warn(`recipient_message_access_denied ${who}`);
       throw new NotFoundException(NOT_FOUND);
@@ -163,14 +174,17 @@ export class RecipientMessagesService {
 
 type GrantRow = {
   messageRelease: { releasedAt: Date };
+  senderDisplayNameSnapshot: string | null;
   message: Prisma.MessageGetPayload<{ select: typeof messageSelect }>;
 };
 
 const toDetail = ({
   messageRelease,
+  senderDisplayNameSnapshot,
   message: { _count, ...message },
 }: GrantRow): RecipientMessageDetail => ({
   ...message,
   releasedAt: messageRelease.releasedAt,
   hasMedia: _count.mediaAssets > 0,
+  senderDisplayName: senderDisplayNameSnapshot,
 });

@@ -6,7 +6,7 @@ import {
 import { MediaAssetStatus, Prisma } from '../generated/prisma/client.js';
 import { MediaCleanup } from '../media/media-cleanup.service.js';
 import { isNoMatch, storedRefSelect } from '../media/media.service.js';
-import { MyWishesDisclaimerService } from './my-wishes-disclaimer.service.js';
+import { noteActivity, recordActivity } from '../activity/customer-activity.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import {
   MY_WISHES_PROMPTS,
@@ -20,6 +20,8 @@ const responseSelect = {
   id: true,
   promptKey: true,
   textContent: true,
+  // Owner-only; never shared, and not content (hasContent ignores it).
+  privateNote: true,
   createdAt: true,
   updatedAt: true,
   _count: {
@@ -91,6 +93,7 @@ export async function liveWishId(
     promptTextSnapshot: prompt.prompt,
     promptVersion: prompt.version,
     textContent: null,
+    privateNote: null,
   };
   const created = await tx.myWishResponse.upsert({
     where: unique,
@@ -112,7 +115,6 @@ export async function liveWishId(
 export class MyWishesService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly disclaimer: MyWishesDisclaimerService,
     private readonly cleanup: MediaCleanup,
   ) {}
 
@@ -156,22 +158,23 @@ export class MyWishesService {
 
   // One atomic upsert on (ownerUserId, promptKey): creates the answer, updates
   // it, or restores a soft-deleted one. The snapshot always comes from the
-  // catalogue and records the wording the current text answers. Phase 15A:
-  // only once the current My Wishes notice is acknowledged (409 otherwise);
-  // reading and deleting never need it. Phase 15B: textContent omitted =
+  // catalogue and records the wording the current text answers. The My Wishes
+  // notice is informational and never gates this. Phase 15B: textContent omitted =
   // unchanged, null = cleared; a wish left with no text and no READY file is
   // refused (the transaction rolls back, nothing changes).
   async save(
     ownerUserId: string,
     prompt: MyWishPrompt,
-    textContent: string | null | undefined,
+    { textContent, privateNote }: { textContent?: string | null; privateNote?: string | null },
   ): Promise<WishResponse> {
-    await this.disclaimer.assertAcknowledged(ownerUserId);
     const snapshot = {
       promptTextSnapshot: prompt.prompt,
       promptVersion: prompt.version,
     };
     return this.prisma.$transaction(async (tx) => {
+      const existed = await tx.myWishResponse.count({
+        where: { ownerUserId, promptKey: prompt.key, deletedAt: null },
+      });
       const saved = toResponse(
         await tx.myWishResponse.upsert({
           where: {
@@ -182,12 +185,28 @@ export class MyWishesService {
             promptKey: prompt.key,
             ...snapshot,
             textContent: textContent ?? null,
+            privateNote: privateNote ?? null,
           },
-          update: { ...snapshot, textContent, deletedAt: null },
+          update: {
+            ...snapshot,
+            // A restored (deleted) wish never brings its old text or note back.
+            textContent: existed ? textContent : (textContent ?? null),
+            privateNote: existed ? privateNote : (privateNote ?? null),
+            deletedAt: null,
+          },
           select: responseSelect,
         }),
       );
       if (!hasContent(saved)) throw new BadRequestException(EMPTY_WISH);
+      // The explicit save replaces any autosaved draft of this answer.
+      await tx.draftRecovery.deleteMany({
+        where: { userId: ownerUserId, type: 'MY_WISHES', key: prompt.key },
+      });
+      await recordActivity(tx, {
+        userId: ownerUserId,
+        type: existed ? 'WISH_RESPONSE_UPDATED' : 'WISH_RESPONSE_ADDED',
+        entityId: prompt.key,
+      });
       return saved;
     });
   }
@@ -223,6 +242,7 @@ export class MyWishesService {
       if (isNoMatch(err)) throw new NotFoundException(WISH_NOT_FOUND);
       throw err;
     }
+    await noteActivity(this.prisma, { userId: ownerUserId, type: 'WISH_RESPONSE_DELETED', entityId: prompt.key });
     await this.cleanup.purge('myWishMediaAsset', media);
   }
 

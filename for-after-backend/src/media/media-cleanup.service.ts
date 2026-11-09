@@ -20,13 +20,15 @@ export type MediaTable =
   | 'memoryVaultMediaAsset'
   | 'recipientPhoto'
   | 'myStoryMediaAsset'
-  | 'myWishMediaAsset';
+  | 'myWishMediaAsset'
+  | 'deathVerificationEvidence';
 const TABLES: MediaTable[] = [
   'mediaAsset',
   'memoryVaultMediaAsset',
   'recipientPhoto',
   'myStoryMediaAsset',
   'myWishMediaAsset',
+  'deathVerificationEvidence',
 ];
 type PurgeRow = StoredRef & { id: string; createdAt: Date };
 

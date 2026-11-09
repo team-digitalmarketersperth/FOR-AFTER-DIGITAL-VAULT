@@ -1,6 +1,7 @@
 import {
   ContentType,
   IfDefined,
+  PrivateNote,
   RecipientIds,
   type SupportedContentType,
   TextContent,
@@ -20,6 +21,9 @@ export class UpdateMessageDto {
 
   @TextContent()
   textContent?: string | null;
+
+  @PrivateNote()
+  privateNote?: string | null;
 
   @IfDefined()
   @RecipientIds()

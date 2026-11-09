@@ -106,6 +106,8 @@ describe('Recipients (e2e, PostgreSQL)', () => {
       { ...sofia, birthday: '2001-02-30' },
       { ...sofia, firstName: '   ' },
       { ...sofia, privateNote: 'x'.repeat(2001) },
+      // E.164 only (SMS sign-in): no country-code guessing.
+      { ...sofia, mobile: '0400 000 000' },
     ]) {
       await lisa.post('/api/v1/recipients').send(body).expect(400);
     }
@@ -141,6 +143,13 @@ describe('Recipients (e2e, PostgreSQL)', () => {
       mobile: null,
       firstName: 'Sofia',
     });
+
+    // Formatting is stripped: stored as E.164.
+    const formatted = await lisa
+      .patch(`/api/v1/recipients/${sofiaId}`)
+      .send({ mobile: '+61 (400) 000-000' })
+      .expect(200);
+    expect(formatted.body.mobile).toBe('+61400000000');
 
     await lisa
       .patch(`/api/v1/recipients/${sofiaId}`)

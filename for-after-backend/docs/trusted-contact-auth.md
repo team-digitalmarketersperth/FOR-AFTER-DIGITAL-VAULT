@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | ✅ Step 14 (email OTP + portal), Step 24 (email delivery), Phase 10 (maximum 2, email invitations, permission model, new case after a closed one) |
 | **Frontend** | Step 19: `/trusted-contact/sign-in`, `/trusted-contact/accounts`, account status page, death-report form. Phase 10: `/trusted-contact/invitation?token=…`, invitation status + resend and the 2-contact limit in FE-11 |
-| **Deferred** | ⏸️ SMS OTP and SMS invitations (no Twilio, no `SmsProvider`) · evidence upload |
+| **Deferred** | ⏸️ evidence upload (SMS OTP sign-in: 2026-10-16, real SMS verified 2026-10-17; SMS invitations: 2026-10-17, see §10) |
 | **Related** | [Death verification](death-verification.md) · [Authentication](authentication.md) · [Recipient Portal](recipient-portal.md) |
 
 ## 🧭 Contents
@@ -116,7 +116,7 @@ instances): 5 requests per email, 20 per IP, 30 verifies per IP → `429`. Keys 
 ## 5. Delivery
 
 Provider-neutral `TrustedContactOtpDelivery.sendOtp({email, code, expiresInSeconds})`. Since Step 24 it emails the
-code through `EMAIL_PROVIDER` (see [email-production-setup.md](email-production-setup.md)): `brevo` delivers it to the
+code through `EMAIL_PROVIDER` (see [email-production-setup.md](email-production-setup.md)): `microsoft` delivers it to the
 inbox; `console` (development only) prints it to the API terminal. Ineligible emails get the same `202` and no code.
 
 Startup also fails if `TRUSTED_CONTACT_OTP_PEPPER` is missing or shorter than 32 characters.
@@ -178,13 +178,29 @@ removed (soft-deleted) contacts do not count, so removing one frees a place. Edi
   with 3. Other Customers are not blocked. The same row lock serialises invitation sends and death reports for that
   Customer. (e2e: five concurrent creates at 1 contact → exactly one `201`, four `409`.)
 
-## 10. Email invitations (Phase 10)
+## 10. Invitations: email and SMS (Phase 10; SMS 2026-10-17)
 
-**Email only.** SMS invitations are deferred: a mobile-only contact is a valid record, but no invitation can be
-delivered (`invitation.status = UNAVAILABLE`, `POST …/invitation` → `409`), and nothing pretends one was sent.
+**Email or SMS, the Customer's choice per send.** One model, one token scheme, one invitation page and one
+acceptance flow for both. `POST /trusted-contacts/:id/invitation` takes `{ "channel": "EMAIL" | "SMS" }` (omitted =
+`EMAIL`) and always sends to the contact's **stored** address: there is no address or text in the request, so it cannot
+relay arbitrary SMS. The channel's address must exist (`409`, never a fallback to the other channel). Creating a
+contact with an email still emails the invitation automatically; an SMS is only ever sent when the Customer asks (cost),
+so a contact with both is never invited twice.
+
+- **SMS provider:** `SmsSender` (`src/sms/sms-sender.ts`), Twilio **Programmable Messaging** through a Messaging Service
+  (`TWILIO_MESSAGING_SERVICE_SID`, same account credentials). Not Twilio Verify, which stays sign-in codes only
+  (`SmsVerification`, unchanged). `SMS_MESSAGING_PROVIDER=twilio | console | disabled`; unset and no Messaging Service
+  → disabled (sends fail → `503`). Tests replace `SmsSender` with a fake; `console` is development only.
+- **Text:** `For After: You've been nominated as a trusted contact. Review your invitation here: <link> This link
+  expires in 7 days.` Plain ASCII (GSM-7, two segments); no names, addresses, content or death status.
+- **Destination binding:** each row stores where it went, `emailNormalized` or `mobile` (E.164, as validated on the
+  contact), exactly one (CHECK). The link works only while that still matches the contact's current email / mobile, so
+  changing the mobile kills an SMS link and changing the email kills an email link, each without touching the other.
+- **Cost / abuse:** Customer session + ownership + active contact, the existing 3 per contact per hour (both channels),
+  plus **6 SMS per Customer per rolling 24 h** counted across all their contacts, removed ones included.
 
 ```text
-Customer adds a contact with an email ──► invitation PENDING + email (EmailProvider → Brevo)
+Customer adds a contact with an email ──► invitation PENDING + email (EmailProvider → Microsoft Graph)
                                            │  link: ${APP_BASE_URL}/trusted-contact/invitation?token=<token>
 invitee opens the link ──► view ──► accept → ACCEPTED   (no session; sign-in stays email OTP)
                                  └─► decline → DECLINED  (no access; the Customer may resend)
@@ -209,9 +225,33 @@ invitee opens the link ──► view ──► accept → ACCEPTED   (no sessio
 - **Accepting grants nothing.** It records consent. The Trusted Contact still signs in by email OTP, and every portal
   request still re-checks the live `TrustedContact` row.
 - **What the Customer sees** (`invitation` on every `/trusted-contacts` response): `{status, sentAt}` with status
-  `PENDING | ACCEPTED | DECLINED | EXPIRED | NOT_SENT | UNAVAILABLE`. Never the token or its hash.
+  `PENDING | ACCEPTED | DECLINED | EXPIRED | NOT_SENT`, plus `channel` (`EMAIL | SMS | null`). Never the token, its hash or the address.
 - **Audit** (`AuditLog`): `TRUSTED_CONTACT_INVITATION_SENT` (actor `CUSTOMER`), `…_ACCEPTED` / `…_DECLINED` (actor
   `TRUSTED_CONTACT`, no user id), subject `TrustedContact/<id>`. No addresses, tokens or session ids.
+
+### 10a. Trusted Contact readiness (setup health, 2026-10-14)
+
+`readiness` on every `/trusted-contacts` response, derived on each read by `trustedContactReadiness()` from the
+newest invitation (nothing stored, no migration). The same function decides the dashboard readiness step.
+
+| status | when | Customer action |
+|---|---|---|
+| `READY` | the newest invitation for the contact's **current** email is `ACCEPTED` | none |
+| `INVITATION_PENDING` | sent, unanswered, not expired | Resend |
+| `INVITATION_EXPIRED` | `PENDING` past `expiresAt` | Send a new invitation |
+| `ACTION_NEEDED` + `reason` | `NOT_SENT` (never sent, the send failed, or the email or mobile it went to changed) · `DECLINED` | Send / send a new invitation (by email or SMS) |
+
+Fields: `{status, reason, invitationSentAt, invitationAcceptedAt}`. **Ready means** they accepted an invitation that
+was emailed to their current address (the token proves the inbox, so there is no separate email-verification step)
+and can sign in with email OTP. **Ready does not mean** anything about death reports, confirmations, evidence, admin
+review or a recent login: none of that is read or returned. Changing the email resets it (the old invitation no
+longer matches); removal drops the contact from the list; a replacement starts from its own state. No manual or
+admin override. Resend is the existing `POST /trusted-contacts/:id/invitation` (3/hour, 409 once accepted).
+
+**Unchanged by this:** who may sign in or report (§11) is still any active contact with that email, accepted or
+not. **Last confirmation:** none exists, so none is shown; the card shows "Invitation accepted {date}". No last
+login/active data exists either, and none is exposed. A periodic "are you still able to help?" confirmation is a
+possible future feature (needs a timestamp, reminder policy and threshold; not approved).
 
 ## 11. Permission model (Phase 10)
 
@@ -233,9 +273,8 @@ runs the same safety notice → safeguard → admin review. Only an admin's veri
 
 ## 12. Deferred / not built
 
-- ⏸️ **SMS OTP for mobile-only Trusted Contacts:** deferred (post-MVP). Sign-in is email only; a mobile-only contact
-  cannot sign in yet.
-- ⏸️ **SMS invitations:** deferred. No Twilio, no `SmsProvider`.
+- SMS OTP sign-in (2026-10-16) and SMS invitations (2026-10-17) are built: see §10 and `src/sms/`. Real SMS invitation
+  test pending a configured Twilio Messaging Service.
 - Not built: Trusted Contact editing of Recipient details, any content access or sharing, evidence upload,
   second-contact confirmation logic.
 

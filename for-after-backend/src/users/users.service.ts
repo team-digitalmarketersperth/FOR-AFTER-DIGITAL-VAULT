@@ -1,6 +1,7 @@
 import { ConflictException, Injectable } from '@nestjs/common';
 import { type AuditActor, writeAuditLog } from '../audit/audit-log.service.js';
 import { AuditEventType, Prisma } from '../generated/prisma/client.js';
+import { recordActivity } from '../activity/customer-activity.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 
 // The only User fields that may leave the API. passwordHash is never selected
@@ -60,11 +61,23 @@ export class UsersService {
     return found?.passwordHash ?? null;
   }
 
+  // A save that changes nothing records no "Account details updated".
   updateProfile(id: string, input: ProfileInput): Promise<SafeUser> {
-    return this.prisma.user.update({
-      where: { id },
-      data: { firstName: input.firstName, lastName: input.lastName },
-      select: safeUserSelect,
+    return this.prisma.$transaction(async (tx) => {
+      const before = await tx.user.findUniqueOrThrow({
+        where: { id },
+        select: { firstName: true, lastName: true, role: true },
+      });
+      const user = await tx.user.update({
+        where: { id },
+        data: { firstName: input.firstName, lastName: input.lastName },
+        select: safeUserSelect,
+      });
+      // "Recent changes" is the Customer's own history; an admin renaming themselves (admin/account) is not in it.
+      if (before.role === 'CUSTOMER' && (before.firstName !== user.firstName || before.lastName !== user.lastName)) {
+        await recordActivity(tx, { userId: id, type: 'PROFILE_UPDATED' });
+      }
+      return user;
     });
   }
 
@@ -90,6 +103,31 @@ export class UsersService {
         subjectId: id,
       });
     });
+  }
+
+  /**
+   * An admin's own security facts for Account settings: enrolment date, unused
+   * recovery-code count, last password change and the last 5 admin sign-ins
+   * (audit log). Never the TOTP secret or code hashes.
+   */
+  async adminSecurity(id: string) {
+    const [credential, recoveryCodesRemaining, account, signIns] = await Promise.all([
+      this.prisma.adminMfaCredential.findUnique({ where: { userId: id }, select: { enabledAt: true } }),
+      this.prisma.adminMfaRecoveryCode.count({ where: { userId: id, usedAt: null } }),
+      this.prisma.user.findUniqueOrThrow({ where: { id }, select: { passwordChangedAt: true } }),
+      this.prisma.auditLog.findMany({
+        where: { actorUserId: id, eventType: AuditEventType.ADMIN_LOGIN },
+        orderBy: { createdAt: 'desc' },
+        take: 5,
+        select: { createdAt: true, ipPrefix: true, userAgent: true },
+      }),
+    ]);
+    return {
+      twoFactorEnabledAt: credential?.enabledAt ?? null,
+      recoveryCodesRemaining,
+      passwordChangedAt: account.passwordChangedAt,
+      signIns,
+    };
   }
 
   /** For credential checks only; callers must strip passwordHash before responding. */

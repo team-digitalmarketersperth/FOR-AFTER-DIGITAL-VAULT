@@ -1,5 +1,6 @@
 'use client';
 
+import { useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, ShieldCheck } from 'lucide-react';
 import Link from 'next/link';
 import { useState, type ReactNode } from 'react';
@@ -14,12 +15,14 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useDeathCase, useDeathCases, useRejectDeath, useVerifyDeath } from '@/hooks/use-admin';
-import { DECISION_NOTE_MAX, type CaseFilters, type DeathCaseDetail } from '@/lib/api/admin';
+import { useOpenSignedFile } from '@/hooks/use-portals';
+import { adminApi, DECISION_NOTE_MAX, type CaseFilters, type DeathCaseDetail } from '@/lib/api/admin';
 import type { ApiError } from '@/lib/api/errors';
 import type { CaseStatus } from '@/lib/api/portals';
 import { CASE_EVENT_LABEL, shortId } from '@/lib/admin';
 import { ADMIN_STATUS } from '@/lib/death-verification';
-import { formatCalendarDate, formatDate, formatDateTime, localToOffsetIso, timeZoneLabel } from '@/lib/format';
+import { adminKeys } from '@/lib/query/query-client';
+import { formatBytes, formatCalendarDate, formatDate, formatDateTime, localToOffsetIso, timeZoneLabel } from '@/lib/format';
 
 const BASE = '/admin/death-verifications';
 
@@ -143,6 +146,7 @@ export function CaseDetail({ id }: { id: string }) {
                       ['Safety notice sent', c.safetyNoticeSentAt ? formatDateTime(c.safetyNoticeSentAt) : 'Not yet'],
                       ['Safeguard ends', c.safeguardEndsAt ? formatDateTime(c.safeguardEndsAt) : '—'],
                       ['Reports', c.reportCount],
+                      ['Confirmations', <Confirmations key="cf" c={c} />],
                     ]}
                   />
                 </Panel>
@@ -168,6 +172,9 @@ export function CaseDetail({ id }: { id: string }) {
                       </li>
                     ))}
                   </ol>
+                </Panel>
+                <Panel title="Supporting evidence">
+                  <EvidenceList c={c} />
                 </Panel>
                 <Panel title="Timeline">
                   {c.auditEvents.length === 0 ? (
@@ -232,6 +239,88 @@ export function CaseDetail({ id }: { id: string }) {
   );
 }
 
+/**
+ * Phase 19B: independent Trusted Contact reports (distinct people) against the
+ * number snapshotted when the case opened. A prerequisite for verify only:
+ * meeting it verifies nothing. Evidence is separate and never counts.
+ */
+function Confirmations({ c }: { c: DeathCaseDetail }) {
+  if (c.requiredConfirmations === null) return <span className="text-foreground-muted">Not recorded (older case)</span>;
+  const shown = Math.min(c.receivedConfirmations, c.requiredConfirmations);
+  return (
+    <span className="inline-flex flex-wrap items-center gap-2">
+      <span>
+        {shown} of {c.requiredConfirmations}
+      </span>
+      <span className={c.confirmationRequirementMet ? 'text-success' : 'text-foreground-muted'}>
+        {c.confirmationRequirementMet ? 'Confirmation requirement satisfied' : 'Confirmation requirement pending'}
+      </span>
+    </span>
+  );
+}
+
+const EVIDENCE_TYPE: Record<string, string> = { 'application/pdf': 'PDF', 'image/jpeg': 'JPEG', 'image/png': 'PNG' };
+const EVIDENCE_STATE = { READY: 'Ready for review', PENDING_UPLOAD: 'Upload not finished', FAILED: 'Upload failed checks' };
+
+/**
+ * Phase 19A: metadata from the case detail; a file opens only through a
+ * short-lived signed URL fetched on click (recorded on the timeline).
+ * Supporting material: it is never a condition for, or a cause of, a decision.
+ */
+function EvidenceList({ c }: { c: DeathCaseDetail }) {
+  const qc = useQueryClient();
+  const open = useOpenSignedFile((evidenceId) => adminApi.evidenceAccessUrl(c.caseId, evidenceId));
+  if (c.evidence.length === 0) {
+    return <p className="text-[15px] text-foreground-muted">No evidence has been uploaded for this case.</p>;
+  }
+  const reportNumber = (reportId: string) => c.reports.findIndex((r) => r.id === reportId) + 1;
+  return (
+    <div className="grid gap-3">
+      <p className="text-sm text-foreground-muted">
+        Supporting material from reporters. It doesn&apos;t verify the case: decide through the normal review.
+      </p>
+      <ul className="grid gap-2">
+        {c.evidence.map((e) => (
+          <li key={e.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border p-4">
+            <span className="grid min-w-0 gap-0.5">
+              <span className="truncate text-[15px] font-medium" title={e.originalFileName}>
+                {e.originalFileName}
+              </span>
+              <span className="text-sm text-foreground-muted">
+                {EVIDENCE_TYPE[e.mimeType] ?? 'File'} · {formatBytes(e.sizeBytes)} · Report {reportNumber(e.deathReportId) || '—'} ·{' '}
+                {e.uploadedAt ? `Uploaded ${formatDateTime(e.uploadedAt)}` : EVIDENCE_STATE[e.status]}
+              </span>
+            </span>
+            {e.status === 'READY' ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={open.isPending}
+                onClick={() =>
+                  open.mutate(e.id, { onSettled: () => void qc.invalidateQueries({ queryKey: adminKeys.case(c.caseId) }) })
+                }
+              >
+                <ShieldCheck aria-hidden />
+                View securely
+              </Button>
+            ) : (
+              <span className="text-sm text-foreground-muted">{EVIDENCE_STATE[e.status]}</span>
+            )}
+          </li>
+        ))}
+      </ul>
+      {open.error && (
+        <Alert variant="destructive">
+          <AlertTriangle aria-hidden />
+          <AlertTitle>We couldn&apos;t open this file</AlertTitle>
+          <AlertDescription>{open.error.message}</AlertDescription>
+        </Alert>
+      )}
+    </div>
+  );
+}
+
 const Note = ({ children }: { children: ReactNode }) => <p className="text-[15px] text-foreground-secondary">{children}</p>;
 
 const ByAdmin = ({ id }: { id: string | null }) =>
@@ -269,8 +358,20 @@ function Decision({ c, name, onConflict }: { c: DeathCaseDetail; name: string; o
             The safeguard period has ended without a response from the account holder. Review the reports and timeline, then
             decide.
           </Note>
+          {!c.confirmationRequirementMet && (
+            <Note>
+              {c.requiredConfirmations === null
+                ? 'This case has no recorded confirmation requirement, so it can’t be verified. It can still be rejected.'
+                : 'Another independent Trusted Contact confirmation is required before this case can be verified. It can still be rejected.'}
+            </Note>
+          )}
           <div className="flex flex-wrap gap-3">
-            <VerifyAction c={c} name={name} onConflict={onConflict} />
+            {c.confirmationRequirementMet ? (
+              <VerifyAction c={c} name={name} onConflict={onConflict} />
+            ) : (
+              // The API refuses verify too (409); this only explains it.
+              <Button disabled>Verify death…</Button>
+            )}
             <RejectAction c={c} name={name} onConflict={onConflict} />
           </div>
         </div>

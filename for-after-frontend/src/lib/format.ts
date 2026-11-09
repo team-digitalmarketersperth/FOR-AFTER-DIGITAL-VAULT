@@ -18,6 +18,10 @@ export const formatDate = (iso: string) =>
     new Date(iso),
   );
 
+/** → "14 October 2026" in the viewer's timezone. */
+export const formatLongDate = (iso: string) =>
+  new Intl.DateTimeFormat('en-AU', { day: 'numeric', month: 'long', year: 'numeric' }).format(new Date(iso));
+
 /** 2026-09-30T02:15:00.000Z → "September 2026" in the viewer's timezone. */
 export const formatMonthYear = (iso: string) =>
   new Intl.DateTimeFormat('en-AU', { month: 'long', year: 'numeric' }).format(new Date(iso));

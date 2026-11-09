@@ -10,6 +10,9 @@ const RELEASE_WORKER_SUITES = [
   'test/admin.e2e-spec.ts',
   'test/app.e2e-spec.ts',
   'test/dead-letters.e2e-spec.ts',
+  'test/death-confirmations.e2e-spec.ts',
+  'test/delivery-timeline.e2e-spec.ts',
+  'test/death-evidence.e2e-spec.ts',
   'test/death-verification.e2e-spec.ts',
   'test/email-delivery.e2e-spec.ts',
   'test/error-boundary.e2e-spec.ts',
@@ -20,11 +23,24 @@ const RELEASE_WORKER_SUITES = [
   'test/message-composition.e2e-spec.ts',
   'test/message-release.e2e-spec.ts',
   'test/message-schedules.e2e-spec.ts',
+  'test/activity.e2e-spec.ts',
+  'test/readiness.e2e-spec.ts',
+  'test/attention.e2e-spec.ts',
   'test/recipient-portal.e2e-spec.ts',
   'test/recurring-schedules.e2e-spec.ts',
+  // Phase 24: uses the production OTP limits, whose per-IP windows are
+  // shared by every suite calling from loopback.
+  'test/security-critical.e2e-spec.ts',
   'test/trusted-contact-portal.e2e-spec.ts',
   'test/trusted-contact-invitations.e2e-spec.ts',
   'test/worker-process.e2e-spec.ts',
+  // EMAIL_PROVIDER=microsoft through AppModule + WorkerModule (stubbed Graph).
+  'test/microsoft-email-wiring.e2e-spec.ts',
+  // Notification centre broadcasts: one active broadcast run per database (by
+  // design), so these two must never run at the same time.
+  'test/announcement-broadcasts.e2e-spec.ts',
+  'test/announcement-workflow.e2e-spec.ts',
+  'test/announcement-pilot.e2e-spec.ts',
 ];
 
 export default defineConfig({
@@ -44,6 +60,8 @@ export default defineConfig({
       // Step 24: no email ever leaves a test run. Suites that check emails
       // override EmailProvider (or a delivery token) with a fake.
       EMAIL_PROVIDER: 'disabled',
+      // No real SMS either, whatever .env holds (Twilio); suites fake SmsVerification.
+      SMS_VERIFY_PROVIDER: 'disabled',
       EMAIL_QUEUE_NAME: 'test-email-delivery',
       EMAIL_RECONCILE_INTERVAL_SECONDS: '3600',
       RELEASE_QUEUE_NAME: 'test-message-release',
@@ -59,6 +77,8 @@ export default defineConfig({
       // database and use a fake provider, which must never mark real rows'
       // ImageKit files as deleted.
       MEDIA_CLEANUP_INTERVAL_SECONDS: '0',
+      // Phase 17: no periodic ops-alert retries against the shared dev database.
+      OPS_ALERT_RECONCILE_INTERVAL_SECONDS: '0',
       // Phase 12B: suites that complete uploads override MalwareScanner with a
       // fake. Anything else reaches this closed port and fails closed.
       CLAMAV_HOST: '127.0.0.1',

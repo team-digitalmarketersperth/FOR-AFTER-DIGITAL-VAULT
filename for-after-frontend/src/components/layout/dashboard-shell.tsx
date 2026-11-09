@@ -1,11 +1,12 @@
 'use client';
 
-import { ChevronDown, LogOut, Menu, UserRound } from 'lucide-react';
+import { ChevronDown, CreditCard, LogOut, Menu, UserRound } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useState, type ReactNode } from 'react';
+import { CompanionProvider } from '@/components/companion/companion';
 import { BrandLogo } from '@/components/layout/brand-logo';
-import { NAV_GROUPS, type NavItem } from '@/components/layout/nav';
+import { HELP_SUPPORT, NAV_GROUPS, type NavItem } from '@/components/layout/nav';
 import { SafetyBanner } from '@/components/layout/safety-banner';
 import { Spinner } from '@/components/shared/states';
 import { Button } from '@/components/ui/button';
@@ -25,60 +26,125 @@ import {
   SheetTrigger,
 } from '@/components/ui/sheet';
 import { useLogout } from '@/hooks/use-auth';
+import { useBilling } from '@/hooks/use-billing';
 import type { CurrentUser } from '@/lib/api/auth';
+import type { AccessState } from '@/lib/api/billing';
 import { cn } from '@/lib/utils';
 
 export function DashboardShell({ user, children }: { user: CurrentUser; children: ReactNode }) {
   const [menuOpen, setMenuOpen] = useState(false);
 
+  // One companion for every Customer page, keyed by account: a new account never sees the last one's state.
   return (
-    <div className="flex min-h-dvh">
-      <aside className="sticky top-0 hidden h-dvh w-72 shrink-0 flex-col border-r border-sidebar-border bg-sidebar lg:flex">
-        <div className="px-8 pt-9 pb-10">
-          <BrandLogo className="h-9" />
-        </div>
-        <SideNav />
-      </aside>
-
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-30 border-b border-border bg-background/90 backdrop-blur">
-          <div className="mx-auto flex h-20 max-w-[1200px] items-center gap-3 px-4 sm:px-6 lg:px-12">
-            <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
-              <SheetTrigger asChild>
-                <Button variant="ghost" size="icon" className="-ml-2 lg:hidden" aria-label="Open navigation">
-                  <Menu aria-hidden strokeWidth={1.5} className="size-6" />
-                </Button>
-              </SheetTrigger>
-              <SheetContent side="left" className="w-80 max-w-[85vw] gap-0 bg-sidebar p-0">
-                <SheetHeader className="px-6 pt-7 pb-8">
-                  <SheetTitle asChild>
-                    <div>
-                      <BrandLogo className="h-8" />
-                    </div>
-                  </SheetTitle>
-                  <SheetDescription className="sr-only">Main navigation</SheetDescription>
-                </SheetHeader>
-                <SideNav onNavigate={() => setMenuOpen(false)} />
-              </SheetContent>
-            </Sheet>
-            <BrandLogo className="h-7 lg:hidden" />
-            <Today />
-
-            <div className="ml-auto">
-              <AccountMenu user={user} />
-            </div>
+    <CompanionProvider key={user.id}>
+      <div className="flex min-h-dvh">
+        <aside className="sticky top-0 hidden h-dvh w-72 shrink-0 flex-col border-r border-sidebar-border bg-sidebar lg:flex">
+          <div className="px-8 pt-9 pb-10">
+            <BrandLogo className="h-9" />
           </div>
-        </header>
+          <SideNav />
+        </aside>
 
-        <main
-          id="main"
-          className="mx-auto w-full max-w-[1200px] flex-1 px-4 pt-10 pb-20 sm:px-6 lg:px-12 lg:pt-14"
-        >
-          <SafetyBanner />
-          {children}
-        </main>
+        <div className="flex min-w-0 flex-1 flex-col">
+          <header data-topbar className="sticky top-0 z-30 border-b border-border bg-background/90 backdrop-blur">
+            <div className="mx-auto flex h-20 max-w-[1200px] items-center gap-3 px-4 sm:px-6 lg:px-12">
+              <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
+                <SheetTrigger asChild>
+                  <Button variant="ghost" size="icon" className="-ml-2 lg:hidden" aria-label="Open navigation">
+                    <Menu aria-hidden strokeWidth={1.5} className="size-6" />
+                  </Button>
+                </SheetTrigger>
+                <SheetContent side="left" className="w-80 max-w-[85vw] gap-0 bg-sidebar p-0">
+                  <SheetHeader className="px-6 pt-7 pb-8">
+                    <SheetTitle asChild>
+                      <div>
+                        <BrandLogo className="h-8" />
+                      </div>
+                    </SheetTitle>
+                    <SheetDescription className="sr-only">Main navigation</SheetDescription>
+                  </SheetHeader>
+                  <SideNav onNavigate={() => setMenuOpen(false)} />
+                </SheetContent>
+              </Sheet>
+              <BrandLogo className="h-7 lg:hidden" />
+              <Today />
+
+              <div className="ml-auto">
+                <AccountMenu user={user} />
+              </div>
+            </div>
+          </header>
+
+          <main
+            id="main"
+            className="mx-auto w-full max-w-[1200px] flex-1 px-4 pt-10 pb-20 sm:px-6 lg:px-12 lg:pt-14"
+          >
+            <SafetyBanner />
+            <PlanAccess>{children}</PlanAccess>
+          </main>
+        </div>
       </div>
-    </div>
+    </CompanionProvider>
+  );
+}
+
+// Pages whose only purpose is to add or change content (docs/billing.md §3). Support's own /new stays open.
+const PLAN_ROUTE = /^\/(messages|memory-vault|my-story|my-wishes|people|trusted-contacts)\/(.*\/)?(new|edit|create-message)$/;
+
+const PLAN_NOTICE: Partial<Record<AccessState, [title: string, action: string]>> = {
+  trial_available: ['Start your free trial', 'Start free trial'],
+  trial_expired: ['Your free trial has ended', 'Choose a plan'],
+  payment_pending: ['Your payment hasn’t been confirmed yet', 'View your plan'],
+  access_ended: ['Your plan has ended', 'Choose a plan'],
+};
+
+/**
+ * Billing on and no access: what is saved stays readable, downloadable and deletable
+ * (docs/billing.md §1), so every page stays open under a plain notice; only pages for
+ * adding or changing content show a blocker instead. UX only: the API refuses gated
+ * writes itself (402, shown where the action failed), and an unknown state hides nothing.
+ */
+function PlanAccess({ children }: { children: ReactNode }) {
+  const { data } = useBilling(false);
+  const pathname = usePathname();
+  if (!data?.enabled || data.hasAccess) return children;
+  const [title, action] = PLAN_NOTICE[data.state] ?? ['Your plan needs attention', 'View your plan'];
+  const planLink = (
+    <Button asChild>
+      <Link href="/settings/plan">{action}</Link>
+    </Button>
+  );
+  const blocked = PLAN_ROUTE.test(pathname);
+  return (
+    <>
+      {pathname !== '/settings/plan' && !blocked && (
+        <section aria-labelledby="plan-notice" className="mb-10 flex flex-wrap items-center justify-between gap-4 rounded-xl border-l-4 border-primary bg-primary-soft p-6">
+          <div className="grid max-w-2xl gap-1">
+            <h2 id="plan-notice" className="text-xl">
+              {title}
+            </h2>
+            <p className="text-[15px] text-foreground-secondary">
+              You can still read, download and delete what you’ve saved. To add or change anything, or use the AI companion, you’ll need a plan.
+            </p>
+          </div>
+          {planLink}
+        </section>
+      )}
+      {blocked ? (
+        <section aria-labelledby="plan-required" className="grid max-w-2xl gap-4 rounded-xl border border-border bg-surface p-8">
+          <CreditCard aria-hidden strokeWidth={1.5} className="size-6 text-primary" />
+          <h1 id="plan-required" className="text-[28px] leading-tight">
+            {title}
+          </h1>
+          <p className="text-foreground-secondary">
+            Adding or changing content needs a plan. Everything you’ve saved is still here to read, download or delete.
+          </p>
+          <div className="flex flex-wrap gap-3">{planLink}</div>
+        </section>
+      ) : (
+        children
+      )}
+    </>
   );
 }
 
@@ -87,20 +153,27 @@ const initials = ({ firstName, lastName }: CurrentUser) =>
 
 function SideNav({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
+  const isActive = (href?: string) => !!href && (pathname === href || pathname.startsWith(`${href}/`));
+  // One scroll area: on a short screen the lower section scrolls into view, never overlapping the groups.
   return (
-    <nav aria-label="Main" className="flex-1 overflow-y-auto px-4 pb-8">
+    <nav aria-label="Main" className="flex flex-1 flex-col overflow-y-auto px-4 pb-8">
       {NAV_GROUPS.map((group, i) => (
         <div key={group.label ?? i} className="mb-7">
           {group.label && <p className="eyebrow mb-2 px-4">{group.label}</p>}
           <ul className="grid gap-0.5">
             {group.items.map((item) => (
               <li key={item.label}>
-                <NavLink item={item} active={!!item.href && (pathname === item.href || pathname.startsWith(`${item.href}/`))} onNavigate={onNavigate} />
+                <NavLink item={item} active={isActive(item.href)} onNavigate={onNavigate} />
               </li>
             ))}
           </ul>
         </div>
       ))}
+      <ul className="mt-auto grid gap-0.5 border-t border-sidebar-border pt-4">
+        <li>
+          <NavLink item={HELP_SUPPORT} active={isActive(HELP_SUPPORT.href)} onNavigate={onNavigate} />
+        </li>
+      </ul>
     </nav>
   );
 }

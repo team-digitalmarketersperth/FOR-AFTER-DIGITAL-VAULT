@@ -1,11 +1,13 @@
 import { expect, test, type Page } from '@playwright/test';
 import fs from 'node:fs';
-import { API, emailFromLog, newAccount, registerViaApi, signIn } from './helpers';
+import { db } from './death-helpers';
+import { API, emailFromLog, newAccount, registerViaApi, signIn, smsInvitationLinkFromLog } from './helpers';
 
 // Phase 10 against the real API: email invitations, the two-contact maximum
 // and a new death report after a closed case. Emails are read from the API's
 // console output (EMAIL_PROVIDER=console, teed to E2E_BACKEND_LOG), as in
-// portals.spec. Fictional data only; never Twilio or a real inbox.
+// portals.spec; SMS invitations likewise (SMS_MESSAGING_PROVIDER=console, the
+// FakeSmsProvider for E2E). Fictional data only; never Twilio or a real inbox.
 const LOG = process.env.E2E_BACKEND_LOG;
 const RUN = Date.now();
 
@@ -50,8 +52,12 @@ test('A: add with email → invitation emailed → accept → still email-OTP si
 
   // Accepting signed no one in: the portal still needs the email code.
   expect((await tc.request.get(`${API}/trusted-contact/accounts`)).status()).toBe(401);
+  // Readiness (2026-10-14): accepted = Ready, with the date; no resend offered.
   await customer.reload();
-  await expect(customer.getByRole('link', { name: /David/ })).toContainText('Invitation accepted');
+  await expect(customer.getByRole('link', { name: /David/ })).toContainText('Ready');
+  await expect(customer.getByRole('listitem', { name: /David/ })).toContainText('Setup complete. Invitation accepted');
+  await expect(customer.getByRole('listitem', { name: /David/ }).getByRole('button')).toHaveCount(0);
+  await expect(customer.getByRole('region', { name: 'Trusted Contact readiness' })).toContainText('Your trusted contact is ready.');
 
   const codeFrom = logSize();
   await tc.getByRole('link', { name: 'Go to trusted contact sign-in' }).click();
@@ -67,14 +73,34 @@ test('A: add with email → invitation emailed → accept → still email-OTP si
   }
 });
 
-test('B: two contacts → add blocked in the UI and by the API → remove one → add again', async () => {
+test('B: mobile-only → SMS invitation → same page → accept → Ready; two contacts → add blocked → remove one', async () => {
+  const from = logSize();
   await customer.goto('/trusted-contacts/new');
   await customer.getByLabel('First name').fill('Mo');
   await customer.getByLabel(/^Mobile/).fill('+61 400 000 222');
   await customer.getByRole('button', { name: 'Add trusted contact' }).click();
   await expect(customer).toHaveURL(/\/trusted-contacts$/);
-  // Mobile only: no invitation is possible (SMS is deferred), and none is claimed.
-  await expect(customer.getByRole('link', { name: /Mo/ })).toContainText('No invitation');
+  // Mobile only: nothing is sent automatically (SMS costs money); the Customer chooses.
+  const mo = customer.getByRole('listitem', { name: /Mo/ });
+  await expect(mo).toContainText('Invitation not sent');
+  await expect(customer.getByRole('region', { name: 'Trusted Contact readiness' })).toContainText('1 of 2 trusted contacts ready');
+  await mo.getByRole('button', { name: 'Send invitation by SMS' }).click();
+  await expect(customer.getByText('Invitation sent to Mo by SMS')).toBeVisible();
+  await expect(mo).toContainText('Invitation pending');
+  await expect(mo).toContainText('sent by SMS on');
+
+  // The same invitation page and acceptance as email; accepting signs no one in.
+  const link = await smsInvitationLinkFromLog(LOG!, '+61400000222', from);
+  const invitee = await (await customer.context().browser()!.newContext()).newPage();
+  await invitee.goto(new URL(link).pathname + new URL(link).search);
+  await expect(invitee.getByRole('heading', { name: /trusted contact for Clara Phase/ })).toBeVisible();
+  await invitee.getByRole('button', { name: 'Accept invitation' }).click();
+  await expect(invitee.getByRole('heading', { name: 'You’ve accepted the invitation' })).toBeVisible();
+  expect((await invitee.request.get(`${API}/trusted-contact/accounts`)).status()).toBe(401);
+  await invitee.context().close();
+  await customer.reload();
+  await expect(mo).toContainText('Ready');
+  await expect(customer.getByRole('region', { name: 'Trusted Contact readiness' })).toContainText('Both trusted contacts are ready.');
 
   await expect(customer.getByRole('note')).toContainText('You can nominate up to 2 trusted contacts.');
   await expect(customer.getByRole('link', { name: 'Add a trusted contact' })).toHaveCount(0);
@@ -85,7 +111,8 @@ test('B: two contacts → add blocked in the UI and by the API → remove one �
 
   await customer.goto('/trusted-contacts');
   await customer.getByRole('link', { name: /Mo/ }).click();
-  await expect(customer.getByText(/Text-message invitations aren’t available yet/)).toBeVisible();
+  await expect(customer).toHaveURL(/\/trusted-contacts\/[^/]+\/edit$/);
+  await expect(customer.getByText(/Setup complete\. Invitation accepted/)).toBeVisible();
   await customer.getByRole('button', { name: 'Remove' }).click();
   await customer.getByRole('dialog').getByRole('button', { name: 'Remove' }).click();
   await expect(customer).toHaveURL(/\/trusted-contacts$/);
@@ -123,4 +150,45 @@ test('C: report → Customer confirms alive (case closed) → a new report start
   expect(me.canConfirmAlive).toBe(true);
   await customer.goto('/dashboard');
   await expect(customer.getByRole('region', { name: /received a report about your account/ })).toBeVisible();
+});
+
+test('D: a second contact is pending; once expired, a fresh invitation makes it pending again', async () => {
+  const ERIN = `erin@tc-${RUN}.example.com`;
+  await customer.goto('/trusted-contacts/new');
+  await customer.getByLabel('First name').fill('Erin');
+  await customer.getByLabel(/^Email/).fill(ERIN);
+  await customer.getByLabel(/^Mobile/).fill('+61 400 000 444');
+  await customer.getByRole('button', { name: 'Add trusted contact' }).click();
+  await expect(customer).toHaveURL(/\/trusted-contacts$/);
+  const erin = customer.getByRole('listitem', { name: /Erin/ });
+  await expect(erin).toContainText('Invitation pending');
+  await expect(erin).toContainText('Waiting for them to accept your invitation');
+
+  await db(
+    `UPDATE "TrustedContactInvitation" SET "expiresAt" = '2000-01-01'
+     WHERE status = 'PENDING' AND "emailNormalized" = $1`,
+    [ERIN],
+  );
+  await customer.reload();
+  await expect(erin).toContainText('Invitation expired');
+  // Email + mobile: a quiet menu asks which channel; email still works as before.
+  await erin.getByRole('button', { name: 'Send a new invitation' }).click();
+  await customer.getByRole('menuitem', { name: 'Send by email' }).click();
+  await expect(erin).toContainText('Invitation pending');
+  await expect(erin).toContainText('sent by email on');
+
+  // Phone width, keyboard only: Enter opens, ArrowDown, Enter sends by SMS.
+  await customer.setViewportSize({ width: 390, height: 844 });
+  const smsFrom = logSize();
+  // Park the pointer: it still rests where "Send by email" was clicked, and hover would move focus.
+  await customer.mouse.move(0, 0);
+  await erin.getByRole('button', { name: 'Resend invitation' }).focus();
+  await customer.keyboard.press('Enter');
+  await expect(customer.getByRole('menuitem', { name: 'Send by email' })).toBeFocused();
+  await customer.keyboard.press('ArrowDown');
+  await expect(customer.getByRole('menuitem', { name: 'Send by SMS' })).toBeFocused();
+  await customer.keyboard.press('Enter');
+  await expect(erin).toContainText('sent by SMS on');
+  await smsInvitationLinkFromLog(LOG!, '+61400000444', smsFrom);
+  expect(await customer.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });

@@ -2,6 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { CreateMessageFromPrompt } from '@/components/memory-vault/memory-to-message';
+import { CompanionProvider } from '@/components/companion/companion';
 import type { Prompt } from '@/lib/api/prompts';
 import { FAKE_PROVIDER_FILE_ID, fakeStorage, json, renderWithClient, routeFetch, router } from '@/test/utils';
 import { PromptEditor, PromptList } from './prompts';
@@ -13,12 +14,12 @@ vi.mock('next/navigation', () => ({ useRouter: () => router, usePathname: () => 
 // the normal people, timing (ON_DEATH / AFTER_DEATH) and release.
 const KEY = 'music-and-readings.music';
 const base = `/my-wishes/prompts/${KEY}`;
-const notice = (acknowledged = true) => ({
+const notice = () => ({
   version: 1,
   text: 'My Wishes records personal preferences and guidance only. It is not a will, legal document, medical directive, financial instruction or substitute for professional advice.',
-  requiresAcknowledgement: true,
-  acknowledged,
-  acknowledgedAt: acknowledged ? '2026-10-08T00:00:00Z' : null,
+  requiresAcknowledgement: false,
+  acknowledged: false,
+  acknowledgedAt: null,
 });
 const prompt = (over: Partial<Prompt> = {}): Prompt => ({
   key: KEY,
@@ -36,6 +37,7 @@ const answered = (over: Partial<NonNullable<Prompt['response']>> = {}) =>
       id: 'w1',
       promptKey: KEY,
       textContent: 'Something gentle by the sea.',
+      privateNote: null,
       mediaCount: 0,
       createdAt: '2026-09-01T00:00:00Z',
       updatedAt: '2026-09-01T00:00:00Z',
@@ -53,8 +55,8 @@ const asset = (id: string, kind: string, name: string, status = 'READY') => ({
   createdAt: '2026-09-01T00:00:00Z',
   updatedAt: '2026-09-01T00:00:00Z',
 });
-const routes = (p: Prompt, over: object = {}, acknowledged = true) => ({
-  'GET /my-wishes/disclaimer': json(200, notice(acknowledged)),
+const routes = (p: Prompt, over: object = {}) => ({
+  'GET /my-wishes/disclaimer': json(200, notice()),
   [`GET ${base}`]: json(200, p),
   [`GET ${base}/response/media`]: json(200, []),
   ...over,
@@ -72,18 +74,39 @@ describe('My Wishes editor: rich wishes (Phase 15B)', () => {
     // Not answered yet: no sharing offered. Never a memory picker here.
     expect(screen.queryByRole('link', { name: 'Create message for loved ones' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Linked memories' })).not.toBeInTheDocument();
-    // AI help is deferred post-MVP: nothing suggests, generates or rewrites.
+    // Outside the Customer shell there is no companion: the editor itself never suggests, generates or rewrites.
     expect(screen.queryByRole('button', { name: /\bAI\b|suggest|generate|rewrite|improve/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/\bAI\b/)).not.toBeInTheDocument();
   });
 
-  it('until the notice is acknowledged, files cannot be added (Phase 15A)', async () => {
-    routeFetch(routes(prompt(), {}, false));
+  it('Help me write (companion): only the answer is offered and replaced after Use this draft; nothing is saved', async () => {
+    const api = routeFetch(routes(answered(), { 'POST /assistant/reply': json(200, { reply: 'I would like calm music by the sea.', truncated: false, draft: true }) }));
+    renderWithClient(<CompanionProvider><PromptEditor area="my-wishes" promptKey={KEY} /></CompanionProvider>);
+    await userEvent.click(await screen.findByRole('button', { name: 'Help me write' }));
+    const p = await screen.findByRole('dialog', { name: /For After AI companion/ });
+    await userEvent.click(within(p).getByRole('checkbox', { name: /Include the text in “Your answer”/ }));
+    await userEvent.type(within(p).getByRole('textbox', { name: 'Message the AI companion' }), 'calm music');
+    await userEvent.click(within(p).getByRole('button', { name: 'Help me express a preference' }));
+    // No promptKey outside My Story; the page is the only context.
+    expect(api.called('POST', '/assistant/reply')[0].body).toEqual({
+      page: 'my-wishes',
+      action: 'draft',
+      message: 'calm music',
+      source: 'Something gentle by the sea.',
+      history: [],
+    });
+    await userEvent.click(await within(p).findByRole('button', { name: 'Use this draft' }));
+    await userEvent.keyboard('{Escape}');
+    expect(screen.getByLabelText(/^Your answer/)).toHaveValue('I would like calm music by the sea.');
+    expect(api.calls.filter((c) => c.method !== 'GET' && c.path.startsWith('/my-wishes'))).toHaveLength(0); // the answer is not saved
+  });
+
+  it('files can be added without any notice acknowledgement', async () => {
+    routeFetch(routes(prompt()));
     renderWithClient(<PromptEditor area="my-wishes" promptKey={KEY} />);
-    expect(await screen.findByRole('heading', { name: 'Add something personal' })).toBeInTheDocument();
-    expect(await screen.findByRole('checkbox', { name: 'I have read this notice.' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Add a photo' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Add a video' })).not.toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Add a photo' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add a video' })).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
   });
 
   it('uploads a photo through the My Wishes media endpoints (never message, story or memory routes)', async () => {
@@ -142,11 +165,26 @@ describe('My Wishes editor: rich wishes (Phase 15B)', () => {
     await waitFor(() => expect(api.called('DELETE', `${base}/response/media/a1`)).toHaveLength(1));
   });
 
+  it('a private note saves with the wish, separate from its words', async () => {
+    const api = routeFetch(routes(answered(), { [`PUT ${base}/response`]: json(200, {}) }));
+    renderWithClient(<PromptEditor area="my-wishes" promptKey={KEY} />);
+    const note = await screen.findByLabelText(/^Private note to yourself/);
+    expect(note).toHaveAccessibleDescription('Only you can see this.');
+    await userEvent.type(note, 'Review this next year.');
+    await userEvent.click(screen.getByRole('button', { name: 'Save answer' }));
+    await waitFor(() =>
+      expect(api.called('PUT', `${base}/response`)[0]?.body).toEqual({
+        textContent: 'Something gentle by the sea.',
+        privateNote: 'Review this next year.',
+      }),
+    );
+  });
+
   it('a files-only wish can be saved without words (sent as null)', async () => {
     const api = routeFetch(routes(answered({ textContent: null, mediaCount: 1 }), { [`PUT ${base}/response`]: json(200, {}) }));
     renderWithClient(<PromptEditor area="my-wishes" promptKey={KEY} />);
     await userEvent.click(await screen.findByRole('button', { name: 'Save answer' }));
-    await waitFor(() => expect(api.called('PUT', `${base}/response`)[0]?.body).toEqual({ textContent: null }));
+    await waitFor(() => expect(api.called('PUT', `${base}/response`)[0]?.body).toEqual({ textContent: null, privateNote: null }));
   });
 
   it('an answered wish offers “Create message for loved ones” with calm privacy wording', async () => {

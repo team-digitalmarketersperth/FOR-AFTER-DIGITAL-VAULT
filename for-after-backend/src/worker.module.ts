@@ -1,5 +1,10 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { AnnouncementPolicy } from './announcements/announcement-audience.service.js';
+import { AnnouncementBroadcastProcessor } from './announcements/announcement-broadcast.processor.js';
+import { AnnouncementBroadcastQueue } from './announcements/announcement-broadcast-queue.service.js';
+import { AnnouncementTestProcessor } from './announcements/announcement-test.processor.js';
+import { AnnouncementTestQueue } from './announcements/announcement-test-queue.service.js';
 import { DeadLetterModule } from './dead-letters/dead-letter.service.js';
 import { DeathVerificationQueueModule } from './death-verification/death-verification.module.js';
 import { DeathVerificationProcessor } from './death-verification/death-verification.processor.js';
@@ -7,6 +12,7 @@ import { EmailModule } from './email/email.module.js';
 import { MessageReleaseReconciler } from './message-release/message-release-reconciler.service.js';
 import { MessageReleaseModule } from './message-release/message-release.module.js';
 import { MessageReleaseProcessor } from './message-release/message-release.processor.js';
+import { WorkerHeartbeat } from './health/worker-heartbeat.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { ReleaseNotificationModule } from './release-notifications/release-notification.module.js';
 import { ReleaseNotificationProcessor } from './release-notifications/release-notification.processor.js';
@@ -30,12 +36,24 @@ import { ReleaseNotificationProcessor } from './release-notifications/release-no
     MessageReleaseReconciler,
     ReleaseNotificationProcessor,
     DeathVerificationProcessor,
+    AnnouncementTestQueue,
+    AnnouncementTestProcessor,
+    AnnouncementPolicy,
+    AnnouncementBroadcastQueue,
+    AnnouncementBroadcastProcessor,
   ],
 })
 export class QueueWorkersModule {}
 
-// Composition root of the worker process (src/worker.ts).
+// Composition root of the worker process (src/worker.ts). The heartbeat is
+// here, not in QueueWorkersModule, so only the real worker process publishes it.
 @Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true }), PrismaModule, QueueWorkersModule],
+  imports: [
+    ConfigModule.forRoot({ isGlobal: true }),
+    PrismaModule,
+    QueueWorkersModule,
+    MessageReleaseModule,
+  ],
+  providers: [WorkerHeartbeat],
 })
 export class WorkerModule {}

@@ -197,6 +197,8 @@ export function uploadToProvider(
   { onProgress, signal }: { onProgress?: (fraction: number) => void; signal?: AbortSignal } = {},
 ): Promise<string> {
   return new Promise((resolve, reject) => {
+    // Cancelled while the upload URL was still being issued: never send the bytes.
+    if (signal?.aborted) return reject(new DOMException('Upload cancelled', 'AbortError'));
     const form = new FormData();
     for (const [name, value] of Object.entries(upload.fields)) form.append(name, value);
     form.append('file', file);

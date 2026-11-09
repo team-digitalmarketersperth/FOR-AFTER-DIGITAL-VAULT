@@ -15,11 +15,12 @@ export const linkClass =
 
 type Tone = 'neutral' | 'open' | 'done' | 'warning' | 'danger';
 
-export function Badge({ tone = 'neutral', children }: { tone?: Tone; children: ReactNode }) {
+export function Badge({ tone = 'neutral', children, className }: { tone?: Tone; children: ReactNode; className?: string }) {
   return (
     <span
       className={cn(
         'inline-flex w-fit items-center rounded-full px-2.5 py-0.5 text-xs font-medium whitespace-nowrap',
+        className,
         tone === 'neutral' && 'border border-border bg-surface-muted text-foreground-secondary',
         tone === 'open' && 'bg-primary-soft text-primary',
         tone === 'done' && 'bg-success/10 text-success',
@@ -67,7 +68,7 @@ export function DataTable<T>({
   rowKey: (row: T) => string;
 }) {
   return (
-    <div className="md:overflow-hidden md:rounded-lg md:border md:border-border md:bg-surface">
+    <div className="md:overflow-x-auto md:rounded-lg md:border md:border-border md:bg-surface">
       <table className="block w-full text-sm md:table">
         <caption className="sr-only">{caption}</caption>
         <thead className="hidden bg-surface-muted md:table-header-group">

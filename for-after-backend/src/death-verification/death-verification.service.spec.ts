@@ -9,6 +9,7 @@ import type { PrismaService } from '../prisma/prisma.service.js';
 import type { DeathVerificationQueue } from './death-verification-queue.service.js';
 import {
   ALREADY_REPORTED,
+  confirmationState,
   DeathVerificationService,
   NOT_ACCEPTING_REPORTS,
   REPORT_RECEIVED,
@@ -114,10 +115,17 @@ describe('DeathVerificationService', () => {
 
   // Records every model the service touches, inside or outside the transaction.
   // `status` = the Customer's current (newest) case; none → a new case.
+  // contacts: the Customer's active contacts with an email or mobile (Phase 19B sizing).
+  type Contact = {
+    email: string | null;
+    mobile?: string | null;
+    invitations: { status: string; emailNormalized: string; expiresAt: Date; createdAt: Date }[];
+  };
   const setup = ({
     status,
     createError,
-  }: { status?: string; createError?: unknown } = {}) => {
+    contacts = [{ email: 'david@example.com', invitations: [] }],
+  }: { status?: string; createError?: unknown; contacts?: Contact[] } = {}) => {
     const touched = new Set<string>();
     const created: Record<string, unknown>[] = [];
     const models = {
@@ -146,6 +154,8 @@ describe('DeathVerificationService', () => {
         }),
       },
       deathVerificationAuditEvent: { create: vi.fn(async () => ({})) },
+      // Read only: sizes a new case's requiredConfirmations (Phase 19B).
+      trustedContact: { findMany: vi.fn(async () => contacts) },
     };
     const tracked = new Proxy(models as Record<string, unknown>, {
       get: (target, name: string) => {
@@ -185,7 +195,11 @@ describe('DeathVerificationService', () => {
       message: REPORT_RECEIVED,
     });
     expect(models.deathVerificationCase.create).toHaveBeenCalledWith({
-      data: { ownerUserId: 'owner-1', reopenedFromCaseId: null },
+      data: {
+        ownerUserId: 'owner-1',
+        reopenedFromCaseId: null,
+        requiredConfirmations: 1,
+      },
       select: { id: true, status: true },
     });
     // Serialised per Customer: User row lock, then the current case row lock.
@@ -200,7 +214,7 @@ describe('DeathVerificationService', () => {
       reporterFirstNameSnapshot: 'David',
       reporterLastNameSnapshot: 'Test',
       reporterEmailNormalized: 'david@example.com',
-      reporterMobileNormalized: '+61 400 000 000',
+      reporterMobileNormalized: '+61400000000',
       reportedDateOfDeath: new Date('2026-09-28T00:00:00.000Z'),
       note: NOTE,
     });
@@ -214,6 +228,8 @@ describe('DeathVerificationService', () => {
       'deathReport',
       'deathVerificationAuditEvent',
       'deathVerificationCase',
+      // Phase 19B: read only, to size requiredConfirmations.
+      'trustedContact',
     ]);
     expect(models.deathVerificationAuditEvent.create).toHaveBeenCalledWith({
       data: {
@@ -277,7 +293,11 @@ describe('DeathVerificationService', () => {
         status: 'PENDING_VERIFICATION',
       });
       expect(models.deathVerificationCase.create).toHaveBeenCalledWith({
-        data: { ownerUserId: 'owner-1', reopenedFromCaseId: 'case-1' },
+        data: {
+          ownerUserId: 'owner-1',
+          reopenedFromCaseId: 'case-1',
+          requiredConfirmations: 1,
+        },
         select: { id: true, status: true },
       });
       // The old case is never written to: only the new case gets rows.
@@ -330,5 +350,135 @@ describe('DeathVerificationService', () => {
       expect(logged).not.toContain(secret);
     }
     spies.forEach((s) => s.mockRestore());
+  });
+
+  // ─── Phase 19B: confirmation requirement snapshot ──────────────────────
+  const invite = (status: string, email: string) => [
+    { status, emailNormalized: email, expiresAt: new Date(Date.now() + 86_400_000), createdAt: new Date() },
+  ];
+  const requiredFor = async (contacts: Contact[], who: Reporter = reporter) => {
+    const { service, models } = setup({ contacts });
+    await service.submitReport(who, { confirmReport: true });
+    const call = models.deathVerificationCase.create.mock.calls[0] as unknown as [{ data: { requiredConfirmations: number } }];
+    return call[0].data.requiredConfirmations;
+  };
+
+  it.each([
+    ['one contact (the reporter)', [{ email: 'david@example.com', invitations: [] }], 1],
+    [
+      'two distinct contacts',
+      [
+        { email: 'david@example.com', invitations: [] },
+        { email: 'sarah@example.com', invitations: invite('ACCEPTED', 'sarah@example.com') },
+      ],
+      2,
+    ],
+    [
+      'two rows with one email (Alice@ vs alice@ already normalized on write)',
+      [
+        { email: 'david@example.com', invitations: [] },
+        { email: 'david@example.com', invitations: [] },
+      ],
+      1,
+    ],
+    [
+      'a second contact who declined the invitation cannot confirm',
+      [
+        { email: 'david@example.com', invitations: [] },
+        { email: 'sarah@example.com', invitations: invite('DECLINED', 'sarah@example.com') },
+      ],
+      1,
+    ],
+    [
+      'a decline for an older email does not count against the current one',
+      [
+        { email: 'david@example.com', invitations: [] },
+        { email: 'sarah@example.com', invitations: invite('DECLINED', 'old@example.com') },
+      ],
+      2,
+    ],
+    ['the reporter always counts, even if their own row is missing', [], 1],
+  ])('a new case is sized when it opens: %s → %i', async (_, contacts, expected) => {
+    expect(await requiredFor(contacts as Contact[])).toBe(expected);
+  });
+
+  // Mobile-only contacts (SMS sign-in) are people too: identified by E.164 mobile.
+  const MAX: Reporter = { ...reporter, id: 'tc-2', firstName: 'Max', email: null, mobile: '+61400000123' };
+  it.each([
+    ['a mobile-only reporter alone (was a 500 before)', [{ email: null, mobile: '+61400000123', invitations: [] }], MAX, 1],
+    [
+      'a mobile-only reporter and an email contact',
+      [
+        { email: null, mobile: '+61400000123', invitations: [] },
+        { email: 'sarah@example.com', invitations: invite('ACCEPTED', 'sarah@example.com') },
+      ],
+      MAX,
+      2,
+    ],
+    [
+      'an email reporter and a mobile-only contact',
+      [
+        { email: 'david@example.com', invitations: [] },
+        { email: null, mobile: '+61400000123', invitations: [] },
+      ],
+      reporter,
+      2,
+    ],
+    [
+      'two mobile-only rows with one mobile are one person',
+      [
+        { email: null, mobile: '+61400000123', invitations: [] },
+        { email: null, mobile: '+61400000123', invitations: [] },
+      ],
+      MAX,
+      1,
+    ],
+  ])('mobile-only contacts: %s -> %i', async (_, contacts, who, expected) => {
+    expect(await requiredFor(contacts as Contact[], who as Reporter)).toBe(expected);
+  });
+
+  it('never more than two, and the reporter who declined still counts', async () => {
+    expect(
+      await requiredFor([
+        { email: 'david@example.com', invitations: invite('DECLINED', 'david@example.com') },
+        { email: 'a@example.com', invitations: [] },
+        { email: 'b@example.com', invitations: [] },
+      ]),
+    ).toBe(2);
+  });
+
+  it('a report into an existing open case never re-sizes it', async () => {
+    const { service, models } = setup({ status: 'SAFEGUARD_ACTIVE' });
+    await service.submitReport(reporter, { confirmReport: true });
+    expect(models.deathVerificationCase.create).not.toHaveBeenCalled();
+    expect(models.trustedContact.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('confirmationState (Phase 19B)', () => {
+  // [email, mobile] per report; a person is the email, else the mobile.
+  it.each([
+    [1, [['a@example.com', null]], 1, true],
+    [2, [['a@example.com', null]], 1, false],
+    [2, [['a@example.com', null], ['b@example.com', null]], 2, true],
+    [2, [['a@example.com', null], ['A@Example.com ', null]], 1, false], // one person, two rows
+    [2, [['a@example.com', null], [null, null]], 1, false],
+    [1, [], 0, false],
+    [null, [['a@example.com', null], ['b@example.com', null]], 2, false], // legacy closed case: never met
+    [1, [[null, '+61400000123']], 1, true], // mobile-only reporter counts
+    [2, [['a@example.com', null], [null, '+61400000123']], 2, true],
+    [2, [[null, '+61400000123'], [null, '+61 400 000 123']], 1, false], // one mobile, two rows
+    // Known ceiling (agreed): a shared mobile where only one row has an email is two people.
+    [2, [['a@example.com', '+61400000123'], [null, '+61400000123']], 2, true],
+  ] as const)('required %s, reporters %j -> received %i, met %s', (required, rows, received, met) => {
+    const reports = rows.map(([reporterEmailNormalized, reporterMobileNormalized]) => ({
+      reporterEmailNormalized,
+      reporterMobileNormalized,
+    }));
+    expect(confirmationState(required, reports)).toEqual({
+      requiredConfirmations: required,
+      receivedConfirmations: received,
+      confirmationRequirementMet: met,
+    });
   });
 });

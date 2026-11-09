@@ -8,7 +8,8 @@ import {
   TRIGGER_TYPES,
 } from '@/lib/api/messages';
 import { localToday } from '@/lib/format';
-import { ANSWER_MAX, type PromptArea } from '@/lib/api/prompts';
+import { ANSWER_MAX, SONG_MOMENTS, type PromptArea } from '@/lib/api/prompts';
+import { normaliseSongLink, SONG_LINK_INVALID, SONG_LINK_MAX } from '@/lib/song-link';
 
 // Early, friendly feedback mirroring the backend DTO limits; the API stays
 // authoritative. Form values are strings; blank optional fields become null
@@ -20,17 +21,24 @@ const required = (label: string, max: number) =>
   text(label, max).min(1, `Enter ${label.toLowerCase()}.`);
 const optional = (label: string, max: number) => text(label, max);
 
-// Backend IsMobile(): basic shape only, stored as typed.
-const MOBILE = /^\+?[0-9][0-9 ()-]{5,19}$/;
 const email = z
   .string()
   .trim()
   .max(254, 'Email address is too long.')
   .refine((v) => !v || z.email().safeParse(v).success, 'Enter a valid email address.');
+// Backend IsE164Mobile(): Recipients and Trusted Contacts sign in by SMS, so
+// the country code is required; spaces, dashes and brackets are fine (the API
+// strips them).
 const mobile = z
   .string()
   .trim()
-  .refine((v) => !v || MOBILE.test(v), 'Enter a phone number, e.g. +61 400 000 000.');
+  .refine(
+    (v) => !v || /^\+[1-9]\d{6,14}$/.test(v.replace(/[\s().-]/g, '')),
+    'Include the country code, e.g. +61 400 000 000.',
+  );
+
+// Private notes to self (and a Recipient's private note): plain text, 2,000 max.
+const privateNote = z.string().max(2000, 'Private note must be 2,000 characters or fewer.');
 
 export const toNull = (value: string) => (value.trim() ? value.trim() : null);
 
@@ -46,7 +54,7 @@ export const recipientSchema = z.object({
   ...person,
   // <input type="date"> yields "YYYY-MM-DD", sent exactly as typed.
   birthday: z.string().refine((v) => !v || /^\d{4}-\d{2}-\d{2}$/.test(v), 'Enter a valid date.'),
-  privateNote: z.string().max(2000, 'Private note must be 2,000 characters or fewer.'),
+  privateNote,
 });
 export type RecipientValues = z.infer<typeof recipientSchema>;
 
@@ -64,12 +72,13 @@ export const messageSchema = z.object({
   title: required('A title', 200),
   contentType: z.enum(CONTENT_TYPES),
   textContent: z.string().max(TEXT_CONTENT_MAX, 'Your message is longer than 20,000 characters.'),
+  privateNote,
   recipientIds: z.array(z.string()).min(1, 'Choose at least one person.'),
 });
 export type MessageValues = z.infer<typeof messageSchema>;
 
 // Phase 13B: a message made from a memory; the type is always chosen.
-export const memoryMessageSchema = messageSchema.omit({ textContent: true }).extend({
+export const memoryMessageSchema = messageSchema.omit({ textContent: true, privateNote: true }).extend({
   includeText: z.boolean(),
   mediaAssetIds: z.array(z.string()),
 });
@@ -79,6 +88,7 @@ export const memorySchema = z.object({
   title: required('A title', 200),
   category: z.enum(MEMORY_CATEGORIES, { message: 'Choose a category.' }),
   textContent: z.string().max(TEXT_CONTENT_MAX, 'This is longer than 20,000 characters.'),
+  privateNote,
   tags: z.array(z.string()),
 });
 export type MemoryValues = z.infer<typeof memorySchema>;
@@ -162,5 +172,23 @@ export const answerSchema = (area: PromptArea) =>
         (v) => v.length <= ANSWER_MAX[area],
         `Your answer is longer than ${ANSWER_MAX[area].toLocaleString('en-AU')} characters.`,
       ),
+    privateNote,
   });
 export type AnswerValues = z.infer<ReturnType<typeof answerSchema>>;
+
+// My Wishes songs: the backend's limits (title 200, link 500, "Other" 100,
+// note 1,000). No artist field. The link is optional; when given it must be a
+// supported YouTube or Spotify song link.
+export const SONG_MAX = { title: 200, link: SONG_LINK_MAX, momentOther: 100, note: 1000 } as const;
+export const songSchema = z.object({
+  title: required('A song title', SONG_MAX.title),
+  link: z
+    .string()
+    .trim()
+    .max(SONG_MAX.link, SONG_LINK_INVALID)
+    .refine((v) => !v || normaliseSongLink(v) !== null, SONG_LINK_INVALID),
+  moment: z.enum(['', ...SONG_MOMENTS]),
+  momentOther: optional('This', SONG_MAX.momentOther),
+  note: optional('Personal note', SONG_MAX.note),
+});
+export type SongValues = z.infer<typeof songSchema>;

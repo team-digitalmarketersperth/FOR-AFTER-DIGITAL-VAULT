@@ -2,6 +2,8 @@
 
 import { keepPreviousData, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import {
+  adminAccountApi,
+  type OwnAdminAccount,
   adminApi,
   adminAuthApi,
   type AdminDashboard,
@@ -15,17 +17,47 @@ import {
   type DeathCaseSummary,
   type DeadLetter,
   type DeadLetterFilters,
+  type DeliveryFilters,
+  type DeliveryPage,
   type FailedJob,
   type Page,
   type QueueSummary,
   type RecoveryVerified,
   type RejectInput,
+  type ReleaseEmailDetail,
+  type ReleaseDetail,
+  type ReleaseFilters,
+  type ReleasePage,
+  type SafetyNoticeDetail,
+  type CreateIpBlockInput,
+  type IpBlock,
+  type IpBlockFilters,
+  type IpBlockPage,
+  type SecurityEvent,
+  type SecurityFilters,
+  type SecurityPage,
+  type StorageAsset,
+  type StorageAssetFilters,
+  type StoragePage,
+  type SystemHealth,
+  type BillingFilters,
+  type BillingPage,
+  type AdminAccessFilters,
+  type AdminAccount,
+  type CreateAdminInput,
+  type InvitationResult,
+  type AdminAccountDetail,
+  type AiFilters,
+  type AiOperations,
+  type AdminSupportFilters,
+  type AdminSupportRequest,
+  type AdminSupportSummary,
   type TotpConfirmed,
   type TotpSetup,
   type UserFilters,
   type VerifyInput,
 } from '@/lib/api/admin';
-import { authApi, isAdminMfaChallenge, type AdminMfaChallenge, type LoginInput } from '@/lib/api/auth';
+import { authApi, isAdminMfaChallenge, type AdminMfaChallenge, type ChangePasswordInput, type LoginInput } from '@/lib/api/auth';
 import { ApiError, isApiError } from '@/lib/api/errors';
 import { adminKeys, dropAdminData, resetAdminCache, resetPrivateCache } from '@/lib/query/query-client';
 
@@ -164,6 +196,38 @@ export function useAdminLogout() {
   });
 }
 
+// ─── Own account (Account settings) ─────────────────────────────────────────
+
+const accountKey = ['admin', 'own-account'] as const;
+
+export const useOwnAdminAccount = () =>
+  useQuery<OwnAdminAccount, ApiError>({ queryKey: accountKey, queryFn: ({ signal }) => adminAccountApi.get(signal) });
+
+/** On success the header identity (GET /admin-auth/me cache) shows the new name at once. */
+export function useUpdateAdminProfile() {
+  const qc = useQueryClient();
+  return useMutation<{ firstName: string; lastName: string }, ApiError, { firstName: string; lastName: string }>({
+    mutationFn: adminAccountApi.updateProfile,
+    onSuccess: (name) => {
+      qc.setQueryData<AdminMe | null>(adminKeys.me, (me) => (me ? { ...me, ...name } : me));
+      void qc.invalidateQueries({ queryKey: accountKey });
+    },
+  });
+}
+
+/** Same input/output as the Customer hook, so the shared password dialog can use it. */
+export function useChangeAdminPassword() {
+  const qc = useQueryClient();
+  return useMutation<{ success: true }, ApiError, ChangePasswordInput>({
+    mutationFn: adminAccountApi.changePassword,
+    gcTime: 0,
+    onSuccess: () => void qc.invalidateQueries({ queryKey: accountKey }),
+  });
+}
+
+export const useSendAdminVerification = () =>
+  useMutation<{ sent: true }, ApiError, void>({ mutationFn: () => adminAccountApi.sendVerification() });
+
 // ─── Data ───────────────────────────────────────────────────────────────────
 
 export const useAdminDashboard = () =>
@@ -197,6 +261,177 @@ export const useDeathCase = (id: string) =>
   useQuery<DeathCaseDetail, ApiError>({
     queryKey: adminKeys.case(id),
     queryFn: ({ signal }) => adminApi.case(id, signal),
+  });
+
+// Releases (read-only): the previous page stays on screen while the next loads,
+// and a failed refetch keeps the last good data (the page says it is stale).
+export const useAdminReleases = (f: ReleaseFilters) =>
+  useQuery<ReleasePage, ApiError>({
+    queryKey: adminKeys.releaseList(f),
+    queryFn: ({ signal }) => adminApi.releases(f, signal),
+    placeholderData: keepPreviousData,
+  });
+
+export const useAdminRelease = (reference: string) =>
+  useQuery<ReleaseDetail, ApiError>({
+    queryKey: adminKeys.release(reference),
+    queryFn: ({ signal }) => adminApi.release(reference, signal),
+  });
+
+// Deliveries (read-only): same keep-previous / stale-on-failure behaviour as Releases.
+export const useAdminDeliveries = (f: DeliveryFilters) =>
+  useQuery<DeliveryPage, ApiError>({
+    queryKey: adminKeys.deliveryList(f),
+    queryFn: ({ signal }) => adminApi.deliveries(f, signal),
+    placeholderData: keepPreviousData,
+  });
+
+export const useReleaseEmail = (reference: string) =>
+  useQuery<ReleaseEmailDetail, ApiError>({
+    queryKey: adminKeys.delivery('release_email', reference),
+    queryFn: ({ signal }) => adminApi.releaseEmail(reference, signal),
+  });
+
+export const useSafetyNotice = (reference: string) =>
+  useQuery<SafetyNoticeDetail, ApiError>({
+    queryKey: adminKeys.delivery('safety_notice', reference),
+    queryFn: ({ signal }) => adminApi.safetyNotice(reference, signal),
+  });
+
+// System Health: manual refresh only (no polling); a failed refetch keeps the
+// last result, which the page marks as stale.
+export const useSystemHealth = () =>
+  useQuery<SystemHealth, ApiError>({
+    queryKey: adminKeys.systemHealth,
+    queryFn: ({ signal }) => adminApi.systemHealth(signal),
+  });
+
+// Security Activity: manual refresh only; the previous page stays while the
+// next loads, and a failed refetch keeps the last result (shown as stale).
+export const useSecurityEvents = (f: SecurityFilters) =>
+  useQuery<SecurityPage, ApiError>({
+    queryKey: adminKeys.securityList(f),
+    queryFn: ({ signal }) => adminApi.securityEvents(f, signal),
+    placeholderData: keepPreviousData,
+  });
+
+export const useSecurityEvent = (reference: string) =>
+  useQuery<SecurityEvent, ApiError>({
+    queryKey: adminKeys.securityEvent(reference),
+    queryFn: ({ signal }) => adminApi.securityEvent(reference, signal),
+  });
+
+export const useIpBlocks = (f: IpBlockFilters) =>
+  useQuery<IpBlockPage, ApiError>({
+    queryKey: ['admin', 'security', 'ip-blocks', f],
+    queryFn: ({ signal }) => adminApi.ipBlocks(f, signal),
+    placeholderData: keepPreviousData,
+  });
+
+export function useCreateIpBlock() {
+  const qc = useQueryClient();
+  return useMutation<IpBlock, ApiError, CreateIpBlockInput>({
+    mutationFn: adminApi.createIpBlock,
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['admin', 'security'] }),
+  });
+}
+
+export function useRevokeIpBlock() {
+  const qc = useQueryClient();
+  return useMutation<IpBlock, ApiError, string>({
+    mutationFn: adminApi.revokeIpBlock,
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['admin', 'security'] }),
+  });
+}
+
+// Storage & scans: same refresh behaviour as Security activity.
+export const useStorageAssets = (f: StorageAssetFilters) =>
+  useQuery<StoragePage, ApiError>({
+    queryKey: adminKeys.storageList(f),
+    queryFn: ({ signal }) => adminApi.storageAssets(f, signal),
+    placeholderData: keepPreviousData,
+  });
+
+export const useStorageAsset = (reference: string) =>
+  useQuery<StorageAsset, ApiError>({
+    queryKey: adminKeys.storageAsset(reference),
+    queryFn: ({ signal }) => adminApi.storageAsset(reference, signal),
+  });
+
+// Support inbox (Step 7). Each command's response is the new detail.
+export const useAdminSupportList = (f: AdminSupportFilters) =>
+  useQuery<Page<AdminSupportSummary>, ApiError>({
+    queryKey: adminKeys.supportList(f),
+    queryFn: ({ signal }) => adminApi.supportRequests(f, signal),
+    placeholderData: keepPreviousData,
+  });
+
+export const useAdminSupportRequest = (id: string) =>
+  useQuery<AdminSupportRequest, ApiError>({
+    queryKey: adminKeys.supportRequest(id),
+    queryFn: ({ signal }) => adminApi.supportRequest(id, signal),
+  });
+
+function useSupportCommand<I>(id: string, run: (id: string, input: I) => Promise<AdminSupportRequest>) {
+  const qc = useQueryClient();
+  return useMutation<AdminSupportRequest, ApiError, I>({
+    mutationFn: (input) => run(id, input),
+    onSuccess: (request) => {
+      qc.setQueryData(adminKeys.supportRequest(id), request);
+      void qc.invalidateQueries({ queryKey: [...adminKeys.supportRequests, 'list'] });
+    },
+  });
+}
+export const useSupportReply = (id: string) => useSupportCommand(id, adminApi.supportReply);
+export const useSupportNote = (id: string) => useSupportCommand(id, adminApi.supportNote);
+export const useSupportStatus = (id: string) => useSupportCommand(id, adminApi.supportStatus);
+
+// AI operations: manual refresh only (no polling); a failed refetch keeps the
+// last result, which the page marks as possibly out of date.
+export const useAiOperations = (f: AiFilters) =>
+  useQuery<AiOperations, ApiError>({
+    queryKey: adminKeys.aiOperations(f),
+    queryFn: ({ signal }) => adminApi.aiOperations(f, signal),
+    placeholderData: keepPreviousData,
+  });
+
+// Admin access: read-only.
+export const useAdminAccounts = (f: AdminAccessFilters) =>
+  useQuery<Page<AdminAccount>, ApiError>({
+    queryKey: adminKeys.adminAccounts(f),
+    queryFn: ({ signal }) => adminApi.adminAccounts(f, signal),
+    placeholderData: keepPreviousData,
+  });
+
+/** Create admin (SUPER_ADMIN; the API checks role and recent two-factor). */
+export function useCreateAdmin() {
+  const qc = useQueryClient();
+  return useMutation<InvitationResult, ApiError, CreateAdminInput>({
+    mutationFn: adminApi.createAdmin,
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['admin', 'access'] }),
+  });
+}
+
+export function useResendAdminInvitation(id: string) {
+  const qc = useQueryClient();
+  return useMutation<InvitationResult, ApiError, void>({
+    mutationFn: () => adminApi.resendAdminInvitation(id),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['admin', 'access'] }),
+  });
+}
+
+export const useAdminAccount = (id: string) =>
+  useQuery<AdminAccountDetail, ApiError>({
+    queryKey: adminKeys.adminAccount(id),
+    queryFn: ({ signal }) => adminApi.adminAccount(id, signal),
+  });
+
+// Subscriptions & payments: read-only, SUPER_ADMIN only (the API returns 403 otherwise).
+export const useBillingAccounts = (f: BillingFilters) =>
+  useQuery<BillingPage, ApiError>({
+    queryKey: adminKeys.billingAccounts(f),
+    queryFn: ({ signal }) => adminApi.billingAccounts(f, signal),
+    placeholderData: keepPreviousData,
   });
 
 export const useAuditLogs = (f: AuditFilters) =>

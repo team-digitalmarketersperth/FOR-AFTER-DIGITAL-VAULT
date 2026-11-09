@@ -391,7 +391,7 @@ function RecipientForm({
         />
         <div className="grid gap-6 sm:grid-cols-2">
           <TextField id="email" label="Email" type="email" inputMode="email" optional autoComplete="off" error={errors.email?.message} {...form.register('email')} />
-          <TextField id="mobile" label="Mobile" type="tel" inputMode="tel" optional autoComplete="off" error={errors.mobile?.message} {...form.register('mobile')} />
+          <TextField id="mobile" label="Mobile" type="tel" inputMode="tel" optional autoComplete="off" placeholder="+61 400 000 000" hint="With the country code. They can sign in with a code sent to this number." error={errors.mobile?.message} {...form.register('mobile')} />
         </div>
         <TextField id="birthday" label="Birthday" type="date" optional className="sm:max-w-60" error={errors.birthday?.message} {...form.register('birthday')} />
         <TextAreaField

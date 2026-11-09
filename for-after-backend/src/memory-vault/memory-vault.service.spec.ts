@@ -54,7 +54,9 @@ const setup = () => {
     createMany: vi.fn().mockResolvedValue({ count: 0 }),
     findMany: vi.fn().mockResolvedValue([{ id: 't1' }, { id: 't2' }]),
   };
-  const tx = { memoryVaultItem, memoryVaultTag };
+  // Recent changes (customer activity): recorded, not asserted here.
+  const customerActivity = { create: vi.fn(async () => ({})) };
+  const tx = { memoryVaultItem, memoryVaultTag, customerActivity };
   // Array form = the list's count + page; function form = interactive.
   const $transaction = vi.fn((arg: unknown) =>
     Array.isArray(arg)

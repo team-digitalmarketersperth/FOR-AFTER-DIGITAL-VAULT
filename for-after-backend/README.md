@@ -127,9 +127,9 @@ Copy `.env.example` to `.env`. **Never commit `.env`.**
 | `TRUSTED_CONTACT_OTP_PEPPER` | ✅ | random, at least 32 characters, **different** from the Recipient pepper |
 | `TRUSTED_CONTACT_OTP_*`, `TRUSTED_CONTACT_SESSION_TTL_SECONDS`, `TRUSTED_CONTACT_COOKIE_DOMAIN` | no | same settings for Trusted Contacts ([trusted contact auth](docs/trusted-contact-auth.md)) |
 | `DEATH_VERIFICATION_SAFEGUARD_SECONDS` | no | `1209600` (14 days); local testing may use `60`; stored per case when it starts |
-| `EMAIL_PROVIDER` | ✅ in production | `brevo` (selected; production requires `brevo` or the optional `resend`), `console` (`NODE_ENV=development` only) or `disabled` (default elsewhere). Sign-in codes, release and safety emails ([email setup](docs/email-production-setup.md)) |
-| `BREVO_API_KEY`, `EMAIL_FROM_ADDRESS`, `EMAIL_FROM_NAME`, `APP_BASE_URL` | with `brevo` | server-side Brevo v3 API key, a sender verified in Brevo, display name, app origin for links |
-| `RESEND_API_KEY` | with `resend` only | optional, inactive Resend adapter; never required for Brevo |
+| `EMAIL_PROVIDER` | ✅ in production | `microsoft` (selected; production requires `microsoft` or the optional `resend`), `console` (`NODE_ENV=development` only) or `disabled` (default elsewhere). Sign-in codes, release and safety emails ([email setup](docs/email-production-setup.md)) |
+| `MS_TENANT_ID`, `MS_CLIENT_ID`, `MS_CLIENT_SECRET`, `MS_SENDER_MAILBOX`, `EMAIL_FROM`, `EMAIL_FROM_NAME`, `APP_BASE_URL` | with `microsoft` | Entra ID app registration (Mail.Send application permission), sender mailbox, From address, display name, app origin for links ([email setup](docs/email-production-setup.md) §7) |
+| `RESEND_API_KEY`, `EMAIL_FROM_ADDRESS` | with `resend` only | optional, inactive Resend adapter and its verified sender |
 | `EMAIL_SEND_TIMEOUT_MS`, `EMAIL_QUEUE_NAME`, `EMAIL_JOB_*`, `EMAIL_RECONCILE_INTERVAL_SECONDS` | no | email timeout and the `email-delivery` queue |
 | `DEATH_VERIFICATION_QUEUE_NAME`, `DEATH_VERIFICATION_RECONCILE_INTERVAL_SECONDS`, `DEATH_VERIFICATION_JOB_*` | no | safeguard queue settings ([death verification](docs/death-verification.md)) |
 | `ADMIN_TOTP_ENCRYPTION_KEY` | ✅ | 32 random bytes, **base64** (`openssl rand -base64 32`); encrypts admin TOTP secrets. Dedicated key |

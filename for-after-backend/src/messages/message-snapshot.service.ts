@@ -20,9 +20,11 @@ import {
   MediaStorage,
   type StoredRef,
 } from '../media/storage/media-storage.service.js';
+import { recordActivity } from '../activity/customer-activity.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { SupportedContentType } from './dto/create-message.dto.js';
 import { type MessageResponse, MessagesService } from './messages.service.js';
+import { firstVersion } from './message-versions.js';
 
 /** A READY file of the source (memory, story answer) to copy into the message. */
 export type SnapshotSource = StoredRef & {
@@ -117,6 +119,7 @@ export class MessageSnapshotService {
           contentType: draft.contentType,
           textContent: draft.textContent,
           status: MessageStatus.DRAFT,
+          versions: firstVersion(draft),
           recipients: {
             create: draft.recipientIds.map((recipientId) => ({ recipientId })),
           },
@@ -131,6 +134,8 @@ export class MessageSnapshotService {
         },
         select: { id: true },
       });
+      // Same "Message created" as a message written from scratch.
+      await recordActivity(tx, { userId: ownerUserId, type: 'MESSAGE_CREATED', entityId: messageId });
     });
 
     // ponytail: copies run in the request, one at a time; queue them if many large videos are copied.

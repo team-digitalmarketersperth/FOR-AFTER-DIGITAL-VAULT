@@ -4,16 +4,26 @@ import type { PrismaService } from '../prisma/prisma.service.js';
 import { UsersService } from './users.service.js';
 
 const setup = () => {
-  const user = { findUnique: vi.fn(), create: vi.fn(), update: vi.fn() };
+  const user = {
+    findUnique: vi.fn(),
+    // updateProfile compares before/after (no history row for a no-op save).
+    findUniqueOrThrow: vi.fn().mockResolvedValue({ firstName: null, lastName: null }),
+    create: vi.fn(),
+    update: vi.fn(),
+  };
   const auditLog = { create: vi.fn() };
+  // Recent changes (customer activity): recorded, not asserted here.
+  const customerActivity = { create: vi.fn(async () => ({})) };
+
   const prisma = {
     user,
     auditLog,
-    $transaction: (fn: (tx: unknown) => unknown) => fn({ user, auditLog }),
+    $transaction: (fn: (tx: unknown) => unknown) => fn({ user, auditLog, customerActivity }),
   };
   return {
     user,
     auditLog,
+    customerActivity,
     service: new UsersService(prisma as unknown as PrismaService),
   };
 };
@@ -51,6 +61,16 @@ describe('UsersService', () => {
     expect(args.where).toEqual({ id: 'id-1' });
     expect(args.data).toEqual({ firstName: 'Lisa', lastName: undefined });
     expect(args.select).not.toHaveProperty('passwordHash');
+  });
+
+  it('a Customer rename is recorded in their Recent changes; an admin renaming themselves is not', async () => {
+    for (const [role, rows] of [['CUSTOMER', 1], ['ADMIN', 0], ['SUPER_ADMIN', 0]] as const) {
+      const { user, customerActivity, service } = setup();
+      user.findUniqueOrThrow.mockResolvedValue({ firstName: 'Old', lastName: 'Name', role });
+      user.update.mockResolvedValue({ id: 'id-1', firstName: 'New', lastName: 'Name' });
+      await service.updateProfile('id-1', { firstName: 'New' });
+      expect(customerActivity.create).toHaveBeenCalledTimes(rows);
+    }
   });
 
   it('updatePassword stores hash + passwordChangedAt and audits without secrets', async () => {

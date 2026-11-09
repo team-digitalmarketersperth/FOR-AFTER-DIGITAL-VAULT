@@ -1,9 +1,13 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { isApiError, type ApiError } from '@/lib/api/errors';
+import { uploadToProvider, type AccessUrl } from '@/lib/api/media';
 import {
+  checkEvidenceFile,
   deathVerificationApi,
+  type Evidence,
   invitationApi,
   recipientApi,
   recipientAuthApi,
@@ -65,6 +69,25 @@ export function useVerifyCode(portal: Portal) {
   });
 }
 
+/** SMS step 1: mobile (E.164) → generic message, same for any mobile. */
+export function useRequestSmsCode(portal: Portal) {
+  return useMutation<{ message: string }, ApiError, string>({
+    mutationKey: [portal, 'sign-in', 'request-sms'],
+    mutationFn: (mobile) => AUTH[portal].requestSmsOtp(mobile),
+  });
+}
+
+/** SMS step 2: mobile + code → the same portal session as email. */
+export function useVerifySmsCode(portal: Portal) {
+  const qc = useQueryClient();
+  return useMutation<PortalMe, ApiError, { mobile: string; code: string }>({
+    mutationKey: [portal, 'sign-in', 'verify-sms'],
+    mutationFn: ({ mobile, code }) => AUTH[portal].verifySmsOtp(mobile, code),
+    onSuccess: (me) => resetPortalCache(qc, portal, me),
+    gcTime: 0,
+  });
+}
+
 /** Ends only this portal's session; other For After sessions are untouched. */
 export function usePortalLogout(portal: Portal) {
   const qc = useQueryClient();
@@ -116,6 +139,96 @@ export function useDeathReport(trustedContactId: string) {
       void qc.invalidateQueries({ queryKey: portalKeys.accounts });
     },
     gcTime: 0,
+  });
+}
+
+// ─── Trusted Contact evidence (Phase 19A) ───────────────────────────────────
+
+export const useEvidence = (trustedContactId: string) =>
+  useQuery<Evidence[], ApiError>({
+    queryKey: portalKeys.evidence(trustedContactId),
+    queryFn: ({ signal }) => trustedContactApi.evidence(trustedContactId, signal),
+  });
+
+export type EvidenceUploadState =
+  | { phase: 'idle' }
+  | { phase: 'uploading'; fileName: string; progress: number }
+  | { phase: 'confirming'; fileName: string }
+  | { phase: 'done'; fileName: string }
+  | { phase: 'failed'; fileName: string; message: string };
+
+/**
+ * upload-url → direct upload to the private provider (with progress) →
+ * complete (the server's checks and malware scan) → READY. A finished file
+ * is "ready for review", never "verified": evidence decides nothing.
+ */
+export function useEvidenceUpload(trustedContactId: string) {
+  const qc = useQueryClient();
+  const [state, setState] = useState<EvidenceUploadState>({ phase: 'idle' });
+  const abortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  const upload = useCallback(
+    async (file: File) => {
+      const problem = checkEvidenceFile(file);
+      if (problem) return setState({ phase: 'failed', fileName: file.name, message: problem });
+      const controller = new AbortController();
+      abortRef.current = controller;
+      setState({ phase: 'uploading', fileName: file.name, progress: 0 });
+      try {
+        const target = await trustedContactApi.requestEvidenceUpload(trustedContactId, file);
+        const providerFileId = await uploadToProvider(target.upload, file, {
+          signal: controller.signal,
+          onProgress: (progress) => setState({ phase: 'uploading', fileName: file.name, progress }),
+        });
+        setState({ phase: 'confirming', fileName: file.name });
+        await trustedContactApi.completeEvidence(trustedContactId, target.mediaAssetId, providerFileId);
+        setState({ phase: 'done', fileName: file.name });
+      } catch (error) {
+        // A cancelled or abandoned upload is retired by the server's cleanup.
+        setState(
+          controller.signal.aborted
+            ? { phase: 'idle' }
+            : {
+                phase: 'failed',
+                fileName: file.name,
+                message: isApiError(error) ? error.message : 'The upload did not finish. Please try again.',
+              },
+        );
+      } finally {
+        abortRef.current = null;
+        // The case may have closed meanwhile: refresh the list and the status.
+        void qc.invalidateQueries({ queryKey: portalKeys.caseStatus(trustedContactId) });
+      }
+    },
+    [qc, trustedContactId],
+  );
+  const cancel = useCallback(() => abortRef.current?.abort(), []);
+  return { state, upload, cancel };
+}
+
+/**
+ * Opens one READY file in a new tab through a short-lived signed URL, fetched
+ * on click and never cached. The tab is opened first (inside the click) so
+ * pop-up blockers allow it, then pointed at the URL.
+ */
+export function useOpenSignedFile(fetchUrl: (id: string) => Promise<AccessUrl>) {
+  return useMutation<void, ApiError, string>({
+    mutationFn: async (id) => {
+      const tab = window.open('', '_blank');
+      try {
+        const { url } = await fetchUrl(id);
+        if (tab) {
+          tab.opener = null;
+          tab.location.href = url;
+        } else {
+          window.open(url, '_blank', 'noopener');
+        }
+      } catch (error) {
+        tab?.close();
+        throw error;
+      }
+    },
   });
 }
 

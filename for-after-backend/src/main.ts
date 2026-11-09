@@ -9,6 +9,8 @@ import { RedisService } from './redis/redis.service.js';
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     instrument: ObserveInstrument,
+    // The Stripe webhook verifies its signature over the exact bytes received.
+    rawBody: true,
   });
   const redis = app.get(RedisService).client;
   configureApp(

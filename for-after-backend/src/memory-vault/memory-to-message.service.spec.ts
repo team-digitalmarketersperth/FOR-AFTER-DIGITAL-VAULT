@@ -101,7 +101,9 @@ const setup = () => {
   const cleanup = {
     purge: vi.fn().mockResolvedValue({ purged: 1, failed: 0 }),
   };
-  const db = { memoryVaultItem, memoryVaultMediaAsset, message, mediaAsset };
+  // Recent changes (customer activity): recorded, not asserted here.
+  const customerActivity = { create: vi.fn(async () => ({})) };
+  const db = { memoryVaultItem, memoryVaultMediaAsset, message, mediaAsset, customerActivity };
   const $transaction = vi.fn((fn: (tx: typeof db) => unknown) => fn(db));
   const prisma = { ...db, $transaction } as unknown as PrismaService;
   // The real snapshot service (Phase 14B shares it with My Story).

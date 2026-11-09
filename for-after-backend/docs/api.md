@@ -153,7 +153,7 @@ Responses never include `ownerUserId` or `deletedAt`.
 | `GET` | `/trusted-contacts/:id` | Get trusted contact |
 | `PATCH` | `/trusted-contacts/:id` | Update trusted contact |
 | `DELETE`| `/trusted-contacts/:id` | Remove trusted contact (soft delete, 204); a pending invitation is cancelled |
-| `POST` | `/trusted-contacts/:id/invitation` | Phase 10: send/resend the email invitation → `200` contact. No email `409`, already accepted `409`, 3/hour per contact `429`, send failed `503` |
+| `POST` | `/trusted-contacts/:id/invitation` | Phase 10: send/resend the invitation → `200` contact. Body `{ "channel": "EMAIL" \| "SMS" }` (omitted = `EMAIL`); always to the contact's stored address. Channel's address missing `409` (no fallback), already accepted `409`, 3/hour per contact or 6 SMS/day per Customer `429`, send failed `503` |
 
 Same rules as Recipients: all five routes require a session **and** the `CUSTOMER` role (others get 403).
 Every query is scoped to the session user's id, which is never accepted from the body.
@@ -164,8 +164,8 @@ Body fields: `firstName` (required), `lastName`, `relationship`, `email`, `mobil
 A trusted contact is not a User and gets no access to the owner's content. Since Step 14 the contact can sign in by email OTP
 to report a death (see "Trusted Contact Auth & Portal" below).
 **Phase 10:** at most **2 active** Trusted Contacts per Customer (removed ones do not count; concurrent creates are
-serialised by a lock on the Customer row). Every response carries `invitation: {status, sentAt}` with status
-`PENDING | ACCEPTED | DECLINED | EXPIRED | NOT_SENT | UNAVAILABLE` (no email: SMS invitations are deferred). Details:
+serialised by a lock on the Customer row). Every response carries `invitation: {status, sentAt, channel}` with status
+`PENDING | ACCEPTED | DECLINED | EXPIRED | NOT_SENT` and `channel` `EMAIL | SMS | null` (SMS invitations 2026-10-17). Details:
 [trusted-contact-auth.md](trusted-contact-auth.md) §9–11.
 
 ### Messages
@@ -176,6 +176,13 @@ serialised by a lock on the Customer row). Every response carries `invitation: {
 | `GET` | `/messages/:id` | Get own message |
 | `PATCH` | `/messages/:id` | Update own DRAFT (`title`, `textContent`, `recipientIds`) |
 | `DELETE`| `/messages/:id` | Soft delete own DRAFT (204) and its media: rows soft-deleted in the same write, objects removed after commit (best effort) |
+| `GET` | `/messages/:id/versions` | Version history (2026-10-14): metadata only, newest first, paginated |
+| `GET` | `/messages/:id/versions/:versionId` | One version's title, type and text |
+| `POST` | `/messages/:id/versions/:versionId/restore` | DRAFT only (409 otherwise); restores title/type/text, keeps the replaced content as a version |
+
+Version history and server-side autosave (`/users/me/drafts/...`): see `docs/draft-recovery.md`. `GET /messages/:id`
+includes `version` (current version number). `POST /messages` accepts an optional `recoveryDraftKey` (the
+new-message autosave it clears).
 
 Implemented in Step 5. All five routes require a session **and** the `CUSTOMER` role (admins get 403; any future admin access needs separate audited APIs).
 `ownerUserId` always comes from the session. `status` is server-controlled: every message is created `DRAFT`, and neither field is accepted in a body (400).
@@ -335,11 +342,11 @@ There is no separate `/my-story/responses` list: `GET /my-story/prompts` already
 | `GET` | `/my-wishes/prompts/:promptKey` | One prompt with the customer's answer (or `response: null`) |
 | `GET` | `/my-wishes/prompts/:promptKey/response` | The customer's answer (404 if not answered) |
 | `PUT` | `/my-wishes/prompts/:promptKey/response` | Create, update or restore the answer (always 200). Body `{ textContent? }` (null clears; Phase 15B); never empty |
-| `GET` | `/my-wishes/disclaimer` | Phase 15A: the current My Wishes notice `{ version, text, requiresAcknowledgement, acknowledged, acknowledgedAt }` |
-| `POST` | `/my-wishes/disclaimer/acknowledgement` | Body `{ version }`: acknowledge the current version (idempotent; 409 if outdated). `PUT` of a wish is 409 until done |
+| `GET` | `/my-wishes/disclaimer` | Phase 15A: the current My Wishes notice `{ version, text, requiresAcknowledgement: false, acknowledged, acknowledgedAt }`; informational only (2026-10-14) |
+| `POST` | `/my-wishes/disclaimer/acknowledgement` | Legacy, older clients only: body `{ version }` records a historical acknowledgement (idempotent; 409 if outdated). Nothing requires it |
 | `DELETE`| `/my-wishes/prompts/:promptKey/response` | Soft delete (204) with its files; the prompt can be answered again. Messages made from it stay |
 | `POST` | `/my-wishes/prompts/:promptKey/response/messages` | Phase 15B: new independent DRAFT Message from chosen parts `{ title, contentType, includeText, mediaAssetIds, recipientIds }` (201); the wish stays private. After-death sharing = the Message's `ON_DEATH` / `AFTER_DEATH` schedule |
-| `POST` | `/my-wishes/prompts/:promptKey/response/media/upload-url` | Phase 15B: authorize a PHOTO/AUDIO/VIDEO upload (201); quota checked; 409 until the notice is acknowledged |
+| `POST` | `/my-wishes/prompts/:promptKey/response/media/upload-url` | Phase 15B: authorize a PHOTO/AUDIO/VIDEO upload (201); quota checked |
 | `POST` | `/my-wishes/prompts/:promptKey/response/media/:mediaAssetId/complete` | Verify + scan the upload; `READY` (200) |
 | `GET` | `/my-wishes/prompts/:promptKey/response/media` | The wish's files |
 | `GET` | `/my-wishes/prompts/:promptKey/response/media/:mediaAssetId/access-url` | Short-lived signed URL (READY only) |
@@ -405,7 +412,7 @@ injected fields (`status`, `ownerUserId`, `verifiedByUserId`, `deathTriggersActi
 
 Verify/reject also write `DEATH_VERIFICATION_VERIFIED` / `_REJECTED` to the generic `AuditLog` (same transaction).
 
-**Still planned (not built):** evidence upload, second-contact confirmation (`/death-verifications/:id/confirm`). The original `/admin/death-verifications/:id/approve` is built as `…/verify`. Full workflow:
+**Built in Phase 19A:** supporting evidence: `POST /trusted-contact/accounts/:trustedContactId/death-verification/evidence/upload-url`, `POST …/evidence/:evidenceId/complete`, `GET …/evidence`, `GET …/evidence/:evidenceId/access-url`, and `GET /admin/death-verifications/:caseId/evidence/:evidenceId/access-url` ([death-verification.md §2A](death-verification.md#2a-supporting-evidence-phase-19a)). **Still planned (not built):** second-contact confirmation (`/death-verifications/:id/confirm`). The original `/admin/death-verifications/:id/approve` is built as `…/verify`. Full workflow:
 `docs/death-verification.md`.
 
 ### Subscriptions

@@ -96,12 +96,15 @@ export function SearchBox({
   placeholder,
   maxLength,
   label = 'Search',
+  hideLabel = false,
 }: {
   value?: string;
   onSearch: (search?: string) => void;
   placeholder: string;
   maxLength: number;
   label?: string;
+  /** Screen-reader-only label, for toolbars where the placeholder says it. */
+  hideLabel?: boolean;
 }) {
   const [text, setText] = useState(value ?? '');
   const pushed = useRef(value);
@@ -125,7 +128,9 @@ export function SearchBox({
   }, [text]);
   return (
     <div className="grid gap-2">
-      <Label htmlFor="search">{label}</Label>
+      <Label htmlFor="search" className={hideLabel ? 'sr-only' : undefined}>
+        {label}
+      </Label>
       <div className="relative">
         <Search aria-hidden strokeWidth={1.5} className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-foreground-muted" />
         <Input

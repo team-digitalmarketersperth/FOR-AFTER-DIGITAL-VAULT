@@ -332,7 +332,6 @@ test('My Wishes → Message: after-death release only after a verified death; th
     await page.goto('/login');
     await signIn(page, customer);
     await expect(page).toHaveURL(/\/dashboard/);
-    expect((await page.request.post(`${API}/my-wishes/disclaimer/acknowledgement`, { data: { version: 1 } })).status()).toBe(200);
     expect((await page.request.post(`${API}/recipients`, { data: { firstName: 'Iris', email: iris } })).status()).toBe(201);
     const tc = await (await page.request.post(`${API}/trusted-contacts`, { data: { firstName: 'Ezra', email: ezra } })).json();
 

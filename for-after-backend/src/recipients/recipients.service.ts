@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { paginate } from '../audit/audit-log.service.js';
 import { MediaAssetStatus, Prisma } from '../generated/prisma/client.js';
+import { noteActivity } from '../activity/customer-activity.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateRecipientDto } from './dto/create-recipient.dto.js';
 import { UpdateRecipientDto } from './dto/update-recipient.dto.js';
@@ -76,6 +77,7 @@ export class RecipientsService {
       data: { ...toData(dto), firstName: dto.firstName, ownerUserId },
       select: recipientSelect,
     });
+    await noteActivity(this.prisma, { userId: ownerUserId, type: 'PERSON_ADDED', entityId: row.id });
     return toResponse(row);
   }
 
@@ -123,12 +125,15 @@ export class RecipientsService {
     id: string,
     dto: UpdateRecipientDto,
   ): Promise<RecipientResponse> {
-    return toResponse(await this.updateOwned(ownerUserId, id, toData(dto)));
+    const row = await this.updateOwned(ownerUserId, id, toData(dto));
+    await noteActivity(this.prisma, { userId: ownerUserId, type: 'PERSON_UPDATED', entityId: id });
+    return toResponse(row);
   }
 
   // Soft delete: future messages will reference recipients.
   async remove(ownerUserId: string, id: string): Promise<void> {
     await this.updateOwned(ownerUserId, id, { deletedAt: new Date() });
+    await noteActivity(this.prisma, { userId: ownerUserId, type: 'PERSON_REMOVED', entityId: id });
   }
 
   // A single conditional UPDATE, so there is no gap between the ownership

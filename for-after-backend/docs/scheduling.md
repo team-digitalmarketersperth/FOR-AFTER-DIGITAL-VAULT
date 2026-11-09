@@ -177,7 +177,7 @@ occurrence (created at scheduling for `BIRTHDAY`/`ANNIVERSARY`, at the verified-
 MessageRecipientRelease (due, live Recipient)
    → MessageRelease (created by the Message's first occurrence, then reused)
    → RecipientMessageAccessGrant for THIS Recipient only (first time; permanent, as for every release)
-   → ReleaseNotification (one per occurrence, unique occurrenceId) → email-delivery queue (Brevo)
+   → ReleaseNotification (one per occurrence, unique occurrenceId) → email-delivery queue (Microsoft Graph)
    → releasedAt set, next year's occurrence created
 ```
 

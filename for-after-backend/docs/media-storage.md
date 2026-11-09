@@ -8,7 +8,8 @@
 | **Provider** | **ImageKit** (private files, signed expiring URLs only). Legacy **Backblaze B2** rows stay readable (read/delete only) |
 | **Related** | [Message composition](message-composition.md) · [Memory Vault](memory-vault.md) · [Recipient Portal](recipient-portal.md) |
 
-> ℹ️ Trusted Contacts (Step 14) have **no** media access of any kind, and death-report evidence upload is not built.
+> ℹ️ Trusted Contacts have **no** access to Customer media of any kind. Their only files are their own
+> death-verification evidence (Phase 19A, §2f).
 
 > ℹ️ **Product decision (2026-10-07):** ImageKit replaced Backblaze B2 for every new upload, and replaced the planned
 > Mux / Cloudflare Stream video pipeline. Nothing was deleted from B2.
@@ -16,7 +17,7 @@
 ## 🧭 Contents
 
 1. [Architecture principle](#1-architecture-principle)
-2. [ImageKit media (Phase 12)](#2-imagekit-media-phase-12) · [2a Recipient photo](#2a-recipient-photo-phase-09) · [2b Video](#2b-video-phase-12) · [2c Legacy B2](#2c-legacy-backblaze-b2-read-and-delete-only) · [2d Cleanup](#2d-deletion-and-cleanup) · [2e Malware scanning](#2e-malware-scanning-phase-12b)
+2. [ImageKit media (Phase 12)](#2-imagekit-media-phase-12) · [2a Recipient photo](#2a-recipient-photo-phase-09) · [2b Video](#2b-video-phase-12) · [2c Legacy B2](#2c-legacy-backblaze-b2-read-and-delete-only) · [2d Cleanup](#2d-deletion-and-cleanup) · [2e Malware scanning](#2e-malware-scanning-phase-12b) · [2f Death-verification evidence](#2f-death-verification-evidence-phase-19a)
 3. [File storage (planned)](#3-file-storage-planned)
 4. [MediaFile model (superseded)](#4-mediafile-model-superseded-by-mediaasset-see-docsdatabasemd)
 5. [Storage quotas](#5-storage-quotas)
@@ -107,8 +108,7 @@ Client -> DELETE ...                       (soft delete first, then the ImageKit
   Story → Message copies use `MediaStorage.copyObject` through the shared `MessageSnapshotService` (as Memory → Message).
 - **My Wishes** (`MyWishMediaAsset`, Phase 15B, `docs/my-wishes.md`): the same again, PHOTO/AUDIO/VIDEO, under
   `/for-after/users/<userId>/my-wishes/<responseId>/…`; owner-only, never Recipients, Trusted Contacts or admins; counts
-  toward the one storage quota; in the `MediaCleanup` table list (deletes, FAILED, stale uploads). Adding a file needs the
-  current My Wishes notice acknowledged. Wish → Message copies go through the same `MessageSnapshotService`.
+  toward the one storage quota; in the `MediaCleanup` table list (deletes, FAILED, stale uploads). Wish → Message copies go through the same `MessageSnapshotService`.
 - **Memory Vault** (`MemoryVaultMediaAsset`, `docs/memory-vault.md`): same provider, rules and verification, PHOTO/AUDIO
   only (video was approved for messages only), no DRAFT lock. Deleting a memory soft-deletes its media in the same
   UPDATE and deletes their files.
@@ -258,9 +258,28 @@ Then `CLAMAV_HOST=127.0.0.1` in `.env`. `CLAMD_CONF_<Directive>` is the official
   clean PNG, WAV, 1 MB and 100 MB MP4 → READY (100 MB in ~17 s); bare EICAR → clamd INFECTED; files carrying a local
   test signature → FAILED, file deleted, access 409, not schedulable; clamd unreachable → 503, stays PENDING_UPLOAD.
 
+## 2f. Death-verification evidence (Phase 19A)
+
+Supporting files a reporting Trusted Contact attaches to their death report (policy, routes and access rules:
+[death-verification.md §2A](death-verification.md#2a-supporting-evidence-phase-19a)). Table
+`DeathVerificationEvidence`, with the same storage columns, private ImageKit upload, `checkUpload()` (provider check →
+file signature → ClamAV), signed access URLs and `MediaCleanup` reconciliation as every media table.
+
+- **Scoped allowlist:** `application/pdf`, `image/jpeg`, `image/png` (`EVIDENCE_MIME_TYPES`). PDF is accepted **only**
+  here: message, Memory Vault, My Story/Wishes and Recipient-photo allowlists are unchanged. The PDF signature check
+  requires `%PDF-` at byte 0 (leading bytes, which PDF readers tolerate, are refused).
+- **Key:** `/for-after/users/<ownerUserId>/death-verification/<caseId>/evidence/<evidenceId>.<ext>` (ids only).
+- **Not Customer content:** outside the storage quota sum and the Storage Manager; the Customer cannot list or delete it.
+- **Checked live (2026-10-13):** a synthetic PDF through the real ImageKit adapter (private upload, verify with
+  `application/pdf`, signature, full read, signed URL served identical bytes, unsigned URL `403`, delete) and through
+  local clamd (`CLEAN`).
+
+**Admin view (Step 6).** Admins see these rows' metadata (never files, names, keys or links) on Storage & scans,
+`docs/admin.md` §21, with the same verified/reserved definitions as the quota below.
+
 ## 3. File Storage (planned)
-- **Planned uses**: documents, death certificates, export ZIPs. Same principle: private files, direct upload with
-  server-signed tokens, short-lived signed downloads.
+- **Planned uses**: other documents, export ZIPs. Same principle: private files, direct upload with server-signed
+  tokens, short-lived signed downloads. (Death certificates: built as §2f.)
 
 ## 4. MediaFile Model (superseded by `MediaAsset`, see docs/database.md)
 The original plan's `MediaFile` model (provider, providerAssetId, objectKey, …) was replaced by `MediaAsset`,

@@ -155,13 +155,16 @@ export class MessageReleaseQueue implements OnModuleDestroy {
     occurrences: { id: string; dueAt: Date }[],
     now = new Date(),
   ): Promise<void> {
-    for (const o of occurrences) {
-      await this.ensureOccurrence(messageId, o.id, o.dueAt, now).catch((err) =>
-        this.logger.warn(
-          `release_queue_sync_failed occurrence ${o.id} (code: ${errorCode(err)}); the reconciler will retry`,
+    // In parallel: a Redis outage costs one timeout, not one per Recipient.
+    await Promise.all(
+      occurrences.map((o) =>
+        this.ensureOccurrence(messageId, o.id, o.dueAt, now).catch((err) =>
+          this.logger.warn(
+            `release_queue_sync_failed occurrence ${o.id} (code: ${errorCode(err)}); the reconciler will retry`,
+          ),
         ),
-      );
-    }
+      ),
+    );
   }
 
   private ensureJob(data: ReleaseJobData, scheduledFor: Date, now: Date) {
