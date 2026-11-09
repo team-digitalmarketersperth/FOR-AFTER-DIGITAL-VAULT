@@ -1,4 +1,21 @@
-import type { AuditActorType, AuditEventType, AuditLog, DeathCaseEventType } from '@/lib/api/admin';
+import type {
+  AuditActorType,
+  AuditEventType,
+  AuditLog,
+  DeathCaseEventType,
+  ErrorCategory,
+  ReleaseAssessment,
+  ReleaseEmailStatus,
+  ReleaseHistoryEvent,
+  ReleaseTrigger,
+  SafetyNoticeStatus,
+  SecurityCategory,
+  SecurityEvent,
+  SecurityOutcome,
+  DeletionState,
+  StorageAssetSource,
+  UploadState,
+} from '@/lib/api/admin';
 import type { UserRole, UserStatus } from '@/lib/api/auth';
 
 // Admin portal wording and the few rules the UI mirrors from the API. The API
@@ -46,6 +63,8 @@ export const AUDIT_EVENT_LABEL: Record<AuditEventType, string> = {
   FAILED_JOB_RETRIED: 'Failed job retried',
   PASSWORD_CHANGED: 'Customer changed their password',
   DEAD_LETTER_RETRY_REQUESTED: 'Dead-lettered job retried',
+  IP_BLOCK_CREATED: 'Temporary IP block created',
+  IP_BLOCK_REVOKED: 'Temporary IP block revoked',
 };
 
 export const AUDIT_ACTOR_LABEL: Record<AuditActorType, string> = {
@@ -108,4 +127,216 @@ export const enumParam = <T extends string>(v: Param, values: readonly T[]) =>
 export const keyLabel = (key: string) => {
   const words = key.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase();
   return words.charAt(0).toUpperCase() + words.slice(1);
+};
+
+// ─── Releases (docs/admin.md §16) ───────────────────────────────────────────
+
+/** Operational labels (admin wording, not the Customer's). */
+export const TRIGGER_LABEL: Record<ReleaseTrigger, string> = {
+  NOW: 'Send now',
+  FIXED_DATE: 'Fixed date',
+  CUSTOM_EVENT: 'Custom event',
+  BIRTHDAY: 'Birthday (yearly)',
+  ANNIVERSARY: 'Anniversary (yearly)',
+  ON_DEATH: 'On verified death',
+  AFTER_DEATH: 'After verified death',
+  ANNUAL_AFTER_DEATH: 'Yearly after verified death',
+};
+
+/** The API's current assessment → label, tone and what it means. Never persisted. */
+export const ASSESSMENT: Record<
+  ReleaseAssessment,
+  { label: string; tone: 'neutral' | 'open' | 'done' | 'warning' | 'danger'; description: string }
+> = {
+  released: { label: 'Released', tone: 'done', description: 'A release is recorded for this message.' },
+  cancelled: { label: 'Cancelled', tone: 'neutral', description: 'The message is cancelled; nothing will be released.' },
+  past_due: {
+    label: 'Past due, not yet released',
+    tone: 'warning',
+    description:
+      'Due by its schedule but no release is recorded yet. The worker normally releases within moments; one it refuses (for example no remaining recipients) stays here. The reason is only in the worker logs.',
+  },
+  scheduled: { label: 'Scheduled', tone: 'open', description: 'Due at a future time.' },
+  recurring: {
+    label: 'Recurring',
+    tone: 'open',
+    description: 'Released per recipient each year; the next occurrence is not due yet.',
+  },
+  awaiting_death_verification: {
+    label: 'Waiting for a verified death',
+    tone: 'neutral',
+    description: 'Releases only after a death is verified; no date exists until then.',
+  },
+  no_schedule: {
+    label: 'Scheduled, no schedule found',
+    tone: 'danger',
+    description: 'The message is marked scheduled but has no schedule row, so the worker cannot release it.',
+  },
+};
+
+export const HISTORY_LABEL: Record<ReleaseHistoryEvent, string> = {
+  schedule_saved: 'Current schedule saved',
+  schedule_changed: 'Current schedule last changed',
+  death_trigger_activated: 'Death trigger activated (death verified)',
+  released: 'Release recorded',
+  occurrence_released: 'Yearly occurrence released',
+  job_dead_lettered: 'Background job failed for good (dead letter)',
+};
+
+// ─── Deliveries (docs/admin.md §17) ─────────────────────────────────────────
+
+type StatusInfo = { label: string; tone: 'neutral' | 'open' | 'done' | 'warning' | 'danger'; description: string };
+
+/** Never "Delivered": no provider confirms delivery (no webhooks). */
+export const RELEASE_EMAIL_STATUS: Record<ReleaseEmailStatus, StatusInfo> = {
+  queued: {
+    label: 'Waiting to send',
+    tone: 'neutral',
+    description: 'Recorded; no attempt has finished yet (one may be in progress).',
+  },
+  retrying: {
+    label: 'Retrying after a failed attempt',
+    tone: 'warning',
+    description: 'At least one attempt failed; the queue retries it automatically.',
+  },
+  provider_accepted: {
+    label: 'Accepted by the email provider',
+    tone: 'done',
+    description: 'The provider accepted the email. That is not confirmation it reached the inbox.',
+  },
+  failed: {
+    label: 'Failed for good',
+    tone: 'danger',
+    description: 'Retries ran out or the error cannot be retried. No more attempts are made.',
+  },
+};
+
+export const SAFETY_NOTICE_STATUS: Record<SafetyNoticeStatus, StatusInfo> = {
+  queued: { label: 'Waiting to send', tone: 'neutral', description: 'No attempt has been recorded yet.' },
+  attempted: {
+    label: 'Attempted, not accepted yet',
+    tone: 'warning',
+    description:
+      'At least one attempt started but none was accepted. It may be in progress, or it failed and is retried while the case is pending. Failure reasons are not stored.',
+  },
+  provider_accepted: {
+    label: 'Accepted by the email provider',
+    tone: 'done',
+    description:
+      'The provider accepted the notice and the safeguard period started. That is not confirmation it reached the inbox.',
+  },
+  not_sent_case_closed: {
+    label: 'Not sent (case closed)',
+    tone: 'neutral',
+    description: 'The case left pending verification before a notice was accepted, so none will be sent.',
+  },
+};
+
+export const ERROR_CATEGORY_LABEL: Record<ErrorCategory, string> = {
+  timeout: 'Timed out (outcome uncertain)',
+  network_error: 'Network error (outcome uncertain)',
+  token_unavailable: 'Provider sign-in unavailable',
+  auth_rejected: 'Provider sign-in rejected',
+  unauthorized: 'Unauthorised at the provider',
+  rate_limit_exceeded: 'Rate limited by the provider',
+  mailbox_not_found: 'Sending mailbox not found',
+  email_disabled: 'Email sending disabled',
+  unknown_error: 'Unknown error',
+  forbidden: 'Refused by the provider',
+  provider_error: 'Other provider error',
+};
+
+// ─── Security activity (docs/admin.md §20) ─────────────────────────────────
+// Factual labels for recorded events; none of them claims an attack.
+
+export const SECURITY_CATEGORY_LABEL: Record<SecurityCategory, string> = {
+  admin_sign_in: 'Admin sign-in and sign-out',
+  mfa_failure: 'Admin two-factor failed',
+  recovery_code: 'Admin recovery code used',
+  mfa_setup: 'Admin two-factor set up',
+  account_status: 'Account suspended or reactivated',
+  account_credentials: 'Password or email changed',
+  ip_controls: 'Temporary IP block created or revoked',
+};
+
+export const SECURITY_OUTCOME: Record<SecurityOutcome, StatusInfo> = {
+  failed: { label: 'Failed', tone: 'warning', description: 'The step was refused. One failure is not evidence of an attack.' },
+  completed: { label: 'Completed', tone: 'neutral', description: 'The recorded action or sign-in step completed.' },
+};
+
+/** Includes the account events the generic audit list does not label yet. */
+export const SECURITY_EVENT_LABEL: Record<string, string> = {
+  ...AUDIT_EVENT_LABEL,
+  USER_SUSPENDED: 'Account suspended',
+  USER_REACTIVATED: 'Account reactivated',
+  PASSWORD_RESET_COMPLETED: 'Password reset completed',
+  EMAIL_CHANGE_REQUESTED: 'Email change requested',
+  EMAIL_CHANGED: 'Email changed',
+};
+
+const MFA_METHOD_LABEL = { totp: 'Authenticator code', recovery: 'Recovery code', challenge: 'Sign-in attempt' } as const;
+const MFA_REASON_LABEL: Record<string, string> = {
+  wrong_code: 'Code not accepted',
+  replay: 'Code already used',
+  already_used: 'Sign-in step already completed',
+  attempts_exhausted: 'Attempt limit reached',
+};
+
+/** A two-factor failure's recorded reason, in words; never raw stored text. */
+export function securityReason(r: SecurityEvent['reason']) {
+  if (!r) return null;
+  const parts = [
+    r.method ? MFA_METHOD_LABEL[r.method] : null,
+    r.code ? (MFA_REASON_LABEL[r.code] ?? null) : 'Reason not recorded',
+    r.challengeInvalidated ? 'password step must be repeated' : null,
+  ].filter(Boolean);
+  return parts.join(' · ');
+}
+
+// ─── Storage & scans (docs/admin.md §21) ───────────────────────────────────
+// Stored states only; no scan result is stored per file, so none is shown.
+
+export const STORAGE_SOURCE_LABEL: Record<StorageAssetSource, string> = {
+  MESSAGE: 'Messages',
+  MEMORY_VAULT: 'Memory Vault',
+  MY_STORY: 'My Story',
+  MY_WISHES: 'My Wishes',
+  RECIPIENT_PHOTO: 'Recipient photos',
+  DEATH_EVIDENCE: 'Death verification evidence',
+};
+
+export const UPLOAD_STATE: Record<UploadState, StatusInfo> = {
+  pending: {
+    label: 'Awaiting upload or checks',
+    tone: 'open',
+    description:
+      'Not yet uploaded, or its checks have not completed (including when the scanner could not finish). Inaccessible until verified; retired after 24 hours.',
+  },
+  ready: {
+    label: 'Verified',
+    tone: 'done',
+    description:
+      'Passed the upload checks in force when it was completed: exact size, file type and signature, and (since 8 October 2026) a malware scan. Not a guarantee of present-day safety.',
+  },
+  failed: {
+    label: 'Failed verification',
+    tone: 'warning',
+    description:
+      'Refused at upload: a type mismatch or a detected threat. Which one is not recorded. Never accessible; its file is removed.',
+  },
+};
+
+export const DELETION_STATE: Record<DeletionState, StatusInfo> = {
+  active: { label: 'Not marked for removal', tone: 'neutral', description: 'The record is live.' },
+  pending: {
+    label: 'Removal pending',
+    tone: 'open',
+    description:
+      'Deleted or failed; the stored file has not yet been confirmed removed. The cleanup job retries automatically (legacy B2 files only on their owner’s request).',
+  },
+  confirmed: {
+    label: 'Removal recorded',
+    tone: 'neutral',
+    description: 'The storage provider accepted the delete (or had no file). Provider billing is not checked.',
+  },
 };

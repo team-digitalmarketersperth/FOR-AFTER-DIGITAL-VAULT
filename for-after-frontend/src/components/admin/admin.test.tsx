@@ -3,7 +3,7 @@ import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ReactElement } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import type { AdminMe, AdminUserDetail, AuditLog, DeathCaseDetail } from '@/lib/api/admin';
+import type { AdminDashboard, AdminMe, AdminUserDetail, AuditLog, DeathCaseDetail } from '@/lib/api/admin';
 import { adminKeys, makeQueryClient, queryKeys, resetPrivateCache } from '@/lib/query/query-client';
 import { customer, json, routeFetch, router } from '@/test/utils';
 import { AdminLoginForm, MfaSetup, MfaVerify } from './admin-auth';
@@ -258,7 +258,9 @@ describe('Admin gate', () => {
       expect(screen.queryByText(label)).not.toBeInTheDocument();
     }
     expect(screen.getByText(/admin@example.test/)).toBeInTheDocument();
-    expect(screen.getAllByText(/Admin$/).length).toBeGreaterThan(0);
+    // The role is shown in the account menu (top right).
+    await userEvent.click(screen.getByRole('button', { name: 'Account menu for Ada Admin' }));
+    expect(await screen.findByText('Admin', { selector: 'p' })).toBeInTheDocument();
   });
 
   it('a server-ended session (idle timeout) clears admin data and returns to sign-in with a reason', async () => {
@@ -317,23 +319,137 @@ describe('Admin gate', () => {
 
 // ─── Overview ───────────────────────────────────────────────────────────────
 
+const DASHBOARD: AdminDashboard = {
+  generatedAt: '2026-10-30T02:00:00.000Z',
+  customers: { total: 13, active: 11, suspended: 1, passed: 1, deleted: 0, newLast7Days: 2 },
+  deathVerification: { pending: 0, safeguardActive: 1, readyForReview: 2 },
+  releases: { pastDue: 1 },
+  releaseEmails: { retrying: 0, failed: 3 },
+  queues: { waiting: 4, active: 1, delayed: 6, failed: 0 },
+  deadLetters: { open: 0 },
+  security: { adminMfaFailuresLast7Days: 2 },
+  services: { database: 'ok', redis: 'ok', worker: 'missing', malwareScanner: 'ok' },
+};
+const panel = (name: string) => screen.getByRole('heading', { name }).closest('section')!;
+// Existing admin routes only (with the filters their pages read).
+const KNOWN = /^\/admin\/(users\?role=CUSTOMER(&status=[A-Z]+)?|death-verifications\?status=[A-Z_]+|system\/queues|system\/health|security\?category=mfa_failure&from=\d{4}-\d{2}-\d{2}|releases\?pastDue=true|deliveries\?status=(retrying|failed))$/;
+
 describe('Admin overview', () => {
-  it('shows only the API’s numbers, attention first, and an unavailable queue count as such', async () => {
-    routeFetch({
-      'GET /admin/dashboard': json(200, {
-        users: { total: 13, active: 11, suspended: 1, passed: 1, deleted: 0 },
-        deathVerification: { pending: 0, safeguardActive: 1, readyForReview: 2 },
-        queues: { failed: null },
-      }),
-    });
+  it('shows the API’s numbers: customer filters, attention first (non-zero only), unlinked counts with no page', async () => {
+    routeFetch({ 'GET /admin/dashboard': json(200, DASHBOARD) });
     renderAdmin(<AdminOverview />);
-    const attention = (await screen.findByRole('heading', { name: 'Needs attention' })).closest('section')!;
+    const attention = (await screen.findByRole('heading', { name: 'Attention required' })).closest('section')!;
     expect(within(attention).getByRole('link', { name: /2.*ready for review/i })).toHaveAttribute(
       'href',
       '/admin/death-verifications?status=READY_FOR_REVIEW',
     );
-    expect(within(attention).getByText('Queue data is unavailable right now.')).toBeInTheDocument();
-    expect(screen.queryByText(/revenue|subscription|growth/i)).not.toBeInTheDocument();
+    // Past-due releases and failed emails open their pages with the same filters.
+    expect(within(attention).getByRole('link', { name: /1.*past due, not yet released/i })).toHaveAttribute(
+      'href',
+      '/admin/releases?pastDue=true',
+    );
+    expect(within(attention).getByRole('link', { name: /3.*failed for good/i })).toHaveAttribute(
+      'href',
+      '/admin/deliveries?status=failed',
+    );
+    expect(within(attention).getAllByRole('link')).toHaveLength(3);
+    // Zero counts are not alerts.
+    expect(within(attention).queryByText('Failed background jobs')).not.toBeInTheDocument();
+    expect(within(attention).queryByText(/Nothing in these counts/)).not.toBeInTheDocument();
+
+    const customers = panel('Customer accounts');
+    expect(within(customers).getByRole('link', { name: /11\s*Active/ })).toHaveAttribute(
+      'href',
+      '/admin/users?role=CUSTOMER&status=ACTIVE',
+    );
+    // No date filter exists on the users page: the 7-day count is not a link.
+    expect(within(customers).getByText('New in the last 7 days').closest('a')).toBeNull();
+    expect(within(customers).getByText('2')).toBeInTheDocument();
+    const releases = panel('Releases and release emails');
+    expect(within(releases).getAllByRole('link').map((a) => a.getAttribute('href'))).toEqual([
+      '/admin/releases?pastDue=true',
+      '/admin/deliveries?status=retrying',
+      '/admin/deliveries?status=failed',
+    ]);
+
+    // Compact, shared definitions: each service's own wording, no blanket "Healthy".
+    const services = panel('System status');
+    expect(within(services).getByText('Monitoring incomplete')).toBeInTheDocument();
+    expect(within(services).getAllByText('Responding')).toHaveLength(2);
+    expect(within(services).getAllByText('Reachable')).toHaveLength(2);
+    expect(within(services).getByText('No heartbeat seen')).toBeInTheDocument();
+    expect(within(services).queryByText(/Healthy|All systems operational/)).not.toBeInTheDocument();
+    expect(within(services).getByRole('link', { name: 'View system health' })).toHaveAttribute('href', '/admin/system/health');
+    expect(screen.getByText(/^Last updated /)).toHaveTextContent(/UTC/);
+    for (const link of screen.getAllByRole('link')) expect(link.getAttribute('href')).toMatch(KNOWN);
+    expect(screen.queryByText(/revenue|subscription|growth|billing/i)).not.toBeInTheDocument();
+  });
+
+  it('a section the API could not read is "Unavailable", never 0, and never "all clear"', async () => {
+    routeFetch({
+      'GET /admin/dashboard': json(200, {
+        ...DASHBOARD,
+        queues: null,
+        releaseEmails: null,
+        security: null,
+        releases: { ...DASHBOARD.releases, pastDue: 0 },
+        deathVerification: { pending: 0, safeguardActive: 0, readyForReview: 0 },
+        services: { ...DASHBOARD.services, redis: 'failed' },
+      }),
+    });
+    renderAdmin(<AdminOverview />);
+    const jobs = await screen.findByRole('heading', { name: 'Background jobs' });
+    const section = jobs.closest('section')!;
+    expect(within(section).getAllByText('Unavailable')).toHaveLength(4);
+    // Dead letters come from PostgreSQL: still a real 0 (and linked).
+    expect(within(section).getByRole('link', { name: /0\s*Open dead letters/ })).toBeInTheDocument();
+    expect(within(section).queryByRole('link', { name: /Failed/ })).not.toBeInTheDocument();
+    // Security counts that could not be read: Unavailable, unlinked, never 0.
+    const security = panel('Security activity');
+    expect(within(security).getByText('Unavailable')).toBeInTheDocument();
+    expect(within(security).queryByRole('link')).not.toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('Health check failed: Redis.');
+    expect(screen.getByText(/Couldn’t load release emails, background jobs/)).toBeInTheDocument();
+    expect(screen.queryByText(/Nothing in these counts/)).not.toBeInTheDocument();
+    expect(within(panel('System status')).getByText('Check failed')).toBeInTheDocument();
+    expect(within(panel('System status')).getByText('Issues detected')).toBeInTheDocument();
+  });
+
+  it('says nothing needs attention only when every count loaded and is zero', async () => {
+    routeFetch({
+      'GET /admin/dashboard': json(200, {
+        ...DASHBOARD,
+        deathVerification: { pending: 0, safeguardActive: 0, readyForReview: 0 },
+        releases: { pastDue: 0 },
+        releaseEmails: { retrying: 0, failed: 0 },
+      }),
+    });
+    renderAdmin(<AdminOverview />);
+    expect(await screen.findByText('Nothing in these counts needs attention right now.')).toBeInTheDocument();
+  });
+
+  it('shows loading, then the error state when the whole request fails', async () => {
+    routeFetch({ 'GET /admin/dashboard': json(503, { message: 'Service unavailable.' }) });
+    renderAdmin(<AdminOverview />);
+    expect(screen.getByRole('status')).toHaveTextContent(/Loading the overview/);
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
+    expect(screen.queryByRole('heading', { name: 'Attention required' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Nothing in these counts/)).not.toBeInTheDocument();
+  });
+
+  it('Refresh asks again once (button disabled meanwhile) and shows the new time', async () => {
+    let n = 0;
+    const api = routeFetch({
+      'GET /admin/dashboard': () =>
+        json(200, { ...DASHBOARD, generatedAt: n++ ? '2026-10-30T03:30:00.000Z' : DASHBOARD.generatedAt }),
+    });
+    renderAdmin(<AdminOverview />);
+    const refresh = await screen.findByRole('button', { name: 'Refresh' });
+    const first = screen.getByText(/^Last updated /).textContent;
+    await userEvent.click(refresh);
+    await waitFor(() => expect(screen.getByText(/^Last updated /).textContent).not.toBe(first));
+    expect(api.called('GET', '/admin/dashboard')).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'Refresh' })).toBeEnabled();
   });
 });
 

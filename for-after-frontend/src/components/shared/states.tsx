@@ -84,7 +84,7 @@ type EmptyStateProps = {
   action?: ReactNode;
   className?: string;
   /** h1 when this state is the whole page (no PageHeader above it). */
-  heading?: 'h1' | 'h2';
+  heading?: 'h1' | 'h2' | 'h3';
 };
 
 export function EmptyState({

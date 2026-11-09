@@ -1,12 +1,13 @@
 'use client';
 
-import { Gauge, Layers, LogOut, Menu, ScrollText, ShieldCheck, Users, type LucideIcon } from 'lucide-react';
+import { Activity, CalendarClock, ChevronDown, CreditCard, Gauge, HardDrive, KeyRound, Layers, LifeBuoy, LogOut, Mail, Megaphone, Menu, ScrollText, ShieldAlert, ShieldCheck, Sparkles, UserRound, Users, type LucideIcon } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
 import { BrandLogo } from '@/components/layout/brand-logo';
 import { ErrorState, PageLoader, Spinner } from '@/components/shared/states';
 import { Button } from '@/components/ui/button';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { useAdminLogout, useAdminSession } from '@/hooks/use-admin';
 import { ADMIN_ROLES, type AdminMe } from '@/lib/api/admin';
@@ -15,11 +16,14 @@ import { cn } from '@/lib/utils';
 
 export const ADMIN_HOME = '/admin';
 export const ADMIN_LOGIN = '/admin/login';
+/** The signed-in admin's own settings: reached from the account menu (top right), never the sidebar. */
+export const ADMIN_ACCOUNT = '/admin/account';
 
-type Item = { label: string; href: string; icon: LucideIcon };
+/** superAdminOnly: hidden for other admins (the API refuses them anyway). */
+type Item = { label: string; href: string; icon: LucideIcon; superAdminOnly?: true };
 
 // Operational areas only. No Customer vault sections, and nothing without a
-// real backend API (no billing, subscriptions or deliveries yet).
+// real backend API.
 const NAV: { label?: string; items: Item[] }[] = [
   { items: [{ label: 'Overview', href: ADMIN_HOME, icon: Gauge }] },
   {
@@ -27,13 +31,23 @@ const NAV: { label?: string; items: Item[] }[] = [
     items: [
       { label: 'Users', href: '/admin/users', icon: Users },
       { label: 'Death verification', href: '/admin/death-verifications', icon: ShieldCheck },
+      { label: 'Support', href: '/admin/support', icon: LifeBuoy },
+      { label: 'Subscriptions & payments', href: '/admin/billing', icon: CreditCard, superAdminOnly: true },
     ],
   },
   {
     label: 'Operations',
     items: [
+      { label: 'Releases', href: '/admin/releases', icon: CalendarClock },
+      { label: 'Deliveries', href: '/admin/deliveries', icon: Mail },
+      { label: 'Notification centre', href: '/admin/announcements', icon: Megaphone, superAdminOnly: true },
+      { label: 'Security activity', href: '/admin/security', icon: ShieldAlert },
+      { label: 'Admin access', href: '/admin/access', icon: KeyRound },
       { label: 'Audit logs', href: '/admin/audit-logs', icon: ScrollText },
+      { label: 'Storage & scans', href: '/admin/storage', icon: HardDrive },
       { label: 'Queues', href: '/admin/system/queues', icon: Layers },
+      { label: 'System health', href: '/admin/system/health', icon: Activity },
+      { label: 'AI operations', href: '/admin/system/ai', icon: Sparkles },
     ],
   },
 ];
@@ -173,14 +187,8 @@ export function AdminShell({ me, children }: { me: AdminMe; children: ReactNode 
               </SheetContent>
             </Sheet>
             <PortalChip />
-            <div className="ml-auto flex min-w-0 items-center gap-3 text-right">
-              <div className="min-w-0 leading-tight">
-                <p className="truncate text-sm font-semibold">{personName(me) ?? me.email}</p>
-                <p className="truncate text-xs text-foreground-muted">
-                  <span className="hidden sm:inline">{me.email} · </span>
-                  {ROLE_LABEL[me.role]}
-                </p>
-              </div>
+            <div className="ml-auto flex min-w-0 items-center gap-3">
+              <AccountMenu me={me} />
               <div className="hidden sm:block lg:hidden">
                 <SignOut compact />
               </div>
@@ -197,6 +205,7 @@ export function AdminShell({ me, children }: { me: AdminMe; children: ReactNode 
 
 function SideNav({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
+  const superAdmin = useAdminSession().data?.role === 'SUPER_ADMIN';
   const isActive = (href: string) =>
     href === ADMIN_HOME ? pathname === href : pathname === href || pathname.startsWith(`${href}/`);
   return (
@@ -205,7 +214,7 @@ function SideNav({ onNavigate }: { onNavigate?: () => void }) {
         <div key={group.label ?? i} className="mb-6">
           {group.label && <p className="eyebrow mb-2 px-3">{group.label}</p>}
           <ul className="grid gap-0.5">
-            {group.items.map(({ label, href, icon: Icon }) => (
+            {group.items.filter((item) => superAdmin || !item.superAdminOnly).map(({ label, href, icon: Icon }) => (
               <li key={href}>
                 <Link
                   href={href}
@@ -249,5 +258,64 @@ function SignOut({ compact }: { compact?: boolean }) {
         </p>
       )}
     </div>
+  );
+}
+
+const adminInitials = (me: Pick<AdminMe, 'firstName' | 'lastName' | 'email'>) =>
+  (me.firstName || me.lastName ? `${me.firstName?.charAt(0) ?? ''}${me.lastName?.charAt(0) ?? ''}` : me.email.charAt(0)).toUpperCase();
+
+export function AdminAvatar({ me, className }: { me: Pick<AdminMe, 'firstName' | 'lastName' | 'email'>; className?: string }) {
+  return (
+    <span
+      aria-hidden
+      className={cn('flex shrink-0 items-center justify-center rounded-full bg-primary font-heading text-primary-foreground', className)}
+    >
+      {adminInitials(me)}
+    </span>
+  );
+}
+
+/**
+ * Top-right account menu (Radix: keyboard, arrow keys, Escape, outside click and
+ * focus return). Identity and role, and the way to the admin's own Account
+ * settings. Sign out stays where it was (sidebar, mobile sheet, tablet header).
+ */
+function AccountMenu({ me }: { me: AdminMe }) {
+  const name = personName(me) ?? me.email;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        aria-label={`Account menu for ${name}`}
+        className="group flex min-w-0 items-center gap-3 rounded-full border border-border bg-surface p-1.5 outline-none transition-colors hover:border-border-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-solid focus-visible:outline-ring data-[state=open]:border-border-strong sm:pr-4"
+      >
+        <AdminAvatar me={me} className="size-9 text-sm" />
+        <span className="hidden min-w-0 max-w-56 text-left leading-tight sm:block">
+          <span className="block truncate text-sm font-semibold">{name}</span>
+          <span className="block truncate text-xs text-foreground-muted">{me.email}</span>
+        </span>
+        <ChevronDown
+          aria-hidden
+          strokeWidth={1.5}
+          className="mr-1 size-4 shrink-0 text-foreground-muted transition-transform group-data-[state=open]:rotate-180 motion-reduce:transition-none sm:mr-0"
+        />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" sideOffset={10} className="w-80 max-w-[calc(100vw-2rem)] rounded-xl p-2 shadow-menu ring-border">
+        <div className="flex items-center gap-4 rounded-lg bg-primary-soft p-4">
+          <AdminAvatar me={me} className="size-12 text-lg" />
+          <div className="min-w-0">
+            <p className="font-semibold break-words">{name}</p>
+            <p className="text-sm break-all text-foreground-secondary">{me.email}</p>
+            <p className="mt-1 text-xs text-foreground-muted">{ROLE_LABEL[me.role]}</p>
+          </div>
+        </div>
+        <DropdownMenuSeparator className="mx-1 my-2" />
+        <DropdownMenuItem asChild className="min-h-11 gap-3 rounded-md px-3 text-[15px] font-medium text-foreground-secondary">
+          <Link href={ADMIN_ACCOUNT}>
+            <UserRound aria-hidden strokeWidth={1.5} className="size-[18px]" />
+            Account settings
+          </Link>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
