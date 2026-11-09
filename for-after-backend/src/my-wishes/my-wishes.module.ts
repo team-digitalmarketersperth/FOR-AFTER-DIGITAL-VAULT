@@ -11,7 +11,9 @@ import {
 import {
   MyWishesController,
   MyWishesDisclaimerController,
+  MyWishSongsController,
 } from './my-wishes.controller.js';
+import { MyWishSongsService } from './my-wish-songs.service.js';
 import { MyWishesService } from './my-wishes.service.js';
 
 @Module({
@@ -19,13 +21,18 @@ import { MyWishesService } from './my-wishes.service.js';
   // shared storage, scanner, quota and cleanup (Phase 15B media);
   // MessagesModule the snapshot service (Wish → Message).
   imports: [UsersModule, MediaModule, MessagesModule],
-  controllers: [MyWishesController, MyWishesDisclaimerController],
+  controllers: [
+    MyWishesController,
+    MyWishesDisclaimerController,
+    MyWishSongsController,
+  ],
   providers: [
     MyWishesService,
     MyWishesDisclaimer,
     MyWishesDisclaimerService,
     MyWishesMediaService,
     WishToMessageService,
+    MyWishSongsService,
   ],
 })
 export class MyWishesModule {}

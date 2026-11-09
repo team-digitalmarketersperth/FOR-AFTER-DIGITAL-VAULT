@@ -1,3 +1,4 @@
+import { RequiresPlan } from '../billing/billing-access.js';
 import {
   BadRequestException,
   Body,
@@ -8,6 +9,7 @@ import {
   Injectable,
   NotFoundException,
   Param,
+  Patch,
   ParseUUIDPipe,
   PipeTransform,
   Post,
@@ -47,6 +49,12 @@ import {
 import { AUTH } from '../config/swagger.js';
 import { AcknowledgeDisclaimerDto } from './dto/acknowledge-disclaimer.dto.js';
 import {
+  CreateMyWishSongDto,
+  ReorderMyWishSongsDto,
+  UpdateMyWishSongDto,
+} from './dto/save-my-wish-song.dto.js';
+import { MyWishSongsService, type WishSong } from './my-wish-songs.service.js';
+import {
   type DisclaimerStatus,
   MyWishesDisclaimerService,
 } from './my-wishes-disclaimer.service.js';
@@ -57,6 +65,7 @@ import {
 @ApiCookieAuth(AUTH.customer)
 @Controller('my-wishes/disclaimer')
 @UseGuards(SessionAuthGuard, CustomerGuard)
+@RequiresPlan()
 export class MyWishesDisclaimerController {
   constructor(private readonly disclaimer: MyWishesDisclaimerService) {}
 
@@ -97,6 +106,7 @@ export class WishPromptKeyPipe implements PipeTransform<string, MyWishPrompt> {
 @ApiCookieAuth(AUTH.customer)
 @Controller('my-wishes/prompts')
 @UseGuards(SessionAuthGuard, CustomerGuard)
+@RequiresPlan()
 export class MyWishesController {
   constructor(
     private readonly wishes: MyWishesService,
@@ -207,5 +217,56 @@ export class MyWishesController {
     @Param('mediaAssetId', ParseUUIDPipe) id: string,
   ): Promise<void> {
     return this.media.remove(user.id, prompt, id);
+  }
+}
+
+// Funeral songs (My Wishes). Owner-only like every wish: the owner is always
+// the session user; a song id that is not theirs is 404.
+@ApiTags('My Wishes')
+@ApiCookieAuth(AUTH.customer)
+@Controller('my-wishes/songs')
+@UseGuards(SessionAuthGuard, CustomerGuard)
+@RequiresPlan()
+export class MyWishSongsController {
+  constructor(private readonly songs: MyWishSongsService) {}
+
+  @Get()
+  findAll(@CurrentUser() user: SafeUser): Promise<WishSong[]> {
+    return this.songs.list(user.id);
+  }
+
+  @Post()
+  create(
+    @CurrentUser() user: SafeUser,
+    @Body() dto: CreateMyWishSongDto,
+  ): Promise<WishSong> {
+    return this.songs.create(user.id, dto);
+  }
+
+  // Declared before :id so "order" is never read as an id.
+  @Put('order')
+  reorder(
+    @CurrentUser() user: SafeUser,
+    @Body() dto: ReorderMyWishSongsDto,
+  ): Promise<WishSong[]> {
+    return this.songs.reorder(user.id, dto.songIds);
+  }
+
+  @Patch(':id')
+  update(
+    @CurrentUser() user: SafeUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateMyWishSongDto,
+  ): Promise<WishSong> {
+    return this.songs.update(user.id, id, dto);
+  }
+
+  @Delete(':id')
+  @HttpCode(204)
+  remove(
+    @CurrentUser() user: SafeUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<void> {
+    return this.songs.remove(user.id, id);
   }
 }
