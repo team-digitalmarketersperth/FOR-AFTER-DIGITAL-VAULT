@@ -95,6 +95,11 @@ export function FormError({ error, title }: { error: ApiError | null; title?: st
       {title && <AlertTitle>{title}</AlertTitle>}
       <AlertDescription>
         <p>{error.message}</p>
+        {error.kind === 'plan_required' && (
+          <Link href="/settings/plan" className="underline underline-offset-2">
+            Choose a plan
+          </Link>
+        )}
         {error.details.length > 0 && (
           <ul className="mt-1 list-disc pl-4">
             {error.details.map((detail) => (

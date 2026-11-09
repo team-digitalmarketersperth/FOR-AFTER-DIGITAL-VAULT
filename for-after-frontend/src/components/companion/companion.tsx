@@ -193,7 +193,7 @@ const WRITES: AssistantAction[] = ['ask', 'draft', 'improve', 'shorten', 'expand
 function errorText(error: unknown) {
   if (isApiError(error) && error.status === 503) return 'The AI companion is unavailable right now. Please try again later.';
   if (isApiError(error) && error.status === 429) return 'The AI companion is busy, or you’ve reached the hourly limit. Please try again later.';
-  if (isApiError(error) && error.kind === 'validation') return error.message;
+  if (isApiError(error) && (error.kind === 'validation' || error.kind === 'plan_required')) return error.message;
   return 'The AI companion is temporarily unavailable. Please try again.';
 }
 
