@@ -7,6 +7,7 @@ import {
   GRAPH_SCOPE,
   graphSendMailUrl,
   MicrosoftGraphEmailProvider,
+  retryAfterMs,
   sanitizeGraphMessage,
   type GraphTokenSource,
 } from './microsoft-email-provider.js';
@@ -162,7 +163,17 @@ describe('MicrosoftGraphEmailProvider', () => {
     expect(out).not.toContain('sofia@forafter.test');
     const retryAfter = (headers as Record<string, string>)['retry-after'];
     if (retryAfter) expect(out).toContain(`retry-after: ${retryAfter}`);
+    // Only throttling hands Retry-After to the caller (Step 4 broadcasts pause on it).
+    expect((err as EmailSendError).retryAfterMs).toBe(status === 429 ? 17_000 : undefined);
     logs.forEach((l) => l.mockRestore());
+  });
+
+  it('retryAfterMs: seconds or an HTTP date, capped at one hour; junk or past → undefined', () => {
+    const now = Date.parse('2026-11-03T00:00:00Z');
+    expect(retryAfterMs('30', now)).toBe(30_000);
+    expect(retryAfterMs('Tue, 03 Nov 2026 00:01:00 GMT', now)).toBe(60_000);
+    expect(retryAfterMs('999999', now)).toBe(3_600_000);
+    for (const v of [null, '', 'soon', '0', 'Mon, 02 Nov 2026 00:00:00 GMT']) expect(retryAfterMs(v, now)).toBeUndefined();
   });
 
   it("403: the log carries Graph's sanitized message, request id, client request id and date; the error keeps only the code", async () => {

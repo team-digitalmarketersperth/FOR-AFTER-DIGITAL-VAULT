@@ -105,7 +105,7 @@ export class MicrosoftGraphEmailProvider extends EmailProvider {
         return { providerMessageId: requestId };
       }
       const body = (await res.json().catch(() => null)) as GraphErrorBody | null;
-      throw Object.assign(graphError(res.status, body?.error?.code), {
+      throw Object.assign(graphError(res.status, body?.error?.code, res.headers.get('retry-after')), {
         diagnostics: graphDiagnostics(res, body, clientRequestId),
       });
     } catch (err) {
@@ -196,11 +196,29 @@ const graphDiagnostics = (
   return parts.join(', ');
 };
 
+/** Retry-After in seconds or as an HTTP date; capped at one hour. */
+export const retryAfterMs = (value: string | null, now = Date.now()) => {
+  if (!value) return undefined;
+  const ms = /^\d+$/.test(value.trim())
+    ? Number(value) * 1000
+    : Date.parse(value) - now;
+  return Number.isFinite(ms) && ms > 0 ? Math.min(ms, 3_600_000) : undefined;
+};
+
 /** Status + Graph's short error code only; the message text is never kept. */
-const graphError = (status: number, code: unknown): EmailSendError => {
+const graphError = (
+  status: number,
+  code: unknown,
+  retryAfter: string | null = null,
+): EmailSendError => {
   const safe =
     typeof code === 'string' && GRAPH_CODE.test(code) ? code : `http_${status}`;
-  if (status === 429) return new EmailSendError('rate_limit_exceeded', true);
+  if (status === 429)
+    return new EmailSendError(
+      'rate_limit_exceeded',
+      true,
+      retryAfterMs(retryAfter),
+    );
   if (status >= 500) return new EmailSendError(safe, true);
   // An expired or revoked token: MSAL fetches a new one once the cached one lapses.
   if (status === 401) return new EmailSendError('unauthorized', true);

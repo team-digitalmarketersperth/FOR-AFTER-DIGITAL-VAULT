@@ -36,6 +36,11 @@ const RELEASE_WORKER_SUITES = [
   'test/worker-process.e2e-spec.ts',
   // EMAIL_PROVIDER=microsoft through AppModule + WorkerModule (stubbed Graph).
   'test/microsoft-email-wiring.e2e-spec.ts',
+  // Notification centre broadcasts: one active broadcast run per database (by
+  // design), so these two must never run at the same time.
+  'test/announcement-broadcasts.e2e-spec.ts',
+  'test/announcement-workflow.e2e-spec.ts',
+  'test/announcement-pilot.e2e-spec.ts',
 ];
 
 export default defineConfig({

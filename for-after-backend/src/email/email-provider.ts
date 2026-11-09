@@ -12,10 +12,15 @@ export type EmailKind =
   | 'death-safety'
   | 'verify-email'
   | 'reset-password'
+  | 'admin-invitation'
   | 'change-email'
   | 'email-changed'
   | 'trusted-contact-invitation'
   | 'ops-alert'
+  // Notification centre Step 2: a SUPER_ADMIN's test of a saved announcement, to themselves only.
+  | 'announcement-test'
+  // Step 4: one Customer's copy of a confirmed broadcast (one recipient per email).
+  | 'announcement'
   // `npm run email:send-test` only (src/email/send-test-email.ts).
   | 'provider-test';
 
@@ -41,6 +46,8 @@ export class EmailSendError extends Error {
   constructor(
     readonly code: string,
     readonly retryable: boolean,
+    /** The provider's Retry-After (throttling), when it sent one. */
+    readonly retryAfterMs?: number,
   ) {
     super(`email_send_failed: ${code}`);
     this.name = 'EmailSendError';
