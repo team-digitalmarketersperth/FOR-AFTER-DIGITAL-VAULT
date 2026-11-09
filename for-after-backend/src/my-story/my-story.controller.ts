@@ -1,3 +1,4 @@
+import { RequiresPlan } from '../billing/billing-access.js';
 import {
   BadRequestException,
   Body,
@@ -72,6 +73,7 @@ export class PromptKeyPipe implements PipeTransform<string, MyStoryPrompt> {
 @ApiCookieAuth(AUTH.customer)
 @Controller('my-story')
 @UseGuards(SessionAuthGuard, CustomerGuard)
+@RequiresPlan()
 export class MyStoryBookController {
   constructor(private readonly story: MyStoryService) {}
 
@@ -86,6 +88,7 @@ export class MyStoryBookController {
 @ApiCookieAuth(AUTH.customer)
 @Controller('my-story/prompts')
 @UseGuards(SessionAuthGuard, CustomerGuard)
+@RequiresPlan()
 export class MyStoryController {
   constructor(
     private readonly story: MyStoryService,

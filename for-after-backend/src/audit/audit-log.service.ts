@@ -26,9 +26,12 @@ export type TrustedContactAuditActor = Omit<AuditActor, 'type' | 'userId'> & {
 // Scalars only, so a request body or object can never be copied in whole.
 export type AuditMetadata = Record<string, string | number | boolean | null>;
 
+/** Step 10: a verified provider webhook (no person acted). */
+export type SystemAuditActor = { type: typeof AuditActorType.SYSTEM; userId: null; ip?: undefined; userAgent?: undefined };
+
 export type AuditEntry = {
   eventType: AuditEventType;
-  actor: AuditActor | TrustedContactAuditActor;
+  actor: AuditActor | TrustedContactAuditActor | SystemAuditActor;
   subjectType?: string;
   subjectId?: string;
   metadata?: AuditMetadata;

@@ -1,3 +1,4 @@
+import { RequiresPlan } from '../billing/billing-access.js';
 import {
   Body,
   Controller,
@@ -44,6 +45,7 @@ const meta = (req: Request) => ({
 @ApiCookieAuth(AUTH.customer)
 @Controller('trusted-contacts')
 @UseGuards(SessionAuthGuard, CustomerGuard)
+@RequiresPlan()
 export class TrustedContactsController {
   constructor(
     private readonly trustedContacts: TrustedContactsService,

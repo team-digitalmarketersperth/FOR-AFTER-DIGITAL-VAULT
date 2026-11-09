@@ -8,6 +8,7 @@ import request from 'supertest';
 import { adminSignIn } from './admin-sign-in.js';
 import { FakeEmailProvider } from './fake-email.js';
 import { AdminModule } from '../src/admin/admin.module.js';
+import { BillingModule } from '../src/billing/billing.module.js';
 import { AuthModule } from '../src/auth/auth.module.js';
 import { configureApp } from '../src/config/app.setup.js';
 import {
@@ -144,6 +145,7 @@ describe('Dead letters + operational alerts (e2e)', () => {
         TrustedContactAuthModule,
         DeathVerificationModule,
         AdminModule,
+        BillingModule,
       ],
     })
       .overrideGuard(ThrottlerGuard)

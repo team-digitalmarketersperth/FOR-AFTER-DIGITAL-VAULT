@@ -1,3 +1,4 @@
+import { RequiresPlan } from '../billing/billing-access.js';
 import {
   Body,
   Controller,
@@ -28,6 +29,7 @@ import { AUTH } from '../config/swagger.js';
 @ApiCookieAuth(AUTH.customer)
 @Controller('messages/:messageId/schedule')
 @UseGuards(SessionAuthGuard, CustomerGuard)
+@RequiresPlan()
 export class MessageSchedulesController {
   constructor(private readonly schedules: MessageSchedulesService) {}
 

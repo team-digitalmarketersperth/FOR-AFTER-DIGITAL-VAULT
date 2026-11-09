@@ -1,3 +1,4 @@
+import { RequiresPlan } from '../billing/billing-access.js';
 import {
   Body,
   Controller,
@@ -48,6 +49,7 @@ import { AUTH } from '../config/swagger.js';
 @ApiCookieAuth(AUTH.customer)
 @Controller('memory-vault')
 @UseGuards(SessionAuthGuard, CustomerGuard)
+@RequiresPlan()
 export class MemoryVaultController {
   constructor(
     private readonly memories: MemoryVaultService,

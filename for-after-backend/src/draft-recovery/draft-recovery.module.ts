@@ -1,3 +1,4 @@
+import { RequiresPlan } from '../billing/billing-access.js';
 import {
   BadRequestException,
   Body,
@@ -57,6 +58,7 @@ const AUTOSAVE_LIMIT = { default: { limit: 120, ttl: 60_000 } };
 @ApiCookieAuth(AUTH.customer)
 @Controller('users/me/drafts')
 @UseGuards(SessionAuthGuard, CustomerGuard)
+@RequiresPlan()
 export class DraftRecoveryController {
   constructor(private readonly drafts: DraftRecoveryService) {}
 

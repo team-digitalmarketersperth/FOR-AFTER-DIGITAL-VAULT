@@ -1,3 +1,4 @@
+import { RequiresPlan } from '../billing/billing-access.js';
 import {
   Body,
   Controller,
@@ -33,6 +34,7 @@ import { AUTH } from '../config/swagger.js';
 @ApiCookieAuth(AUTH.customer)
 @Controller('messages/:messageId/media')
 @UseGuards(SessionAuthGuard, CustomerGuard)
+@RequiresPlan()
 export class MediaController {
   constructor(private readonly media: MediaService) {}
 

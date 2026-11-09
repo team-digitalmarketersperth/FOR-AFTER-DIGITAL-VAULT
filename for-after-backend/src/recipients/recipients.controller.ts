@@ -1,3 +1,4 @@
+import { RequiresPlan } from '../billing/billing-access.js';
 import {
   Body,
   Controller,
@@ -41,6 +42,7 @@ import { AUTH } from '../config/swagger.js';
 @ApiCookieAuth(AUTH.customer)
 @Controller('recipients')
 @UseGuards(SessionAuthGuard, CustomerGuard)
+@RequiresPlan()
 export class RecipientsController {
   constructor(
     private readonly recipients: RecipientsService,
