@@ -15,13 +15,17 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useForm } from 'react-hook-form';
+import { useEffect, useState } from 'react';
+import { useForm, useWatch } from 'react-hook-form';
 import { toast } from 'sonner';
 import { PersonCard } from '@/components/people/person-card';
+import { PlanLockedButton, usePlanLock } from '@/components/shared/plan-lock';
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import { FormError, TextField } from '@/components/shared/form-field';
+import { MobileField } from '@/components/shared/mobile-field';
 import { PageHeader } from '@/components/shared/page-header';
 import { EmptyState, QueryView, Spinner } from '@/components/shared/states';
+import { CreateGateNotice, PeopleCounter, TrialLockedButton, useCreateGate, useTrialCap } from '@/components/shared/trial-cap';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { useUnsavedChanges } from '@/hooks/use-unsaved-changes';
@@ -35,6 +39,7 @@ import {
   type TrustedContactReadiness,
 } from '@/lib/api/people';
 import { formatDate, fullName } from '@/lib/format';
+import { browserCountryDefault, mobileForApi, savedToFields, type SavedMobile } from '@/lib/phone';
 import { cn } from '@/lib/utils';
 import { toNull, trustedContactSchema, type TrustedContactValues } from '@/schemas/vault';
 
@@ -57,7 +62,7 @@ function RoleExplainer() {
       <div className="grid gap-2 text-[15px] leading-relaxed text-foreground-secondary">
         <p>
           A trusted contact can let For After know if you pass away. A report is never enough on its own:
-          our team verifies every report before any message is released.
+          our team verifies every report before any message <span className="whitespace-nowrap">is released.</span>
         </p>
         <p>
           Being a trusted contact does not give them access to your messages, memories or wishes. We&apos;ll send
@@ -120,6 +125,7 @@ const CHANNEL_ICON: Record<InvitationChannel, LucideIcon> = { EMAIL: Mail, SMS: 
  */
 function InviteButton({ contact }: { contact: TrustedContact }) {
   const invite = trustedContacts.useInvite(contact.id);
+  const planLocked = usePlanLock().locked;
   const { status, reason } = contact.readiness;
   if (status === 'READY') return null;
   const channels: InvitationChannel[] = [];
@@ -133,6 +139,8 @@ function InviteButton({ contact }: { contact: TrustedContact }) {
     });
   const only = channels.length === 1 ? channels[0] : null;
   const Icon = only ? CHANNEL_ICON[only] : Mail;
+  // Step 6: sending or resending is refused without write access (402); it opens the plan dialog instead.
+  if (planLocked) return <PlanLockedButton label={base} icon={Icon} size="sm" />;
   return (
     <span className="grid justify-items-start gap-1">
       {only ? (
@@ -225,14 +233,22 @@ function ReadinessSummary({ contacts }: { contacts: TrustedContact[] }) {
 export function TrustedContactList() {
   const list = trustedContacts.useList();
   const atLimit = (list.data?.length ?? 0) >= MAX_TRUSTED_CONTACTS;
+  const { locked } = useTrialCap('trustedContacts', list.data?.length);
   return (
     <>
       <PageHeader
         eyebrow="People"
         title={<>Trusted <em>contacts</em></>}
         description="People you trust to let us know when the time comes."
-        action={list.data?.length && !atLimit ? addButton : undefined}
+        action={
+          !list.data?.length || atLimit ? undefined : locked ? (
+            <TrialLockedButton kind="trustedContacts" label="Add a trusted contact" icon={UserPlus} />
+          ) : (
+            addButton
+          )
+        }
       />
+      <PeopleCounter kind="trustedContacts" className="-mt-4 mb-6 text-sm text-foreground-muted" />
       <RoleExplainer />
       <QueryView query={list} loadingLabel="Loading your trusted contacts">
         {(contacts) =>
@@ -274,20 +290,21 @@ export function TrustedContactList() {
   );
 }
 
-const toValues = (c?: TrustedContact): TrustedContactValues => ({
+const toValues = (c: TrustedContact | undefined, mobile: SavedMobile): TrustedContactValues => ({
   firstName: c?.firstName ?? '',
   lastName: c?.lastName ?? '',
   relationship: c?.relationship ?? '',
   email: c?.email ?? '',
-  mobile: c?.mobile ?? '',
+  mobileCountry: mobile.country,
+  mobile: mobile.number,
 });
 
-const toInput = (v: TrustedContactValues): TrustedContactInput => ({
+const toInput = (v: TrustedContactValues, initialMobile: SavedMobile): TrustedContactInput => ({
   firstName: v.firstName.trim(),
   lastName: toNull(v.lastName),
   relationship: toNull(v.relationship),
   email: toNull(v.email),
-  mobile: toNull(v.mobile),
+  mobile: mobileForApi(v.mobileCountry, v.mobile, initialMobile),
 });
 
 // Only an email goes out automatically; an SMS is always the Customer's choice.
@@ -305,6 +322,17 @@ export function NewTrustedContact() {
   const list = trustedContacts.useList();
   const create = trustedContacts.useCreate();
   const back = { href: '/trusted-contacts', label: 'Trusted Contacts' };
+  const gate = useCreateGate('trustedContacts', list.data?.length);
+  // Opened with the trial's one contact already added (and under the two-contact maximum): explain, offer plans.
+  // While the plan is unknown the form waits (never treated as unlimited).
+  if (!create.isSuccess && gate !== 'open' && (gate !== 'locked' || (list.data?.length ?? 0) < MAX_TRUSTED_CONTACTS)) {
+    return (
+      <>
+        <PageHeader back={back} title={<>Add a <em>trusted contact</em></>} />
+        <CreateGateNotice gate={gate} kind="trustedContacts" icon={ShieldCheck} back={{ href: back.href, label: 'Back to Trusted Contacts' }} />
+      </>
+    );
+  }
   // Reached directly at the limit: explain instead of a form the API would refuse.
   if (!create.isSuccess && (list.data?.length ?? 0) >= MAX_TRUSTED_CONTACTS) {
     return (
@@ -419,16 +447,29 @@ function TrustedContactForm({
   error: Parameters<typeof FormError>[0]['error'];
   onSubmit: (input: TrustedContactInput) => void;
 }) {
+  const savedMobile = initial?.mobile ?? null;
+  // The saved number's own country (deterministic, so the server render matches); see the effect below.
+  const [mobile] = useState(() => savedToFields(savedMobile));
   const form = useForm<TrustedContactValues>({
-    resolver: zodResolver(trustedContactSchema),
-    defaultValues: toValues(initial),
+    resolver: zodResolver(trustedContactSchema(mobile)),
+    defaultValues: toValues(initial, mobile),
   });
   const { errors, isDirty, isSubmitSuccessful } = form.formState;
+  const [mobileCountry, mobileValue] = useWatch({ control: form.control, name: ['mobileCountry', 'mobile'] });
   useUnsavedChanges(isDirty && !isSubmitSuccessful);
+  // After mount only: a new number's country defaults to the browser's region, never over a choice or a saved value.
+  useEffect(() => {
+    const region = browserCountryDefault(savedMobile, {
+      country: form.getValues('mobileCountry'),
+      number: form.getValues('mobile'),
+      countryChosen: form.getFieldState('mobileCountry').isDirty,
+    });
+    if (region) form.setValue('mobileCountry', region);
+  }, [form, savedMobile]);
   return (
     <form
       noValidate
-      onSubmit={form.handleSubmit((v) => !pending && onSubmit(toInput(v)))}
+      onSubmit={form.handleSubmit((v) => !pending && onSubmit(toInput(v, mobile)))}
       className="grid max-w-3xl gap-8 rounded-xl border border-border bg-surface p-6 sm:p-10"
     >
       <FormError error={error} />
@@ -445,7 +486,7 @@ function TrustedContactForm({
           error={errors.relationship?.message}
           {...form.register('relationship')}
         />
-        <div className="grid gap-6 sm:grid-cols-2">
+        <div className="grid items-start gap-6 sm:grid-cols-2">
           <TextField
             id="email"
             label="Email"
@@ -456,7 +497,13 @@ function TrustedContactForm({
             error={errors.email?.message}
             {...form.register('email')}
           />
-          <TextField id="mobile" label="Mobile" type="tel" inputMode="tel" autoComplete="off" placeholder="+61 400 000 000" hint="With the country code. They can sign in with a code sent to this number." error={errors.mobile?.message} {...form.register('mobile')} />
+          <MobileField
+            country={mobileCountry}
+            onCountryChange={(code) => form.setValue('mobileCountry', code, { shouldDirty: true, shouldValidate: form.formState.isSubmitted })}
+            registration={form.register('mobile')}
+            error={errors.mobile?.message}
+            unreadable={!mobile.readable && mobileValue.trim() === savedMobile}
+          />
         </div>
       </fieldset>
       <div>

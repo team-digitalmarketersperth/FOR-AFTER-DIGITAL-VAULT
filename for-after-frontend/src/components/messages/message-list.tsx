@@ -1,6 +1,8 @@
 'use client';
 
 import { CalendarClock, Mail, PenLine } from 'lucide-react';
+import { KeptDraft, messageDraftText } from '@/components/shared/draft-recovery';
+import { usePlanLock } from '@/components/shared/plan-lock';
 import Link from 'next/link';
 import { CONTENT_TYPE_INFO, StatusBadge, recipientSummary } from '@/components/messages/message-bits';
 import { PageHeader } from '@/components/shared/page-header';
@@ -29,8 +31,11 @@ const GROUPS: { status: MessageStatus; title: string; note: string }[] = [
 
 export function MessageList() {
   const list = messages.useList();
+  const locked = usePlanLock().locked;
   return (
     <>
+      {/* Step 7 close-out: an unsaved new message kept in this tab, viewable while creating is closed. */}
+      {locked && <KeptDraft type="NEW_MESSAGE" draftKey={null} text={messageDraftText} />}
       <PageHeader
         eyebrow="Preserve"
         title={<>Your <em>messages</em></>}

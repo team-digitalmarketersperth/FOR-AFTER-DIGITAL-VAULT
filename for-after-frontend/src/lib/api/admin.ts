@@ -100,6 +100,8 @@ export type AdminUser = {
   lastName: string | null;
   role: UserRole;
   status: UserStatus;
+  /** The current address's stored verification (an email change sets it only when confirmed). */
+  emailVerifiedAt: string | null;
   createdAt: string;
   updatedAt: string;
   /** Present only for SUPER_ADMIN viewers; null = an admin account or no billing data. */
@@ -108,7 +110,6 @@ export type AdminUser = {
 
 /** Account metadata and counts only: never content. */
 export type AdminUserDetail = AdminUser & {
-  emailVerifiedAt: string | null;
   mfaEnabled: boolean;
   passedAt: string | null;
   deletedAt: string | null;
@@ -122,7 +123,32 @@ export type AdminUserDetail = AdminUser & {
   deathVerification: { caseId: string; status: CaseStatus } | null;
 };
 
-export type UserFilters = { page: number; search?: string; status?: UserStatus; role?: UserRole };
+export const EMAIL_VERIFICATION = ['verified', 'unverified'] as const;
+export type EmailVerification = (typeof EMAIL_VERIFICATION)[number];
+export type UserFilters = {
+  page: number;
+  search?: string;
+  status?: UserStatus;
+  role?: UserRole;
+  verification?: EmailVerification;
+};
+
+/**
+ * GET /admin/users summary: counts over every account the filters match (not the
+ * page), read in the same database snapshot as the page.
+ */
+export type UserSummary = {
+  generatedAt: string;
+  total: number;
+  /** status ACTIVE (account lifecycle, not recent use). */
+  active: number;
+  emailVerified: number;
+  /** CUSTOMER accounts among them. */
+  customers: number;
+  /** SUPER_ADMIN viewers only: customers with a trial or subscription on file. Absent ≠ zero. */
+  customersWithBillingRecord?: number;
+};
+export type UserPage = Page<AdminUser> & { summary: UserSummary };
 
 export const SUSPEND_REASON_MAX = 1000;
 
@@ -130,13 +156,34 @@ export const SUSPEND_REASON_MAX = 1000;
 
 export type AccountHolder = { userId: string; email: string; displayName: string | null };
 
+/** One row of the review queue: metadata only (no notes, reporter details or evidence). */
 export type DeathCaseSummary = {
   caseId: string;
   status: CaseStatus;
   openedAt: string;
+  /** From the recorded notice fields (same mapping as Deliveries); never "sent" for a queued job. */
+  safetyNotice: SafetyNoticeStatus;
+  safeguardStartedAt: string | null;
   safeguardEndsAt: string | null;
+  /** Report rows; confirmations count distinct people, so they can be fewer. */
   reportCount: number;
+  receivedConfirmations: number;
+  requiredConfirmations: number | null;
+  /** The verify rule's own confirmation check; verify still re-checks everything on the server. */
+  confirmationRequirementMet: boolean;
   accountHolder: AccountHolder;
+};
+
+/**
+ * GET /admin/death-verifications. `counts` covers every case the search matches
+ * (all statuses, all time), the page also follows the status filter; one
+ * database snapshot, read at the server's `evaluatedAt`.
+ */
+export type CasePage = Page<DeathCaseSummary> & {
+  evaluatedAt: string;
+  counts: Record<CaseStatus, number>;
+  /** Ready cases still short of the required confirmations; null = not counted (shown as Unavailable). */
+  readyAwaitingConfirmations: number | null;
 };
 
 export type DeathCaseEventType =
@@ -214,7 +261,7 @@ export type DeathCaseDetail = {
   confirmationRequirementMet: boolean;
 };
 
-export type CaseFilters = { page: number; status?: CaseStatus };
+export type CaseFilters = { page: number; status?: CaseStatus; search?: string };
 
 export type VerifyInput = { verifiedDeathAt: string; confirmVerification: true; decisionNote: string | null };
 export type RejectInput = { confirmRejection: true; decisionNote: string | null };
@@ -443,11 +490,15 @@ export type AdminSupportRequest = SupportSummary & {
   internalNotes: { id: string; authorUserId: string; body: string; createdAt: string }[];
 };
 export type AdminSupportSummary = SupportSummary & { ownerUserId: string };
+/** GET /admin/support/requests: `counts` = every status over the non-status filters; one snapshot at `evaluatedAt`. */
+export type SupportPage = Page<AdminSupportSummary> & { evaluatedAt: string; counts: Record<SupportStatus, number> };
 
 export type AdminSupportFilters = {
   page: number;
   status?: SupportStatus;
   category?: SupportCategory;
+  /** Subject text (contains, any case) or a full reference. */
+  search?: string;
   reference?: string;
   accountId?: string;
   /** ISO 8601 with offset (created time). */
@@ -475,6 +526,9 @@ export const AI_REQUEST_OUTCOMES = [
   'provider_failure',
   'timeout',
   'cancelled',
+  'allowance_exhausted',
+  'duplicate_request',
+  'usage_unrecorded',
   'unknown',
 ] as const;
 export type AiRequestOutcome = (typeof AI_REQUEST_OUTCOMES)[number];
@@ -590,7 +644,7 @@ export type BillingSummary = {
   currentPeriodEnd: string | null;
   lastSyncedAt: string | null;
 };
-export const BILLING_FILTERS = ['trial_active', 'trial_expired', 'paid_active', 'cancellation_scheduled', 'payment_issue', 'payment_pending', 'access_ended'] as const;
+export const BILLING_FILTERS = ['trial_active', 'trial_expired', 'paid_active', 'cancellation_scheduled', 'payment_issue', 'payment_pending', 'plan_unresolved', 'access_ended'] as const;
 export type BillingFilters = {
   page: number;
   state?: (typeof BILLING_FILTERS)[number];
@@ -601,7 +655,17 @@ export type BillingFilters = {
   from?: string;
   to?: string;
 };
-export type BillingPage = Page<BillingSummary> & { evaluatedAt: string; enabled: boolean; enforceFrom: string | null };
+/**
+ * GET /admin/billing/accounts (SUPER_ADMIN). `summary` covers every filter except `state`: accounts with a trial
+ * or a billing account, each in exactly one resolver state (the states add up to `accounts`); `verified` = accounts
+ * with a stored Stripe verification time. One database snapshot, read at `evaluatedAt`; never a live Stripe call.
+ */
+export type BillingPage = Page<BillingSummary> & {
+  evaluatedAt: string;
+  enabled: boolean;
+  enforceFrom: string | null;
+  summary: { accounts: number; verified: number; states: Record<AccessState, number> };
+};
 
 // ─── Queues ─────────────────────────────────────────────────────────────────
 
@@ -906,14 +970,14 @@ export const adminAccountApi = {
 export const adminApi = {
   dashboard: (signal?: AbortSignal) => apiRequest<AdminDashboard>('/admin/dashboard', { signal }),
 
-  users: (f: UserFilters, signal?: AbortSignal) => apiRequest<Page<AdminUser>>(`/admin/users${toQuery(f)}`, { signal }),
+  users: (f: UserFilters, signal?: AbortSignal) => apiRequest<UserPage>(`/admin/users${toQuery(f)}`, { signal }),
   user: (id: string, signal?: AbortSignal) => apiRequest<AdminUserDetail>(`/admin/users/${id}`, { signal }),
   suspend: (id: string, reason: string) => post<AdminUser>(`/admin/users/${id}/suspend`, { reason }),
   reactivate: (id: string, reason: string | null) =>
     post<AdminUser>(`/admin/users/${id}/reactivate`, reason ? { reason } : {}),
 
   cases: (f: CaseFilters, signal?: AbortSignal) =>
-    apiRequest<Page<DeathCaseSummary>>(`/admin/death-verifications${toQuery(f)}`, { signal }),
+    apiRequest<CasePage>(`/admin/death-verifications${toQuery(f)}`, { signal }),
   case: (id: string, signal?: AbortSignal) =>
     apiRequest<DeathCaseDetail>(`/admin/death-verifications/${id}`, { signal }),
   verify: (id: string, input: VerifyInput) => post<DeathCaseDetail>(`/admin/death-verifications/${id}/verify`, input),
@@ -941,7 +1005,7 @@ export const adminApi = {
     apiRequest<StorageAsset>(`/admin/storage/assets/${encodeURIComponent(reference)}`, { signal }),
 
   supportRequests: (f: AdminSupportFilters, signal?: AbortSignal) =>
-    apiRequest<Page<AdminSupportSummary>>(`/admin/support/requests${toQuery(f)}`, { signal }),
+    apiRequest<SupportPage>(`/admin/support/requests${toQuery(f)}`, { signal }),
   supportRequest: (id: string, signal?: AbortSignal) =>
     apiRequest<AdminSupportRequest>(`/admin/support/requests/${encodeURIComponent(id)}`, { signal }),
   // Separate commands: visibility is the endpoint, never a flag in the body.

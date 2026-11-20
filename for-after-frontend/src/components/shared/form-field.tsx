@@ -4,6 +4,7 @@ import { Eye, EyeOff } from 'lucide-react';
 import Link from 'next/link';
 import { useState, type ComponentProps, type ReactNode } from 'react';
 import type { UseFormRegisterReturn } from 'react-hook-form';
+import { ProBadge, ProDialog } from '@/components/shared/trial-cap';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -96,8 +97,24 @@ export function FormError({ error, title }: { error: ApiError | null; title?: st
       <AlertDescription>
         <p>{error.message}</p>
         {error.kind === 'plan_required' && (
+          <>
+            {/* Step 6: never imply it was kept; the form still holds what was typed. */}
+            <p>This wasn’t saved. What you typed is still here.</p>
+            {/* Updated Plans Step 6: an unresolved subscription goes to support, never to buying again. */}
+            {error.code === 'PLAN_UNRESOLVED' ? (
+              <Link href="/support/new" className="underline underline-offset-2">
+                Contact support
+              </Link>
+            ) : (
+              <Link href="/settings/plan" className="underline underline-offset-2">
+                View plans
+              </Link>
+            )}
+          </>
+        )}
+        {(error.code === 'TRIAL_LIMIT' || error.code === 'PAID_FEATURE' || error.code === 'TIER_REQUIRED') && (
           <Link href="/settings/plan" className="underline underline-offset-2">
-            Choose a plan
+            View plans
           </Link>
         )}
         {error.details.length > 0 && (
@@ -112,7 +129,7 @@ export function FormError({ error, title }: { error: ApiError | null; title?: st
   );
 }
 
-function FieldLabel({ htmlFor, label, optional }: { htmlFor: string; label: string; optional?: boolean }) {
+export function FieldLabel({ htmlFor, label, optional }: { htmlFor: string; label: string; optional?: boolean }) {
   return (
     <Label htmlFor={htmlFor} className="gap-1.5">
       {label}
@@ -181,7 +198,46 @@ export function TextAreaField({
   );
 }
 
-export type Choice = { value: string; label: string; description?: string; icon?: ReactNode };
+export type Choice = {
+  value: string;
+  label: string;
+  description?: string;
+  icon?: ReactNode;
+  /** Not in the Customer's plan (Trial Step 4): shown with "Pro", opens this explanation, never selectable. */
+  locked?: { title: string; description: string; badge?: string };
+};
+
+const CHOICE_CARD =
+  'flex items-start gap-3 rounded-lg border border-border bg-surface p-4 transition-colors hover:border-border-strong';
+
+/** A locked choice: a real button (Tab, Enter, Space) styled as its card; it changes no form value. */
+function LockedChoice({ choice }: { choice: Choice & { locked: NonNullable<Choice['locked']> } }) {
+  return (
+    <ProDialog
+      title={choice.locked.title}
+      description={choice.locked.description}
+      trigger={
+        <button
+          type="button"
+          className={cn(
+            CHOICE_CARD,
+            'w-full cursor-pointer text-left outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
+          )}
+        >
+          <span aria-hidden className="mt-1 size-4 shrink-0 rounded-full border border-border-strong" />
+          <span className="grid gap-1">
+            <span className="flex flex-wrap items-center gap-2 font-medium">
+              {choice.icon}
+              {choice.label}
+              <ProBadge label={choice.locked.badge} />
+            </span>
+            {choice.description && <span className="text-sm text-foreground-muted">{choice.description}</span>}
+          </span>
+        </button>
+      }
+    />
+  );
+}
 
 /**
  * A radio group rendered as cards (content type, release trigger, category).
@@ -204,10 +260,16 @@ export function ChoiceGroup({
     <fieldset className="grid gap-3" aria-invalid={error ? true : undefined}>
       <legend className="mb-3 text-sm font-medium">{legend}</legend>
       <div className={cn('grid gap-3', className)}>
-        {choices.map((choice) => (
+        {choices.map((choice) =>
+          choice.locked ? (
+            <LockedChoice key={choice.value} choice={{ ...choice, locked: choice.locked }} />
+          ) : (
           <label
             key={choice.value}
-            className="flex cursor-pointer items-start gap-3 rounded-lg border border-border bg-surface p-4 transition-colors hover:border-border-strong has-[:checked]:border-primary has-[:checked]:bg-primary-soft has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-ring has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-60"
+            className={cn(
+              CHOICE_CARD,
+              'cursor-pointer has-[:checked]:border-primary has-[:checked]:bg-primary-soft has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-ring has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-60',
+            )}
           >
             <input type="radio" value={choice.value} className="mt-1 size-4 accent-primary" {...registration} />
             <span className="grid gap-1">
@@ -220,7 +282,8 @@ export function ChoiceGroup({
               )}
             </span>
           </label>
-        ))}
+          ),
+        )}
       </div>
       {error && <p className="text-sm text-danger">{error}</p>}
     </fieldset>

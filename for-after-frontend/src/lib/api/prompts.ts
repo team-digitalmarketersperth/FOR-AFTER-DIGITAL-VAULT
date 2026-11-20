@@ -115,4 +115,10 @@ export const promptsApi = {
     apiRequest<Message>(`${base(area)}/${encodeURIComponent(key)}/response/messages`, { method: 'POST', body: input }),
   remove: (area: PromptArea, key: string) =>
     apiRequest<void>(`${base(area)}/${encodeURIComponent(key)}/response`, { method: 'DELETE' }),
+  /** Trial Step 7: remove links only (My Story). A DELETE, so it stays open after a trial ends; the memories are untouched. */
+  unlinkMemories: (key: string, memoryVaultItemIds: string[]) =>
+    apiRequest<PromptResponse>(`${base('my-story')}/${encodeURIComponent(key)}/response/memories`, {
+      method: 'DELETE',
+      body: { memoryVaultItemIds },
+    }),
 };

@@ -1,4 +1,6 @@
 import { MutationCache, QueryCache, QueryClient } from '@tanstack/react-query';
+import { clearLocalDrafts } from '@/lib/local-drafts';
+import type { BillingStatus } from '@/lib/api/billing';
 import type { PromptArea } from '@/lib/api/prompts';
 import type { MediaScope, StorageFilters } from '@/lib/api/media';
 import type { MemoryFilters } from '@/lib/api/memory-vault';
@@ -70,6 +72,8 @@ export const queryKeys = {
   activity: (page: number, limit: number) => ['activity', page, limit] as const,
   // Plan and access (Step 10); cleared on sign-out like every Customer query.
   billing: ['billing'] as const,
+  // Updated Plans Step 5: private like everything here (cleared on sign-in, sign-out and session expiry).
+  assistantUsage: ['assistant', 'usage'] as const,
   // Customer support (cleared with every other Customer query on sign-out).
   supportRequests: ['support'] as const,
   supportPage: (page: number) => ['support', 'page', page] as const,
@@ -175,6 +179,8 @@ export async function endAdminSession(client: QueryClient) {
  * the separate admin session's; auth/me is written in place so gates react.
  */
 export async function resetPrivateCache(client: QueryClient, user: unknown) {
+  // Trial Step 7: words kept in this tab after a refused autosave never outlive the person who typed them.
+  clearLocalDrafts((user as { id?: string } | null)?.id);
   await client.cancelQueries({ queryKey: queryKeys.me });
   client.removeQueries({ predicate: ({ queryKey }) => !isMe(queryKey) && queryKey[0] !== 'admin' });
   client.setQueryData(queryKeys.me, user);
@@ -190,6 +196,11 @@ export function makeQueryClient() {
   // its data and let its gate return to its own sign-in. Sign-in calls are
   // exempt: their 401 is a wrong password or code, left to the form.
   const onError = (error: unknown, key: readonly unknown[] | undefined) => {
+    // A trial refusal, or a 402 (Step 6: e.g. the trial ended while a form was open), means the page's view of the
+    // plan was stale: re-read it so the locks and the notice catch up.
+    if (isApiError(error) && (error.code === 'PAID_FEATURE' || error.code === 'TRIAL_LIMIT' || error.code === 'TIER_REQUIRED' || error.code === 'PLAN_LIMIT' || error.kind === 'plan_required')) {
+      void client.invalidateQueries({ queryKey: queryKeys.billing });
+    }
     if (!isApiError(error) || error.kind !== 'unauthenticated') return;
     if (key?.[0] === 'login' || key?.[1] === 'sign-in') return;
     if (key?.[0] === 'admin') void endAdminSession(client);
@@ -212,6 +223,21 @@ export function makeQueryClient() {
       // Every write runs exactly once per click.
       mutations: { retry: false },
     },
+  });
+  // Updated Plans Step 8: storage and AI allowances follow the plan in force. When the billing answer changes access
+  // or tier (trial started, checkout confirmed, a webhook tier change), re-read both so no meter shows the previous
+  // plan's limit. Usage itself is never reset here; the server keeps the month's count.
+  let plan: string | undefined;
+  client.getQueryCache().subscribe((e) => {
+    if (e.type !== 'updated' || e.action.type !== 'success' || e.query.queryKey[0] !== queryKeys.billing[0]) return;
+    const b = e.query.state.data as BillingStatus | undefined;
+    if (!b) return;
+    const next = `${b.state}:${b.hasAccess}:${b.productTier?.tier ?? ''}`;
+    if (plan !== undefined && next !== plan) {
+      void client.invalidateQueries({ queryKey: queryKeys.storage });
+      void client.invalidateQueries({ queryKey: queryKeys.assistantUsage });
+    }
+    plan = next;
   });
   return client;
 }

@@ -1,11 +1,29 @@
 'use client';
 
-import { ArrowRight, Headset, Inbox, Lock, Plus, UserRound, Users } from 'lucide-react';
+import {
+  AlertTriangle,
+  ArrowRight,
+  CheckCircle2,
+  Headset,
+  Hourglass,
+  Inbox,
+  Info,
+  Lock,
+  Plus,
+  RefreshCw,
+  Search,
+  SlidersHorizontal,
+  UserRound,
+  Users,
+  X,
+  type LucideIcon,
+} from 'lucide-react';
 import Link from 'next/link';
 import { useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { CopyButton } from '@/components/shared/copy-button';
-import { Badge, DataTable, linkClass, Pager, SelectField, useFilterNav } from '@/components/admin/admin-ui';
-import { FormError, TextField } from '@/components/shared/form-field';
+import { Badge, DataTable, linkClass, Pager, SegmentedBar, SelectField, SummaryCard, useFilterNav } from '@/components/admin/admin-ui';
+import { FilterChips, FormError, TextField } from '@/components/shared/form-field';
+import { SearchBox } from '@/components/shared/list-controls';
 import { PageHeader } from '@/components/shared/page-header';
 import { EmptyState, QueryView, Spinner } from '@/components/shared/states';
 import { Composer } from '@/components/support/composer';
@@ -18,10 +36,11 @@ import {
   useSupportReply,
   useSupportStatus,
 } from '@/hooks/use-admin';
-import type { AdminSupportFilters, AdminSupportRequest } from '@/lib/api/admin';
-import { SUPPORT_CATEGORIES, SUPPORT_STATUSES, type SupportStatus } from '@/lib/api/support';
+import type { AdminSupportFilters, AdminSupportRequest, SupportPage } from '@/lib/api/admin';
+import { SUPPORT_CATEGORIES, type SupportStatus } from '@/lib/api/support';
 import { shortId, UUID } from '@/lib/admin';
-import { formatDateTime, formatTimestamp, localToOffsetIso, timeZoneLabel } from '@/lib/format';
+import { formatCalendarDate, formatDateTime, formatTimestamp, localToOffsetIso, timeZoneLabel } from '@/lib/format';
+import { cn } from '@/lib/utils';
 import { nextStatuses, SUPPORT_CATEGORY_LABEL, SUPPORT_STATUS } from '@/lib/support';
 
 const BASE = '/admin/support';
@@ -35,62 +54,323 @@ const toApi = ({ from, to, ...rest }: SupportUrlFilters): AdminSupportFilters =>
   to: to ? localToOffsetIso(to, '23:59').replace('T23:59:00', 'T23:59:59.999') : undefined,
 });
 
-/** The inbox: newest first; no assignment, bulk actions, export or text search. */
+/** Mutually exclusive stored statuses, in workflow order; muted fills, the legend carries the words. */
+const STATUS_ORDER: SupportStatus[] = ['OPEN', 'IN_PROGRESS', 'WAITING_FOR_CUSTOMER', 'RESOLVED'];
+const FILL: Record<SupportStatus, string> = {
+  OPEN: 'bg-brand-gold/70',
+  IN_PROGRESS: 'bg-primary-soft',
+  WAITING_FOR_CUSTOMER: 'bg-brand-lilac-grey',
+  RESOLVED: 'bg-success/40',
+};
+const CARD_ICON: Record<SupportStatus, LucideIcon> = {
+  OPEN: Inbox,
+  IN_PROGRESS: Headset,
+  WAITING_FOR_CUSTOMER: Hourglass,
+  RESOLVED: CheckCircle2,
+};
+const SECONDARY = ['category', 'reference', 'accountId', 'from', 'to'] as const;
+const count = (n: number) => n.toLocaleString('en-AU');
+
+/** The inbox: newest first; no assignment, bulk actions, export or inline replies. Reading changes nothing. */
 export function AdminSupportList({ filters }: { filters: SupportUrlFilters }) {
   const list = useAdminSupportList(toApi(filters));
   const nav = useFilterNav(BASE, filters);
-  const filtered = Object.entries(filters).some(([k, v]) => k !== 'page' && v);
+  const data = list.data;
   return (
     <>
       <PageHeader
-        eyebrow="Management"
         title="Support"
-        description="Requests Customers sent for help. Only what they wrote here: no access to their messages, memories, stories or wishes."
-      />
-      <SupportFilterForm key={JSON.stringify(filters)} filters={filters} onApply={nav.set} />
-      <QueryView query={list} loadingLabel="Loading support requests">
-        {({ items, pagination }) =>
-          items.length === 0 ? (
-            <EmptyState
-              icon={Inbox}
-              title={filtered ? 'No requests match these filters' : 'No support requests yet'}
-              action={
-                filtered ? (
-                  <Link href={BASE} className={linkClass}>
-                    Clear filters
-                  </Link>
-                ) : undefined
-              }
-            />
-          ) : (
-            <div aria-busy={list.isPlaceholderData || undefined}>
-              <DataTable
-                caption="Support requests"
-                rows={items}
-                rowKey={(r) => r.id}
-                columns={[
-                  {
-                    header: 'Subject',
-                    cell: (r) => (
-                      <Link href={`${BASE}/${r.id}`} className={`break-words ${linkClass}`}>
-                        {r.subject}
-                      </Link>
-                    ),
-                  },
-                  { header: 'Reference', cell: (r) => <span className="font-mono text-xs" title={r.id}>{shortId(r.id)}</span> },
-                  { header: 'Category', cell: (r) => SUPPORT_CATEGORY_LABEL[r.category] },
-                  { header: 'Status', cell: (r) => <StatusBadge status={r.status} admin /> },
-                  { header: 'Account', cell: (r) => <span className="font-mono text-xs" title={r.ownerUserId}>{shortId(r.ownerUserId)}</span> },
-                  { header: 'Created', cell: (r) => <span className="whitespace-nowrap">{formatTimestamp(r.createdAt)}</span> },
-                  { header: 'Last public activity', cell: (r) => <span className="whitespace-nowrap">{formatTimestamp(r.lastPublicActivityAt)}</span> },
-                ]}
-              />
-              <Pager pagination={pagination} hrefFor={(page) => nav.href({ page })} />
-            </div>
-          )
+        description={
+          <>
+            Keep customer requests moving.
+            <span className="mt-2 flex items-start gap-2 text-sm text-foreground-secondary">
+              <Lock aria-hidden strokeWidth={1.5} className="mt-0.5 size-4 shrink-0" />
+              Only support requests are visible. Private legacy content stays private.
+            </span>
+          </>
         }
-      </QueryView>
+        action={
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <Button type="button" variant="outline" className="h-11" disabled={list.isFetching} onClick={() => void list.refetch()}>
+              {list.isFetching ? <Spinner /> : <RefreshCw aria-hidden strokeWidth={1.5} />}
+              Refresh
+            </Button>
+            {data && (
+              <p aria-live="polite" className="text-sm text-foreground-muted">
+                Last updated {formatTimestamp(data.evaluatedAt)}
+                <span className="block text-xs">{timeZoneLabel(new Date(data.evaluatedAt))}</span>
+              </p>
+            )}
+          </div>
+        }
+      />
+      {data ? (
+        <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-6" aria-busy={list.isFetching || undefined}>
+          {list.isError && (
+            <p role="alert" className="flex items-start gap-2 rounded-lg bg-warning/10 px-4 py-3 text-sm text-warning">
+              <AlertTriangle aria-hidden strokeWidth={1.5} className="mt-0.5 size-4 shrink-0" />
+              Couldn’t refresh. Showing results from {formatTimestamp(data.evaluatedAt)}, which may be out of date or not match
+              the current filters.
+            </p>
+          )}
+          <Overview data={data} filters={filters} nav={nav} />
+          <SupportInbox data={data} filters={filters} nav={nav} />
+          <p className="flex items-start gap-3 rounded-xl border border-border bg-surface px-5 py-4 text-sm text-foreground-secondary">
+            <Info aria-hidden strokeWidth={1.5} className="mt-0.5 size-4 shrink-0" />
+            Open a request to review the conversation and available actions.
+          </p>
+        </div>
+      ) : (
+        <QueryView query={list} loadingLabel="Loading support requests">
+          {() => null}
+        </QueryView>
+      )}
     </>
+  );
+}
+
+type Nav = ReturnType<typeof useFilterNav<SupportUrlFilters>>;
+
+/** What the counts cover, in words: every non-status filter, never the page. */
+function scopeText(f: SupportUrlFilters) {
+  const parts = [
+    f.search && `matching “${f.search}”`,
+    f.category && `in ${SUPPORT_CATEGORY_LABEL[f.category]}`,
+    f.reference && `reference ${shortId(f.reference)}`,
+    f.accountId && `account ${shortId(f.accountId)}`,
+    f.from || f.to ? `created ${f.from ? formatCalendarDate(f.from) : 'any time'} to ${f.to ? formatCalendarDate(f.to) : 'now'}` : 'all time',
+  ].filter(Boolean);
+  return `All statuses · requests ${parts.join(', ')}`;
+}
+
+function Overview({ data, filters, nav }: { data: SupportPage; filters: SupportUrlFilters; nav: Nav }) {
+  const { counts } = data;
+  const total = STATUS_ORDER.reduce((n, s) => n + counts[s], 0);
+  return (
+    <>
+      <section aria-labelledby="support-summary" className="grid gap-3">
+        <h2 id="support-summary" className="sr-only">
+          Request summary
+        </h2>
+        <p className="flex items-start gap-2 text-sm text-foreground-muted">
+          <Info aria-hidden strokeWidth={1.5} className="mt-0.5 size-4 shrink-0" />
+          {scopeText(filters)}
+        </p>
+        <ul className="grid grid-cols-1 gap-3 min-[420px]:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
+          <li>
+            <SummaryCard icon={Users} label="Total requests" value={count(total)} />
+          </li>
+          {STATUS_ORDER.map((s) => (
+            <li key={s}>
+              <SummaryCard icon={CARD_ICON[s]} label={SUPPORT_STATUS[s].admin} value={count(counts[s])} />
+            </li>
+          ))}
+        </ul>
+      </section>
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+        <section aria-labelledby="request-overview" className="grid content-start gap-5 rounded-xl border border-border bg-surface p-5 sm:p-7">
+          <h2 id="request-overview" className="text-2xl">
+            Request overview
+          </h2>
+          <SegmentedBar
+            what="requests"
+            segments={STATUS_ORDER.map((s) => ({
+              key: s,
+              label: SUPPORT_STATUS[s].admin,
+              short: SUPPORT_STATUS[s].admin,
+              n: counts[s],
+              fill: FILL[s],
+            }))}
+          />
+        </section>
+        <section aria-labelledby="needs-attention" className="grid content-start gap-3 rounded-xl border border-border bg-surface p-5 sm:p-7">
+          <h2 id="needs-attention" className="text-2xl">
+            Needs attention
+          </h2>
+          <p className="text-[15px]">
+            <span className="font-heading text-2xl tabular-nums">{count(counts.OPEN)}</span>{' '}
+            {counts.OPEN === 1 ? 'open request' : 'open requests'}
+          </p>
+          {counts.OPEN > 0 ? (
+            <>
+              <p className="text-sm text-foreground-muted">Status Open: not yet in progress, waiting for customer or resolved.</p>
+              <Link
+                href={`${nav.href({ status: 'OPEN', page: undefined })}#support-inbox`}
+                scroll={false}
+                aria-current={filters.status === 'OPEN' ? 'true' : undefined}
+                className={cn(linkClass, 'inline-flex w-fit items-center gap-1')}
+              >
+                View open requests
+                <ArrowRight aria-hidden strokeWidth={1.5} className="size-4" />
+              </Link>
+            </>
+          ) : (
+            <p className="text-sm text-foreground-muted">No open requests in this selection.</p>
+          )}
+        </section>
+      </div>
+    </>
+  );
+}
+
+function SupportInbox({ data, filters, nav }: { data: SupportPage; filters: SupportUrlFilters; nav: Nav }) {
+  const { items, pagination, counts, evaluatedAt } = data;
+  const total = STATUS_ORDER.reduce((n, s) => n + counts[s], 0);
+  const secondary = SECONDARY.filter((k) => filters[k]);
+  const filtered = !!(filters.status || filters.search || secondary.length);
+  const clearAll = () => nav.set(Object.fromEntries(['status', 'search', ...SECONDARY].map((k) => [k, undefined])));
+  const chips: [keyof SupportUrlFilters, string][] = [
+    ...(filters.status ? [['status', `Status: ${SUPPORT_STATUS[filters.status].admin}`] as [keyof SupportUrlFilters, string]] : []),
+    ...(filters.search ? [['search', `Search: “${filters.search}”`] as [keyof SupportUrlFilters, string]] : []),
+    ...(filters.category ? [['category', `Category: ${SUPPORT_CATEGORY_LABEL[filters.category]}`] as [keyof SupportUrlFilters, string]] : []),
+    ...(filters.reference ? [['reference', `Reference: ${shortId(filters.reference)}`] as [keyof SupportUrlFilters, string]] : []),
+    ...(filters.accountId ? [['accountId', `Account: ${shortId(filters.accountId)}`] as [keyof SupportUrlFilters, string]] : []),
+    ...(filters.from ? [['from', `From ${formatCalendarDate(filters.from)}`] as [keyof SupportUrlFilters, string]] : []),
+    ...(filters.to ? [['to', `To ${formatCalendarDate(filters.to)}`] as [keyof SupportUrlFilters, string]] : []),
+  ];
+  return (
+    <section id="support-inbox" aria-labelledby="support-inbox-title" className="grid min-w-0 scroll-mt-6 grid-cols-[minmax(0,1fr)] gap-5 rounded-xl border border-border bg-surface p-5 sm:p-7">
+      <div className="flex flex-wrap items-center gap-3">
+        <h2 id="support-inbox-title" className="text-2xl">
+          Support inbox
+        </h2>
+        <Badge>
+          {count(pagination.total)} {pagination.total === 1 ? 'request' : 'requests'}
+        </Badge>
+      </div>
+      <FilterChips
+        label="Filter by status"
+        className="mb-0"
+        chips={[
+          { label: `All ${count(total)}`, href: nav.href({ status: undefined, page: undefined }), active: !filters.status },
+          ...STATUS_ORDER.map((s) => ({
+            label: `${SUPPORT_STATUS[s].admin} ${count(counts[s])}`,
+            href: nav.href({ status: s, page: undefined }),
+            active: filters.status === s,
+          })),
+        ]}
+      />
+      <SearchBox
+        value={filters.search}
+        onSearch={(search) => nav.set({ search })}
+        label="Search subject or full reference"
+        placeholder="Subject, or a full request reference"
+        maxLength={150}
+      />
+      <details open={secondary.length > 0 || undefined} className="group rounded-lg border border-border">
+        <summary className="flex min-h-11 cursor-pointer items-center gap-2 rounded-lg px-4 text-sm font-medium outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring">
+          <SlidersHorizontal aria-hidden strokeWidth={1.5} className="size-4" />
+          More filters
+          {secondary.length > 0 && <Badge>{secondary.length} active</Badge>}
+        </summary>
+        <div className="border-t border-border p-4">
+          <SupportFilterForm key={JSON.stringify(filters)} filters={filters} onApply={nav.set} />
+        </div>
+      </details>
+      {chips.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="text-foreground-muted">Filtered by</span>
+          {chips.map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => nav.set({ [key]: undefined })}
+              className="inline-flex min-h-8 max-w-full items-center gap-1 rounded-full border border-border bg-surface-muted px-3 outline-none hover:border-border-strong focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring"
+            >
+              <span className="truncate">{label}</span>
+              <X aria-hidden className="size-3.5 shrink-0" />
+              <span className="sr-only">(remove filter)</span>
+            </button>
+          ))}
+          <Button type="button" variant="link" size="sm" onClick={clearAll}>
+            Clear filters
+          </Button>
+        </div>
+      )}
+      <p className="text-xs text-foreground-muted">
+        Times in {timeZoneLabel(new Date(evaluatedAt))}. Newest requests first. Last public activity counts the request, customer
+        follow-ups and public replies, never internal notes.
+      </p>
+      {items.length === 0 ? (
+        pagination.total > 0 ? (
+          <EmptyState
+            heading="h3"
+            icon={Inbox}
+            title="This page is past the end of the list"
+            action={
+              <Button asChild variant="outline">
+                <Link href={nav.href({ page: undefined })}>Go to the first page</Link>
+              </Button>
+            }
+          />
+        ) : filtered ? (
+          <EmptyState
+            heading="h3"
+            icon={Search}
+            title="No requests match these filters"
+            action={
+              <Button type="button" variant="outline" onClick={clearAll}>
+                Clear filters
+              </Button>
+            }
+          />
+        ) : (
+          <EmptyState heading="h3" icon={Inbox} title="No support requests yet" description="Requests appear here when customers ask for help." />
+        )
+      ) : (
+        <div>
+          <DataTable
+            caption="Support requests"
+            rows={items}
+            rowKey={(r) => r.id}
+            columns={[
+              {
+                header: 'Request',
+                cell: (r) => (
+                  <span className="grid min-w-0 gap-1">
+                    {/* Customer text: rendered as text, never HTML. */}
+                    <span className="font-medium [overflow-wrap:anywhere]">{r.subject}</span>
+                    <Reference value={r.id} label="request reference" />
+                  </span>
+                ),
+              },
+              { header: 'Category', cell: (r) => SUPPORT_CATEGORY_LABEL[r.category] },
+              { header: 'Status', cell: (r) => <StatusBadge status={r.status} admin /> },
+              {
+                header: 'Account',
+                cell: (r) => (
+                  <Link
+                    href={nav.href({ accountId: r.ownerUserId, page: undefined })}
+                    scroll={false}
+                    title={r.ownerUserId}
+                    className={cn(linkClass, 'font-mono text-xs')}
+                  >
+                    {shortId(r.ownerUserId)}
+                    <span className="sr-only"> (show this account’s requests)</span>
+                  </Link>
+                ),
+              },
+              { header: 'Created', cell: (r) => <span className="whitespace-nowrap">{formatTimestamp(r.createdAt)}</span> },
+              {
+                header: 'Last public activity',
+                cell: (r) => <span className="whitespace-nowrap">{formatTimestamp(r.lastPublicActivityAt)}</span>,
+              },
+              {
+                header: 'Action',
+                cell: (r) => (
+                  <Link href={`${BASE}/${r.id}`} className={cn(linkClass, 'inline-flex items-center gap-1 whitespace-nowrap')}>
+                    View request
+                    <span className="sr-only">: {r.subject}</span>
+                    <ArrowRight aria-hidden strokeWidth={1.5} className="size-4" />
+                  </Link>
+                ),
+              },
+            ]}
+          />
+          <Pager pagination={pagination} hrefFor={(page) => nav.href({ page })} />
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -112,17 +392,9 @@ function SupportFilterForm({ filters, onApply }: { filters: SupportUrlFilters; o
     setErrors(next);
     if (Object.keys(next).length === 0) onApply(t);
   };
-  const hasFilters = Object.entries(filters).some(([k, v]) => k !== 'page' && v);
   return (
-    <form onSubmit={submit} noValidate aria-label="Filter support requests" className="mb-8 grid gap-4 rounded-xl border border-border bg-surface p-5">
+    <form onSubmit={submit} noValidate aria-label="More filters" className="grid gap-4">
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <SelectField
-          id="status"
-          label="Status"
-          value={f.status ?? ''}
-          onChange={(e) => setF({ ...f, status: (e.target.value || undefined) as SupportStatus | undefined })}
-          options={[{ value: '', label: 'Any status' }, ...SUPPORT_STATUSES.map((s) => ({ value: s, label: SUPPORT_STATUS[s].admin }))]}
-        />
         <SelectField
           id="category"
           label="Category"
@@ -137,11 +409,6 @@ function SupportFilterForm({ filters, onApply }: { filters: SupportUrlFilters; o
       </div>
       <div className="flex flex-wrap items-center gap-3">
         <Button type="submit">Apply filters</Button>
-        {hasFilters && (
-          <Button asChild variant="ghost">
-            <Link href={BASE}>Clear filters</Link>
-          </Button>
-        )}
       </div>
     </form>
   );

@@ -243,7 +243,7 @@ function MediaCheck({ kind }: { kind: MediaKind }) {
   const status = unavailable
     ? unavailable
     : phase.at === 'pending'
-      ? 'Waiting for your browser… Answer its question to continue.'
+      ? 'Waiting for your browser… Please give your browser permission to use your camera/microphone'
       : phase.at === 'live'
         ? kind === 'camera'
           ? 'Working. Your camera is on for this check only.'

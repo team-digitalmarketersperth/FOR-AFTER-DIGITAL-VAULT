@@ -6,7 +6,7 @@ import { PromptEditor } from '@/components/prompts/prompts';
 import { textRevision, type Draft } from '@/lib/api/drafts';
 import type { Message } from '@/lib/api/messages';
 import type { Prompt } from '@/lib/api/prompts';
-import { json, page, renderWithClient, routeFetch, router } from '@/test/utils';
+import { BILLING_OFF, json, page, renderWithClient, routeFetch, router } from '@/test/utils';
 
 vi.mock('next/navigation', () => ({ useRouter: () => router, usePathname: () => '/messages' }));
 
@@ -192,6 +192,8 @@ const storyPrompt = (over: Partial<Prompt> = {}): Prompt => ({
 describe('My Story / My Wishes autosave', () => {
   it('My Story: autosaves unsaved text against the saved answer, and recovers it', async () => {
     const api = routeFetch({
+      // Step 5: a new answer opens once the plan is read (billing off: no trial cap).
+      'GET /billing': json(200, BILLING_OFF),
       'GET /my-story/prompts/childhood.home': json(200, storyPrompt()),
       'GET /my-story/prompts/childhood.home/response/media': json(200, []),
       'GET /users/me/drafts/MY_STORY/childhood.home': nothing,
@@ -208,6 +210,8 @@ describe('My Story / My Wishes autosave', () => {
     unmount();
 
     routeFetch({
+      // Step 5: a new answer opens once the plan is read (billing off: no trial cap).
+      'GET /billing': json(200, BILLING_OFF),
       'GET /my-story/prompts/childhood.home': json(200, storyPrompt()),
       'GET /my-story/prompts/childhood.home/response/media': json(200, []),
       'GET /users/me/drafts/MY_STORY/childhood.home': json(
@@ -223,6 +227,8 @@ describe('My Story / My Wishes autosave', () => {
   it('My Wishes: autosaves with no notice acknowledgement', async () => {
     const wish = storyPrompt({ key: 'ceremony.style', category: 'CEREMONY', prompt: 'What kind of gathering would you like?' });
     const api = routeFetch({
+      // Step 5: a new answer opens once the plan is read (billing off: no trial cap).
+      'GET /billing': json(200, BILLING_OFF),
       'GET /my-wishes/disclaimer': json(200, {
         version: 1,
         text: 'Notice.',

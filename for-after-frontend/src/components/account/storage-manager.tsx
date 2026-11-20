@@ -22,7 +22,7 @@ import {
   type StorageSort,
   type StorageSource,
 } from '@/lib/api/media';
-import { formatBytes, formatDate } from '@/lib/format';
+import { decimalLimit, formatBytes, formatDate } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
 const BASE = '/settings/storage';
@@ -137,8 +137,8 @@ export function StorageManager({ filters }: { filters: StorageFilters }) {
                 <StorageBar usage={u} />
                 <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-3">
                   <Fact term="Used" value={`${u.percentage}%`} />
-                  <Fact term="Remaining" value={formatBytes(u.remainingBytes)} />
-                  {u.reservedBytes > 0 && <Fact term="Uploads in progress" value={formatBytes(u.reservedBytes)} />}
+                  <Fact term="Remaining" value={formatBytes(u.remainingBytes, decimalLimit(u.limitBytes))} />
+                  {u.reservedBytes > 0 && <Fact term="Uploads in progress" value={formatBytes(u.reservedBytes, decimalLimit(u.limitBytes))} />}
                 </dl>
                 {notice && (
                   <p role="status" className={cn('text-sm', notice.tone)}>

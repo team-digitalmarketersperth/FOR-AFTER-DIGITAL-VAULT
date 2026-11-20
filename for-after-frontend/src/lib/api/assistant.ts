@@ -20,7 +20,26 @@ export type AssistantRequest = {
   source?: string;
   promptKey?: string;
   history?: AssistantTurn[];
+  /** Updated Plans Step 5: a fresh id per Send (the server refuses a reused one, never re-running it). */
+  requestId?: string;
 };
+
+/**
+ * Updated Plans Step 5: this account's AI allowance (GET /assistant/usage). `metered: false` means no allowance
+ * applies to this account (an exemption or a state the server explains); it is never described as unlimited.
+ */
+export type AssistantUsage =
+  | {
+      metered: true;
+      kind: 'trial' | 'month';
+      allowance: number;
+      used: number;
+      inProgress: number;
+      remaining: number;
+      periodEndsAt: string;
+      resetsAt: string | null;
+    }
+  | { metered: false; reason: 'billing_off' | 'grandfathered' | 'unmapped_paid' | 'no_access' };
 
 /** `draft`: the reply is text for the editor; `open`: a section the server approved to link to. */
 export type AssistantReply = { reply: string; truncated: boolean; draft?: boolean; open?: AssistantPage };
@@ -30,6 +49,7 @@ export const ASSISTANT_LIMITS = { message: 2_000, source: 6_000, turn: 3_000, hi
 export const assistantApi = {
   reply: (body: AssistantRequest, signal?: AbortSignal) =>
     apiRequest<AssistantReply>('/assistant/reply', { method: 'POST', body, signal }),
+  usage: (signal?: AbortSignal) => apiRequest<AssistantUsage>('/assistant/usage', { signal }),
 };
 
 /** The newest turns that fit the request's remaining character budget. */

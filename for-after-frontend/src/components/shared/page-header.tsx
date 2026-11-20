@@ -31,7 +31,12 @@ export function PageHeader({
         <div className="grid gap-3">
           {eyebrow && <p className="eyebrow">{eyebrow}</p>}
           <h1 className="text-[40px] leading-[1.05] break-words sm:text-5xl">{title}</h1>
-          {description && <p className="max-w-2xl text-lg text-foreground-muted">{description}</p>}
+          {/* A plain-text intro keeps the standard style; structured intros bring their own paragraphs. */}
+          {typeof description === 'string' ? (
+            description && <p className="max-w-2xl text-lg text-foreground-muted">{description}</p>
+          ) : (
+            description
+          )}
         </div>
         {action && <div className="shrink-0">{action}</div>}
       </div>

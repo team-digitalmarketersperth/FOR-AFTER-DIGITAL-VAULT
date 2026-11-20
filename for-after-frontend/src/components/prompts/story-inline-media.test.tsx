@@ -2,11 +2,14 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { Prompt } from '@/lib/api/prompts';
-import { FAKE_PROVIDER_FILE_ID, fakeStorage, json, page, renderWithClient, routeFetch, router } from '@/test/utils';
+import { FAKE_PROVIDER_FILE_ID, fakeStorage, json, page, renderWithClient, routeFetch as stubFetch, router, BILLING_OFF } from '@/test/utils';
 import { CompanionProvider } from '@/components/companion/companion';
 import { StoryWorkspace } from './story-workspace';
 
 vi.mock('next/navigation', () => ({ useRouter: () => router, usePathname: () => '/my-story' }));
+
+// Step 5 gates a new answer on the plan: billing off here (no trial cap). Trial behaviour: trial-questions.test.tsx.
+const routeFetch = (routes: Parameters<typeof stubFetch>[0]) => stubFetch({ 'GET /billing': json(200, BILLING_OFF), ...routes });
 
 // Inline media and Memory Vault links on the focused My Story editor (2026-10-27).
 const A = 'travel.journey';
@@ -49,6 +52,8 @@ const uploadUrl = (id: string) =>
 type Routes = Parameters<typeof routeFetch>[0];
 const setup = (first: Prompt['response'] = null, extra: Routes = {}) =>
   routeFetch({
+    // The chapter preview below the editor (no chapters here).
+    'GET /my-story/book': json(200, { chapters: [], unsorted: [] }),
     // With A answered, B is too, so the editor opens on A (it opens on the first unanswered question).
     'GET /my-story/prompts': json(200, [
       prompt(A, 'Tell us about a journey?', first),
@@ -211,12 +216,14 @@ describe('My Story focused editor: inline media and memories', () => {
 
   it('unlinking removes the link only: the memory itself is never deleted', async () => {
     const api = setup(answer({ memories: [{ id: 'm2', title: 'Night in Esperance', category: 'TRAVEL' }] }), {
-      [`PUT ${base(A)}/response`]: json(200, answer()),
+      [`DELETE ${base(A)}/response/memories`]: json(200, answer()),
     });
     renderWithClient(<CompanionProvider><StoryWorkspace /></CompanionProvider>);
     await userEvent.click(await screen.findByRole('button', { name: 'Unlink Night in Esperance' }));
-    await waitFor(() => expect(api.called('PUT', `${base(A)}/response`)[0]?.body).toEqual({ memoryVaultItemIds: [] }));
-    expect(api.calls.some((c) => c.method === 'DELETE')).toBe(false);
+    // Step 7: removal only (no answer save); never a delete of the memory or the answer.
+    await waitFor(() => expect(api.called('DELETE', `${base(A)}/response/memories`)[0]?.body).toEqual({ memoryVaultItemIds: ['m2'] }));
+    expect(api.calls.filter((c) => c.method === 'DELETE').map((c) => c.path)).toEqual([`${base(A)}/response/memories`]);
+    expect(api.called('PUT', `${base(A)}/response`)).toHaveLength(0);
   });
 
   it('private note loads, is saved with Save answer, and a failed save keeps both', async () => {

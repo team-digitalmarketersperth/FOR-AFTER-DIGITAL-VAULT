@@ -4,10 +4,13 @@ import { describe, expect, it, vi } from 'vitest';
 import { CreateMessageFromPrompt } from '@/components/memory-vault/memory-to-message';
 import { CompanionProvider } from '@/components/companion/companion';
 import type { Prompt } from '@/lib/api/prompts';
-import { FAKE_PROVIDER_FILE_ID, fakeStorage, json, renderWithClient, routeFetch, router } from '@/test/utils';
+import { FAKE_PROVIDER_FILE_ID, fakeStorage, json, renderWithClient, routeFetch as stubFetch, router, BILLING_OFF } from '@/test/utils';
 import { PromptEditor, PromptList } from './prompts';
 
 vi.mock('next/navigation', () => ({ useRouter: () => router, usePathname: () => '/my-wishes' }));
+
+// Step 5 gates a new answer on the plan: billing off here (no trial cap). Trial behaviour: trial-questions.test.tsx.
+const routeFetch = (routes: Parameters<typeof stubFetch>[0]) => stubFetch({ 'GET /billing': json(200, BILLING_OFF), ...routes });
 
 // Phase 15B (approved policy): photos/recordings/videos on a wish and
 // Wish → Message. The wish stays private; sharing is a separate message with
@@ -93,7 +96,7 @@ describe('My Wishes editor: rich wishes (Phase 15B)', () => {
       action: 'draft',
       message: 'calm music',
       source: 'Something gentle by the sea.',
-      history: [],
+      history: [], requestId: expect.stringMatching(/^[0-9a-f-]{36}$/),
     });
     await userEvent.click(await within(p).findByRole('button', { name: 'Use this draft' }));
     await userEvent.keyboard('{Escape}');

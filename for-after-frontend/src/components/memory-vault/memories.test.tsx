@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import { fakeStorage, json, renderWithClient, routeFetch, router } from '@/test/utils';
+import { BILLING_OFF, fakeStorage, json, renderWithClient, routeFetch, router } from '@/test/utils';
 import { CompanionProvider } from '@/components/companion/companion';
 import { MEMORY_CATEGORIES } from '@/lib/api/memory-vault';
 import { EditMemory, MemoryDetail, MemoryList, NewMemory } from './memories';
@@ -45,7 +45,7 @@ describe('Memory Vault', () => {
     expect(h1).toHaveTextContent(/^Memory Vault$/);
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
     const lines = [
-      'Gather the photos, videos and stories that celebrate your life. After you pass away, your Memory Vault will become a memorial page to share with loved ones and funeral guests.',
+      'Gather the photos, videos and stories that celebrate your life. After you pass away, your Memory Vault will become a memorial page to share with loved ones and funeral guests',
       // Kept as secondary guidance.
       'Choose what you share with that future audience in mind. Only add content you’re comfortable having seen by everyone who may receive the memorial page link.',
     ];
@@ -149,9 +149,10 @@ describe('Memory Vault', () => {
   });
 
   it('creates with title, category, text and tags', async () => {
-    const api = routeFetch({ 'POST /memory-vault': json(201, memory), 'GET /memory-vault/tags': json(200, tagList) });
+    // The form opens once the plan is known (Step 7: never unrestricted while unknown).
+    const api = routeFetch({ 'POST /memory-vault': json(201, memory), 'GET /memory-vault/tags': json(200, tagList), 'GET /billing': json(200, BILLING_OFF) });
     renderWithClient(<NewMemory />);
-    await userEvent.click(screen.getByRole('button', { name: 'Save memory' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Save memory' }));
     expect(await screen.findByText('Choose a category.')).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText('Title'), 'Nana’s roast');
     await userEvent.click(screen.getByRole('radio', { name: 'Recipes' }));
@@ -187,7 +188,7 @@ describe('Memory Vault', () => {
     expect(p).toHaveTextContent('For: Nana’s roast');
     await userEvent.click(within(p).getByRole('checkbox', { name: /Include the text in “The memory”/ }));
     await userEvent.click(within(p).getByRole('button', { name: 'Help describe a memory' }));
-    expect(api.called('POST', '/assistant/reply')[0].body).toEqual({ page: 'memory-vault', action: 'expand', source: 'Low and slow.', history: [] });
+    expect(api.called('POST', '/assistant/reply')[0].body).toEqual({ page: 'memory-vault', action: 'expand', source: 'Low and slow.', history: [], requestId: expect.stringMatching(/^[0-9a-f-]{36}$/) });
     await userEvent.click(await within(p).findByRole('button', { name: 'Use this draft' }));
     expect(within(p).getByRole('status')).toHaveTextContent('then choose Save changes.');
     await userEvent.keyboard('{Escape}');

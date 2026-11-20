@@ -48,7 +48,7 @@ const routes = (over: Record<string, Response | ((...a: never[]) => Response)> =
     ...over,
   });
 
-describe('Preview how it will be shared (dashboard)', () => {
+describe('Preview how it will be shared (Messages page)', () => {
   it('picks the next fixed-date scheduled message by default, with real recipients and timing', async () => {
     routes();
     renderWithClient(<SharePreview />);

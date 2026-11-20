@@ -15,6 +15,7 @@ export default async function Page({ searchParams }: PageProps<'/admin/support'>
         page: pageParam(p.page),
         status: enumParam(p.status, SUPPORT_STATUSES),
         category: enumParam(p.category, SUPPORT_CATEGORIES),
+        search: textParam(p.search, 150),
         reference: uuid(textParam(p.reference)),
         accountId: uuid(textParam(p.accountId)),
         from: date(textParam(p.from)),

@@ -1,11 +1,14 @@
 'use client';
 
-import { History } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { Eye, History } from 'lucide-react';
+import { useEffect, useId, useState } from 'react';
+import Link from 'next/link';
 import { Spinner } from '@/components/shared/states';
 import { Button } from '@/components/ui/button';
+import { useCurrentUser } from '@/hooks/use-auth';
 import type { DraftEditor } from '@/hooks/use-draft-editor';
-import type { DraftPayload } from '@/lib/api/drafts';
+import type { DraftPayload, DraftType } from '@/lib/api/drafts';
+import { dropLocalDraft, localDraftKey, readLocalDraft } from '@/lib/local-drafts';
 import { formatDateTime } from '@/lib/format';
 
 const ago = (at: Date, now: number) => {
@@ -29,6 +32,18 @@ export function AutosaveStatus({ editor }: { editor: DraftEditor<DraftPayload> }
     const timer = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(timer);
   }, [savedAt]);
+  if (status === 'plan') {
+    return (
+      <p role="alert" className="text-sm text-foreground-secondary">
+        <strong className="font-medium">Not saved to your account.</strong> Your plan doesn’t include editing now. Your
+        words stay on this page, and where your browser allows, this tab keeps a temporary copy. It may disappear when
+        you close the tab, and it is removed when you sign out.{' '}
+        <Link href="/settings/plan" className="underline underline-offset-2">
+          View plans
+        </Link>
+      </p>
+    );
+  }
   if (status === 'error') {
     return (
       <p role="alert" className="flex flex-wrap items-center gap-2 text-sm text-danger">
@@ -88,11 +103,19 @@ export function RecoveryNotice<P extends DraftPayload>({
           <h2 id="recovery-heading" className="text-2xl">
             Unsaved changes found
           </h2>
+          {d.local ? (
+            <p className="text-foreground-secondary">
+              <strong className="font-medium">Not saved to your account.</strong> This browser tab kept changes from{' '}
+              {formatDateTime(d.updatedAt)} that couldn&apos;t be saved. The copy is temporary: it may disappear when
+              you close this tab, and it&apos;s removed when you sign out. Restore them and press Save to keep them.
+            </p>
+          ) : (
           <p className="text-foreground-secondary">
             {d.conflict
               ? `We found changes from ${formatDateTime(d.updatedAt)}, but this was saved again after they were made, so they can't be restored over it. You can read them below and copy anything you need, or discard them.`
               : `We found changes from ${formatDateTime(d.updatedAt)} that weren't part of your last save.`}
           </p>
+          )}
         </div>
       </div>
       <details className="rounded-lg border border-border bg-surface px-5 py-3" open={d.conflict}>
@@ -135,3 +158,65 @@ export function RecoveryNotice<P extends DraftPayload>({
     </section>
   );
 }
+
+/**
+ * Step 7 close-out: on a read-only page (no write access), a copy kept in this tab after a refused autosave can still be
+ * read ("View unsaved draft") or discarded. Reading only: nothing here edits, restores or saves, and the server is
+ * never asked. Nothing is shown without a copy for this account.
+ */
+export function KeptDraft({
+  type,
+  draftKey,
+  text,
+}: {
+  type: DraftType;
+  draftKey: string | null;
+  text: (payload: Record<string, unknown>) => string;
+}) {
+  const userId = useCurrentUser().data?.id;
+  const storageKey = userId ? localDraftKey(userId, type, draftKey) : null;
+  const [gone, setGone] = useState(false);
+  const [open, setOpen] = useState(false);
+  const panel = useId();
+  const kept = storageKey && !gone ? readLocalDraft<Record<string, unknown>>(storageKey) : null;
+  if (!storageKey || !kept) return null;
+  return (
+    <section aria-labelledby={`${panel}-h`} className="mb-6 grid max-w-3xl gap-3 rounded-xl border border-border bg-primary-soft p-5">
+      <h2 id={`${panel}-h`} className="text-lg">
+        Unsaved draft in this tab
+      </h2>
+      <p className="text-sm text-foreground-secondary">
+        <strong className="font-medium">Not saved to your account.</strong> Changes from {formatDateTime(kept.updatedAt)}{' '}
+        couldn&apos;t be saved. This tab keeps a temporary copy: it may disappear when you close the tab, and it&apos;s
+        removed when you sign out. You can read it and copy anything you need.
+      </p>
+      <div className="flex flex-wrap gap-3">
+        <Button type="button" variant="outline" aria-expanded={open} aria-controls={panel} onClick={() => setOpen((o) => !o)}>
+          <Eye aria-hidden strokeWidth={1.5} />
+          {open ? 'Hide unsaved draft' : 'View unsaved draft'}
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={() => {
+            dropLocalDraft(storageKey);
+            setGone(true);
+          }}
+        >
+          Discard
+        </Button>
+      </div>
+      {open && (
+        <div id={panel} role="region" aria-label="Unsaved draft" className="rounded-lg border border-border bg-surface px-5 py-3">
+          <p className="whitespace-pre-wrap break-words text-foreground-secondary">
+            {text(kept.payload) || <span className="text-foreground-muted">No written text.</span>}
+          </p>
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** A kept message copy as the Customer wrote it: title, then text. */
+export const messageDraftText = (d: Record<string, unknown>) =>
+  [d.title, d.textContent].filter((v) => typeof v === 'string' && v).join('\n\n');

@@ -46,10 +46,14 @@ export function chaptersOf(book: StoryBook): Chapter[] {
 
 const chapterHref = (key: string) => `${BOOK}?chapter=${encodeURIComponent(key)}`;
 
-// ─── Dashboard ───────────────────────────────────────────────────────────────
+// ─── My Story page: chapter preview ──────────────────────────────────────────
 
-/** Compact: up to three chapter titles, real progress, and the way in. Never the answers themselves. */
-export function StoryChapters() {
+/**
+ * Compact, below the writing area on /my-story: up to three chapter titles,
+ * real progress and the book. Never the answers themselves. `guardLink` is the
+ * page's unsaved-edits check, so leaving for the book never drops a draft.
+ */
+export function StoryChapters({ guardLink }: { guardLink?: (href: string) => (e: MouseEvent) => void }) {
   const book = useStoryBook();
   const prompts = usePrompts('my-story');
   const failed = book.isError || prompts.isError;
@@ -72,14 +76,10 @@ export function StoryChapters() {
       ) : book.isPending || prompts.isPending ? (
         <div aria-busy="true" aria-label="Loading your story" className="h-40 animate-pulse rounded-xl border border-border bg-surface-muted" />
       ) : chapters.length === 0 ? (
+        // The prompts to answer are right above on this page, so no link back to it.
         <div className="grid gap-3 rounded-xl border border-border bg-brand-ivory p-6 sm:p-8">
           <h3 className="text-[28px] leading-tight">Your story begins with a memory.</h3>
           <p className="text-[15px] text-foreground-secondary">Answer a few thoughtful prompts and watch your chapters take shape.</p>
-          <div className="mt-2">
-            <Button asChild>
-              <Link href="/my-story">Begin your story</Link>
-            </Button>
-          </div>
         </div>
       ) : (
         <div className="grid gap-6 rounded-xl border border-border bg-brand-ivory p-6 sm:p-8 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
@@ -89,6 +89,7 @@ export function StoryChapters() {
                 <li key={c.key}>
                   <Link
                     href={chapterHref(c.key)}
+                    onClick={guardLink?.(chapterHref(c.key))}
                     className="group inline-flex items-baseline gap-3 rounded-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-solid focus-visible:outline-brand-maroon"
                   >
                     <span className="w-20 shrink-0 text-xs font-medium tracking-[0.14em] text-brand-maroon uppercase">Chapter {i + 1}</span>
@@ -103,14 +104,11 @@ export function StoryChapters() {
             <StoryProgress answered={answered} total={prompts.data!.length} className="max-w-md" />
           </div>
           <div className="flex flex-wrap gap-3">
-            <Button asChild>
-              <Link href={BOOK}>
+            <Button asChild variant="outline">
+              <Link href={BOOK} onClick={guardLink?.(BOOK)}>
                 <BookOpen aria-hidden strokeWidth={1.5} />
                 Preview My Story
               </Link>
-            </Button>
-            <Button asChild variant="outline">
-              <Link href="/my-story">Continue writing</Link>
             </Button>
           </div>
         </div>

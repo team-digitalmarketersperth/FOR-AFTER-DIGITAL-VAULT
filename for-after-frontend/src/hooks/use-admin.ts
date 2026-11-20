@@ -10,11 +10,12 @@ import {
   type AdminMe,
   type AdminUser,
   type AdminUserDetail,
+  type UserPage,
   type AuditFilters,
   type AuditLog,
   type CaseFilters,
   type DeathCaseDetail,
-  type DeathCaseSummary,
+  type CasePage,
   type DeadLetter,
   type DeadLetterFilters,
   type DeliveryFilters,
@@ -51,7 +52,7 @@ import {
   type AiOperations,
   type AdminSupportFilters,
   type AdminSupportRequest,
-  type AdminSupportSummary,
+  type SupportPage,
   type TotpConfirmed,
   type TotpSetup,
   type UserFilters,
@@ -238,7 +239,7 @@ export const useAdminDashboard = () =>
 
 // Paged lists keep the previous page on screen while the next one loads.
 export const useAdminUsers = (f: UserFilters) =>
-  useQuery<Page<AdminUser>, ApiError>({
+  useQuery<UserPage, ApiError>({
     queryKey: adminKeys.userList(f),
     queryFn: ({ signal }) => adminApi.users(f, signal),
     placeholderData: keepPreviousData,
@@ -251,7 +252,7 @@ export const useAdminUser = (id: string) =>
   });
 
 export const useDeathCases = (f: CaseFilters) =>
-  useQuery<Page<DeathCaseSummary>, ApiError>({
+  useQuery<CasePage, ApiError>({
     queryKey: adminKeys.caseList(f),
     queryFn: ({ signal }) => adminApi.cases(f, signal),
     placeholderData: keepPreviousData,
@@ -360,7 +361,7 @@ export const useStorageAsset = (reference: string) =>
 
 // Support inbox (Step 7). Each command's response is the new detail.
 export const useAdminSupportList = (f: AdminSupportFilters) =>
-  useQuery<Page<AdminSupportSummary>, ApiError>({
+  useQuery<SupportPage, ApiError>({
     queryKey: adminKeys.supportList(f),
     queryFn: ({ signal }) => adminApi.supportRequests(f, signal),
     placeholderData: keepPreviousData,

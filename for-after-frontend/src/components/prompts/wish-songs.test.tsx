@@ -111,8 +111,9 @@ describe('My Wishes: Music I’d like remembered', () => {
       { title: 'Amazing Grace', link: null, moment: null, momentOther: null, note: null },
     ]);
     expect(await screen.findByText('Amazing Grace')).toBeInTheDocument();
-    // Saving touched nothing but the songs API.
-    expect(new Set(api.calls.map((c) => c.path))).toEqual(new Set(['/my-wishes/songs']));
+    // Saving touched nothing but the songs API (besides the plan read the Step 6 lock makes).
+    const touched = api.calls.filter((c) => !(c.method === 'GET' && c.path === '/billing')).map((c) => c.path);
+    expect(new Set(touched)).toEqual(new Set(['/my-wishes/songs']));
   });
 
   it('Enter on step 1 moves on (or shows errors) and never saves', async () => {

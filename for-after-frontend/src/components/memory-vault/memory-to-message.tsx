@@ -2,9 +2,9 @@
 
 import { zodResolver } from '@hookform/resolvers/zod';
 import type { UseMutationResult } from '@tanstack/react-query';
-import { Lock } from 'lucide-react';
+import { Film, ImagePlus, Lock } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { useForm, useWatch } from 'react-hook-form';
 import { toast } from 'sonner';
 import { CONTENT_TYPE_INFO } from '@/components/messages/message-bits';
@@ -12,6 +12,7 @@ import { RecipientChecklist, Section } from '@/components/messages/message-form'
 import { ChoiceGroup, FormError, TextField } from '@/components/shared/form-field';
 import { PageHeader } from '@/components/shared/page-header';
 import { QueryView, Spinner } from '@/components/shared/states';
+import { COMPLETE_VIDEO_COPY, CompleteVideoButton, PAID_MEDIA_COPY, PaidMediaButton, PlanCheck, TRIAL_VIDEO_COPY, usePaidMedia } from '@/components/shared/trial-cap';
 import { Button } from '@/components/ui/button';
 import { useMediaList } from '@/hooks/use-media';
 import { memories, useAnswerMessage, usePrompt } from '@/hooks/use-vault';
@@ -143,6 +144,11 @@ function CreateMessageForm({
   });
   const { errors } = form.formState;
   const [recipientIds, mediaAssetIds] = useWatch({ control: form.control, name: ['recipientIds', 'mediaAssetIds'] });
+  // Trial Step 4: copying files or a non-text format is paid-only. Text becomes the default unless already chosen.
+  const paid = usePaidMedia();
+  useEffect(() => {
+    if (paid.locked && !form.getFieldState('contentType').isDirty) form.setValue('contentType', 'TEXT');
+  }, [paid.locked, form]);
   const toggle = (field: 'recipientIds' | 'mediaAssetIds', current: string[], value: string) =>
     form.setValue(field, current.includes(value) ? current.filter((x) => x !== value) : [...current, value], {
       shouldDirty: true,
@@ -184,6 +190,7 @@ function CreateMessageForm({
         </Section>
 
         <Section title="What kind of message?">
+          <PlanCheck billing={paid.billing} />
           <ChoiceGroup
             legend="Message type"
             className="sm:grid-cols-2"
@@ -195,6 +202,7 @@ function CreateMessageForm({
                 label: info.label,
                 description: info.description,
                 icon: <info.icon aria-hidden strokeWidth={1.5} className="size-4 text-primary" />,
+                locked: paid.locked && t !== 'TEXT' ? (t === 'VIDEO' ? TRIAL_VIDEO_COPY : PAID_MEDIA_COPY) : paid.videoLocked && t === 'VIDEO' ? COMPLETE_VIDEO_COPY : undefined,
               };
             })}
           />
@@ -207,7 +215,21 @@ function CreateMessageForm({
               <input type="checkbox" className="size-4 accent-primary" disabled={!hasText} {...form.register('includeText')} />
               {hasText ? `The ${source}’s written text` : `This ${source} has no written text`}
             </label>
-            {ready.map((a) => (
+            {paid.locked && ready.length > 0 && (
+              <div>
+                <PaidMediaButton label={`Copy its photos and recordings (${ready.length})`} icon={ImagePlus} />
+              </div>
+            )}
+            {!paid.locked && ready.map((a) =>
+              // Updated Plans Step 4: copying a video into a new message is new video: Complete only. The video stays here.
+              paid.videoLocked && a.kind === 'VIDEO' ? (
+                <div key={a.id} className="flex flex-wrap items-center gap-3">
+                  <span className="text-foreground-muted">
+                    {humanize(a.kind)}: <span className="break-all">{a.originalFileName}</span>
+                  </span>
+                  <CompleteVideoButton label="Copy this video" icon={Film} />
+                </div>
+              ) : (
               <label key={a.id} className="flex items-center gap-3">
                 <input
                   type="checkbox"
@@ -219,7 +241,8 @@ function CreateMessageForm({
                   {humanize(a.kind)}: <span className="break-all">{a.originalFileName}</span>
                 </span>
               </label>
-            ))}
+              ),
+            )}
           </div>
           <p className="flex items-start gap-2 text-sm text-foreground-muted">
             <Lock aria-hidden strokeWidth={1.5} className="mt-0.5 size-4 shrink-0" />

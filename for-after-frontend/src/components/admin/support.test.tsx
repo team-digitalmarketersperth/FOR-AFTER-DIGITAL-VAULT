@@ -34,20 +34,23 @@ describe('Admin support', () => {
       'GET /admin/support/requests': json(200, {
         items: [{ id: ID, subject: 'Cannot add a photo', category: 'UPLOADS_STORAGE', status: 'WAITING_FOR_CUSTOMER', createdAt: T, lastPublicActivityAt: T, ownerUserId: OWNER }],
         pagination: { page: 1, limit: 25, total: 1, pages: 1 },
+        counts: { OPEN: 0, IN_PROGRESS: 0, WAITING_FOR_CUSTOMER: 1, RESOLVED: 0 },
+        evaluatedAt: T,
       }),
     });
     renderWithClient(<AdminSupportList filters={{ page: 1 }} />);
     const table = await screen.findByRole('table', { name: 'Support requests' });
-    expect(within(table).getByRole('link', { name: 'Cannot add a photo' })).toHaveAttribute('href', `/admin/support/${ID}`);
+    expect(within(table).getByRole('link', { name: 'View request: Cannot add a photo' })).toHaveAttribute('href', `/admin/support/${ID}`);
     expect(within(table).getByText('Waiting for customer')).toBeInTheDocument();
     expect(within(table).getByText('Uploads and storage')).toBeInTheDocument();
     router.replace.mockClear();
+    await userEvent.click(screen.getByText('More filters', { selector: 'summary' }));
     await userEvent.type(screen.getByLabelText('Account ID'), 'lisa@example.com');
     await userEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
     expect(await screen.findByText('Enter a full account ID.')).toBeInTheDocument();
     expect(router.replace).not.toHaveBeenCalled();
-    // No bulk, assignment or export controls.
-    expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['Apply filters']);
+    // No bulk, assignment, export, reply or resolve controls in the list.
+    expect(screen.queryByRole('button', { name: /bulk|assign|export|reply|resolve|delete/i })).not.toBeInTheDocument();
   });
 
   it('workspace: public thread with role labels only (no admin ids), compact times, notes apart', async () => {

@@ -4,10 +4,8 @@ import { DeviceSetupPrompt } from '@/components/account/device-setup';
 import { RecentChanges } from '@/components/activity/activity';
 import { NeedsAttention } from '@/components/dashboard/attention';
 import { DashboardJourney } from '@/components/dashboard/journey';
-import { SharePreview } from '@/components/dashboard/share-preview';
 import { ComingUp } from '@/components/delivery/delivery-timeline';
 import { Greeting } from '@/components/layout/greeting';
-import { StoryChapters } from '@/components/prompts/story-book';
 import { SPACES } from '@/components/layout/nav';
 import { FeatureCard } from '@/components/shared/feature-card';
 import { SectionHeading } from '@/components/shared/section-heading';
@@ -24,7 +22,7 @@ export default function DashboardPage() {
         <p className="eyebrow">Your private space</p>
         <Greeting />
         <p className="max-w-xl text-lg text-foreground-muted">
-          A secure place for the things that matter most, kept for the people you love.
+          A secure place for the things that matter most, kept for the people <span className="whitespace-nowrap">you love.</span>
         </p>
       </header>
 
@@ -45,7 +43,7 @@ export default function DashboardPage() {
           </p>
           <div className="mt-2">
             <Button asChild variant="secondary">
-              <Link href="/people">Begin with People I Love</Link>
+              <Link href="/people">Add Your Loved Ones</Link>
             </Button>
           </div>
         </div>
@@ -60,11 +58,6 @@ export default function DashboardPage() {
           />
         </div>
       </section>
-
-      {/* Where the "What would you like to do?" shortcuts used to be. */}
-      <SharePreview />
-
-      <StoryChapters />
 
       <DashboardJourney />
 

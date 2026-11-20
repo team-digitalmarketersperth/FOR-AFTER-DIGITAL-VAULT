@@ -1,7 +1,10 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
-import { fakeStorage, json, page, renderWithClient, routeFetch, router } from '@/test/utils';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { BILLING_OFF, fakeStorage, json, page, renderWithClient, routeFetch as baseRouteFetch, router } from '@/test/utils';
+
+// Step 7: create pages open once the plan is known; screens that don't test the plan read billing off.
+const routeFetch = (routes: Parameters<typeof baseRouteFetch>[0]) => baseRouteFetch({ 'GET /billing': json(200, BILLING_OFF), ...routes });
 import { EditRecipient, NewRecipient, RecipientDetail, RecipientList } from './recipients';
 import { EditTrustedContact, NewTrustedContact, TrustedContactList } from './trusted-contacts';
 
@@ -60,16 +63,19 @@ describe('People I Love', () => {
   it('validates before calling the API', async () => {
     const api = routeFetch({});
     renderWithClient(<NewRecipient />);
+    await screen.findByLabelText('First name'); // Step 7: the form opens once the plan is known
     await userEvent.type(screen.getByLabelText(/^Email/), 'not-an-email');
     await userEvent.click(screen.getByRole('button', { name: 'Add person' }));
     expect(await screen.findByText('Enter first name.')).toBeInTheDocument();
     expect(screen.getByText('Enter a valid email address.')).toBeInTheDocument();
-    expect(api.calls).toHaveLength(0);
+    // Nothing is submitted (the page only reads the list and plan for the trial cap).
+    expect(api.calls.filter((c) => c.method !== 'GET')).toHaveLength(0);
   });
 
   it('creates with only DTO fields, blanks as null and the birthday as typed', async () => {
     const api = routeFetch({ 'POST /recipients': json(201, sofia) });
     renderWithClient(<NewRecipient />);
+    await screen.findByLabelText('First name'); // Step 7: the form opens once the plan is known
     await userEvent.type(screen.getByLabelText('First name'), ' Sofia ');
     await userEvent.type(screen.getByLabelText(/^Birthday/), '2010-01-01');
     await userEvent.click(screen.getByRole('button', { name: 'Add person' }));
@@ -94,7 +100,7 @@ describe('People I Love', () => {
       'PATCH /recipients/r1': json(200, { ...sofia, relationship: null }),
     });
     renderWithClient(<EditRecipient id="r1" />);
-    await userEvent.clear(await screen.findByLabelText(/^Relationship/));
+    await userEvent.selectOptions(await screen.findByLabelText(/^Relationship/), 'Not set');
     await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(router.push).toHaveBeenCalledWith('/people/r1'));
     expect(api.called('PATCH', '/recipients/r1')[0].body).toMatchObject({ relationship: null, firstName: 'Sofia' });
@@ -111,19 +117,22 @@ describe('People I Love', () => {
     expect(api.called('DELETE', '/recipients/r1')).toHaveLength(1);
   });
 
-  it('a Recipient mobile needs its country code (SMS sign-in)', async () => {
+  it('a Recipient mobile is read for its country and sent as E.164 (SMS sign-in)', async () => {
     const api = routeFetch({ 'POST /recipients': json(201, { id: 'r9' }) });
     renderWithClient(<NewRecipient />);
+    await screen.findByLabelText('First name'); // Step 7: the form opens once the plan is known
     await userEvent.type(screen.getByLabelText('First name'), 'Max');
-    await userEvent.type(screen.getByLabelText(/^Mobile/), '0412 345 678');
+    // jsdom's browser region is en-US: a visible, changeable default.
+    expect(countryButton()).toHaveTextContent('United States (+1)');
+    await userEvent.type(screen.getByLabelText(/^Mobile/), '0491 570 006');
     await userEvent.click(screen.getByRole('button', { name: 'Add person' }));
-    expect(await screen.findByText('Include the country code, e.g. +61 400 000 000.')).toBeInTheDocument();
+    expect(await screen.findByText('Check this number: it doesn’t look like a valid number for United States.')).toBeInTheDocument();
     expect(api.called('POST', '/recipients')).toHaveLength(0);
-    await userEvent.clear(screen.getByLabelText(/^Mobile/));
-    await userEvent.type(screen.getByLabelText(/^Mobile/), '+61 412 345 678');
+    await pickCountry('austral', 'Australia (+61)');
     await userEvent.click(screen.getByRole('button', { name: 'Add person' }));
     await waitFor(() => expect(api.called('POST', '/recipients')).toHaveLength(1));
-    expect(api.called('POST', '/recipients')[0].body).toMatchObject({ mobile: '+61 412 345 678' });
+    // The domestic 0 is the trunk prefix, not concatenated after +61.
+    expect(api.called('POST', '/recipients')[0].body).toMatchObject({ mobile: '+61491570006' });
   });
 
   it('shows the safe API error and a not-found state', async () => {
@@ -131,6 +140,7 @@ describe('People I Love', () => {
       'POST /recipients': json(400, { statusCode: 400, message: ['mobile must be a phone number, e.g. +61400000000'] }),
     });
     const { unmount } = renderWithClient(<NewRecipient />);
+    await screen.findByLabelText('First name'); // Step 7: the form opens once the plan is known
     await userEvent.type(screen.getByLabelText('First name'), 'Sofia');
     await userEvent.click(screen.getByRole('button', { name: 'Add person' }));
     expect(await screen.findByText('mobile must be a phone number, e.g. +61400000000')).toBeInTheDocument();
@@ -140,6 +150,239 @@ describe('People I Love', () => {
     renderWithClient(<RecipientDetail id="zzz" />);
     // Detail page without data: the not-found state is the page, so it is the h1.
     expect(await screen.findByRole('heading', { level: 1, name: 'We couldn’t find this person' })).toBeInTheDocument();
+  });
+});
+
+const countryButton = () => screen.getByRole('button', { name: /^Country for mobile/ });
+/** Open the country picker, search, and pick with the keyboard (Enter). */
+async function pickCountry(search: string, label: string) {
+  await userEvent.click(countryButton());
+  await userEvent.type(await screen.findByRole('combobox', { name: 'Search countries' }), search);
+  await userEvent.keyboard('{Enter}');
+  await waitFor(() => expect(countryButton()).toHaveTextContent(label));
+}
+const languages = (tags: string[]) => vi.spyOn(navigator, 'languages', 'get').mockReturnValue(tags);
+const savePerson = async (name: 'Add person' | 'Save changes') => userEvent.click(screen.getByRole('button', { name }));
+
+describe('People I Love: mobile country', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('defaults to the browser’s stated region; Australian domestic and international entries both give E.164', async () => {
+    languages(['en-AU']);
+    const api = routeFetch({ 'POST /recipients': json(201, { id: 'r9' }) });
+    renderWithClient(<NewRecipient />);
+    await screen.findByLabelText('First name'); // Step 7: the form opens once the plan is known
+    expect(countryButton()).toHaveTextContent('Australia (+61)');
+    await userEvent.type(screen.getByLabelText('First name'), 'Max');
+    await userEvent.type(screen.getByLabelText(/^Mobile/), '+64 21 555 0123');
+    await savePerson('Add person');
+    await waitFor(() => expect(api.called('POST', '/recipients')).toHaveLength(1));
+    // A typed +code wins over the chosen country.
+    expect(api.called('POST', '/recipients')[0].body).toMatchObject({ mobile: '+64215550123' });
+  });
+
+  it('no stated region: no country is assumed; a domestic number asks for one, blank stays optional', async () => {
+    languages(['en']);
+    const api = routeFetch({ 'POST /recipients': json(201, { id: 'r9' }) });
+    renderWithClient(<NewRecipient />);
+    await screen.findByLabelText('First name'); // Step 7: the form opens once the plan is known
+    expect(countryButton()).toHaveTextContent('Choose country');
+    await userEvent.type(screen.getByLabelText('First name'), 'Max');
+    await userEvent.type(screen.getByLabelText(/^Mobile/), '021 555 0123');
+    await savePerson('Add person');
+    expect(await screen.findByText('Choose the country for this number, or start it with + and the country code.')).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Mobile/)).toHaveAttribute('aria-invalid', 'true');
+    await userEvent.clear(screen.getByLabelText(/^Mobile/));
+    await savePerson('Add person');
+    await waitFor(() => expect(api.called('POST', '/recipients')).toHaveLength(1));
+    expect(api.called('POST', '/recipients')[0].body).toMatchObject({ mobile: null });
+  });
+
+  it('countries sharing +1 are listed separately; searching "+1" finds both and Canada is kept', async () => {
+    languages(['en-AU']);
+    const api = routeFetch({ 'POST /recipients': json(201, { id: 'r9' }) });
+    renderWithClient(<NewRecipient />);
+    await screen.findByLabelText('First name'); // Step 7: the form opens once the plan is known
+    await userEvent.click(countryButton());
+    await userEvent.type(await screen.findByRole('combobox', { name: 'Search countries' }), '+1');
+    const list = screen.getByRole('listbox', { name: 'Countries' });
+    expect(within(list).getByRole('option', { name: /United States\s*\+1/ })).toBeInTheDocument();
+    expect(within(list).getByRole('option', { name: /Canada\s*\+1/ })).toBeInTheDocument();
+    await userEvent.click(within(list).getByRole('option', { name: /Canada/ }));
+    expect(countryButton()).toHaveTextContent('Canada (+1)');
+    await userEvent.type(screen.getByLabelText('First name'), 'Max');
+    await userEvent.type(screen.getByLabelText(/^Mobile/), '613 555 0123');
+    await savePerson('Add person');
+    await waitFor(() => expect(api.called('POST', '/recipients')).toHaveLength(1));
+    expect(api.called('POST', '/recipients')[0].body).toMatchObject({ mobile: '+16135550123' });
+  });
+
+  it('keyboard: Enter opens, arrows move, Escape closes and focus returns to the button', async () => {
+    languages(['en-AU']);
+    routeFetch({});
+    renderWithClient(<NewRecipient />);
+    await screen.findByLabelText('First name'); // Step 7: the form opens once the plan is known
+    countryButton().focus();
+    await userEvent.keyboard('{Enter}');
+    const search = await screen.findByRole('combobox', { name: 'Search countries' });
+    expect(search).toHaveFocus();
+    // Opens on the current country; ArrowDown moves to the next one.
+    expect(search).toHaveAttribute('aria-activedescendant', 'mobileCountry-option-AU');
+    await userEvent.keyboard('{ArrowDown}');
+    expect(search).toHaveAttribute('aria-activedescendant', 'mobileCountry-option-AT');
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('combobox', { name: 'Search countries' })).not.toBeInTheDocument());
+    expect(countryButton()).toHaveFocus();
+    expect(countryButton()).toHaveTextContent('Australia (+61)');
+    await userEvent.keyboard('{Enter}');
+    await userEvent.keyboard('zzzz');
+    expect(await screen.findByText('No country matches “zzzz”.')).toBeInTheDocument();
+  });
+
+  it('edit: saved numbers open on their own country (US vs Canada on +1) and save unchanged', async () => {
+    languages(['en-AU']);
+    const api = routeFetch({
+      'GET /recipients/r1': json(200, { ...sofia, mobile: '+16135550123' }),
+      'PATCH /recipients/r1': json(200, sofia),
+    });
+    renderWithClient(<EditRecipient id="r1" />);
+    expect(await screen.findByLabelText(/^Mobile/)).toHaveValue('(613) 555-0123');
+    expect(countryButton()).toHaveTextContent('Canada (+1)');
+    await savePerson('Save changes');
+    await waitFor(() => expect(api.called('PATCH', '/recipients/r1')).toHaveLength(1));
+    expect(api.called('PATCH', '/recipients/r1')[0].body).toMatchObject({ mobile: '+16135550123' });
+  });
+
+  it('edit: an unreadable saved number is kept as saved, flagged, and only re-checked once changed', async () => {
+    languages(['en-AU']);
+    const api = routeFetch({
+      'GET /recipients/r1': json(200, { ...sofia, mobile: '+6140000' }),
+      'PATCH /recipients/r1': json(200, sofia),
+    });
+    renderWithClient(<EditRecipient id="r1" />);
+    const mobile = await screen.findByLabelText(/^Mobile/);
+    expect(mobile).toHaveValue('+6140000');
+    expect(screen.getByText(/couldn’t work out the country of this saved number/)).toBeInTheDocument();
+    await userEvent.type(mobile, '1');
+    await savePerson('Save changes');
+    expect(await screen.findByText('Check this number: it doesn’t look like a valid phone number.')).toBeInTheDocument();
+    expect(api.called('PATCH', '/recipients/r1')).toHaveLength(0);
+    await userEvent.type(mobile, '{Backspace}');
+    await userEvent.type(screen.getByLabelText(/^Last name/), 'x');
+    await savePerson('Save changes');
+    await waitFor(() => expect(api.called('PATCH', '/recipients/r1')).toHaveLength(1));
+    expect(api.called('PATCH', '/recipients/r1')[0].body).toMatchObject({ mobile: '+6140000', lastName: 'Rossix' });
+  });
+
+  it('edit: changing only the country of a saved number is refused until the number is entered on purpose', async () => {
+    languages(['en-AU']);
+    const api = routeFetch({
+      'GET /recipients/r1': json(200, { ...sofia, mobile: '+61412345678' }),
+      'PATCH /recipients/r1': json(200, sofia),
+    });
+    renderWithClient(<EditRecipient id="r1" />);
+    const mobile = await screen.findByLabelText(/^Mobile/);
+    expect(mobile).toHaveValue('0412 345 678');
+    // "0412 345 678" is also a valid German number: never saved as +49 without the person typing it.
+    await pickCountry('Germany', 'Germany (+49)');
+    await savePerson('Save changes');
+    expect(await screen.findByText(/This number is saved as \+61 412 345 678\. With this country it would become \+49/)).toBeInTheDocument();
+    expect(api.called('PATCH', '/recipients/r1')).toHaveLength(0);
+    // Back to Australia: the saved value, exactly.
+    await pickCountry('Australia', 'Australia (+61)');
+    await savePerson('Save changes');
+    await waitFor(() => expect(api.called('PATCH', '/recipients/r1')).toHaveLength(1));
+    expect(api.called('PATCH', '/recipients/r1')[0].body).toMatchObject({ mobile: '+61412345678' });
+  });
+
+  it('server render is deterministic: the browser region is applied only after mount', async () => {
+    languages(['en-AU']);
+    routeFetch({});
+    const { renderToString } = await import('react-dom/server');
+    const { QueryClientProvider } = await import('@tanstack/react-query');
+    const { makeQueryClient } = await import('@/lib/query/query-client');
+    // The plan is already known (Step 7: the form waits for it).
+    const client = makeQueryClient();
+    client.setQueryData(['billing'], BILLING_OFF);
+    const html = renderToString(
+      <QueryClientProvider client={client}>
+        <NewRecipient />
+      </QueryClientProvider>,
+    );
+    expect(html).toContain('Choose country');
+    expect(html).not.toContain('Australia (+61)');
+    // In the browser, after mount: the stated region, as a changeable default.
+    renderWithClient(<NewRecipient />);
+    await screen.findByLabelText('First name'); // Step 7: the form opens once the plan is known
+    expect(countryButton()).toHaveTextContent('Australia (+61)');
+  });
+});
+
+describe('People I Love: relationship', () => {
+  it('offers the choices with a hint; a choice is saved as its label', async () => {
+    const api = routeFetch({ 'POST /recipients': json(201, { id: 'r9' }) });
+    renderWithClient(<NewRecipient />);
+    await screen.findByLabelText('First name'); // Step 7: the form opens once the plan is known
+    const select = screen.getByLabelText(/^Relationship/);
+    expect(select).toHaveAccessibleDescription('Their relationship to you.');
+    expect(within(select).getAllByRole('option').map((o) => o.textContent)).toEqual([
+      'Not set', 'Partner', 'Parent', 'Child', 'Sibling', 'Grandparent', 'Grandchild', 'Friend', 'Relative', 'Other',
+    ]);
+    expect(screen.getByLabelText('Please specify the relationship')).not.toBeVisible();
+    await userEvent.type(screen.getByLabelText('First name'), 'Max');
+    await userEvent.selectOptions(select, 'Grandchild');
+    await savePerson('Add person');
+    await waitFor(() => expect(api.called('POST', '/recipients')).toHaveLength(1));
+    expect(api.called('POST', '/recipients')[0].body).toMatchObject({ relationship: 'Grandchild' });
+  });
+
+  it('Other needs text; switching away keeps the text but sends only the chosen option', async () => {
+    const api = routeFetch({ 'POST /recipients': json(201, { id: 'r9' }) });
+    renderWithClient(<NewRecipient />);
+    await screen.findByLabelText('First name'); // Step 7: the form opens once the plan is known
+    await userEvent.type(screen.getByLabelText('First name'), 'Max');
+    const select = screen.getByLabelText(/^Relationship/);
+    await userEvent.selectOptions(select, 'Other');
+    const other = screen.getByLabelText('Please specify the relationship');
+    await userEvent.type(other, '   ');
+    await savePerson('Add person');
+    expect(await screen.findByText('Please specify the relationship.')).toBeInTheDocument();
+    expect(api.called('POST', '/recipients')).toHaveLength(0);
+    await userEvent.clear(other);
+    await userEvent.type(other, 'Godmother');
+    await userEvent.selectOptions(select, 'Friend');
+    expect(screen.getByLabelText('Please specify the relationship')).not.toBeVisible();
+    await userEvent.selectOptions(select, 'Other');
+    expect(screen.getByLabelText('Please specify the relationship')).toHaveValue('Godmother');
+    await userEvent.selectOptions(select, 'Friend');
+    await savePerson('Add person');
+    await waitFor(() => expect(api.called('POST', '/recipients')).toHaveLength(1));
+    expect(api.called('POST', '/recipients')[0].body).toMatchObject({ relationship: 'Friend' });
+  });
+
+  it('edit: a saved custom value reopens as Other with its text, and round-trips', async () => {
+    const api = routeFetch({
+      'GET /recipients/r1': json(200, sofia),
+      'PATCH /recipients/r1': json(200, sofia),
+    });
+    renderWithClient(<EditRecipient id="r1" />);
+    expect(await screen.findByLabelText(/^Relationship/)).toHaveValue('Other');
+    expect(screen.getByLabelText('Please specify the relationship')).toHaveValue('Daughter');
+    await savePerson('Save changes');
+    await waitFor(() => expect(api.called('PATCH', '/recipients/r1')).toHaveLength(1));
+    expect(api.called('PATCH', '/recipients/r1')[0].body).toMatchObject({ relationship: 'Daughter' });
+  });
+
+  it('edit: a saved choice reopens selected; custom text is shown as plain text', async () => {
+    routeFetch({ 'GET /recipients/r1': json(200, { ...sofia, relationship: 'Partner' }) });
+    const { unmount } = renderWithClient(<EditRecipient id="r1" />);
+    expect(await screen.findByLabelText(/^Relationship/)).toHaveValue('Partner');
+    expect(screen.getByLabelText('Please specify the relationship')).not.toBeVisible();
+    unmount();
+    routeFetch({ 'GET /recipients/r1': json(200, { ...sofia, relationship: '<b>Aunty</b>' }) });
+    const { container } = renderWithClient(<RecipientDetail id="r1" />);
+    expect(await screen.findAllByText('<b>Aunty</b>')).not.toHaveLength(0);
+    expect(container.querySelector('b')).toBeNull();
   });
 });
 
@@ -263,16 +506,18 @@ describe('People I Love: photo (Phase 09)', () => {
     expect(api.called('POST', '/recipients/r1/photo/upload-url')).toHaveLength(0);
   });
 
-  it('a failed upload can be retried', async () => {
+  it('a failed upload can be retried; its unconfirmed asset is removed at once (no reservation left)', async () => {
     fakeStorage(0);
     const api = routeFetch({
       'GET /recipients/r1': json(200, sofia),
       'POST /recipients/r1/photo/upload-url': uploadTarget('p3'),
+      'DELETE /recipients/r1/photo/p3': new Response(null, { status: 204 }),
     });
     renderWithClient(<RecipientDetail id="r1" />);
     await screen.findByRole('button', { name: 'Add a photo' });
     await pick(png());
     expect(await screen.findByText(/couldn't upload this file/)).toBeInTheDocument();
+    expect(api.called('DELETE', '/recipients/r1/photo/p3')).toHaveLength(1);
     await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(api.called('POST', '/recipients/r1/photo/upload-url')).toHaveLength(2));
   });
@@ -311,22 +556,52 @@ describe('Trusted Contacts', () => {
     expect(screen.getByText(/our team verifies every report/)).toBeInTheDocument();
   });
 
-  it('a mobile-only contact needs the country code (SMS sign-in)', async () => {
+  it('a mobile-only contact: the number is read for its country and sent as E.164 (SMS sign-in)', async () => {
     const api = routeFetch({ 'GET /trusted-contacts': json(200, []), 'POST /trusted-contacts': json(201, { ...david, id: 't9' }) });
     renderWithClient(<NewTrustedContact />);
-    await fill({ 'First name': 'Maya', Mobile: '0412 345 678' });
-    expect(await screen.findByText('Include the country code, e.g. +61 400 000 000.')).toBeInTheDocument();
+    await screen.findByLabelText('First name'); // Step 7: the form opens once the plan is known
+    // jsdom's browser region is en-US: a visible, changeable default.
+    expect(countryButton()).toHaveTextContent('United States (+1)');
+    await fill({ 'First name': 'Maya', Mobile: '0491 570 006' });
+    expect(await screen.findByText('Check this number: it doesn’t look like a valid number for United States.')).toBeInTheDocument();
     expect(api.called('POST', '/trusted-contacts')).toHaveLength(0);
-    await userEvent.clear(screen.getByLabelText(/^Mobile/));
-    await userEvent.type(screen.getByLabelText(/^Mobile/), '+91 98765 43210');
+    await pickCountry('austral', 'Australia (+61)');
     await userEvent.click(screen.getByRole('button', { name: 'Add trusted contact' }));
     await waitFor(() => expect(api.called('POST', '/trusted-contacts')).toHaveLength(1));
-    expect(api.called('POST', '/trusted-contacts')[0].body).toMatchObject({ mobile: '+91 98765 43210', email: null });
+    expect(api.called('POST', '/trusted-contacts')[0].body).toMatchObject({ mobile: '+61491570006', email: null });
+  });
+
+  it('edit: a saved number opens on its own country and saves unchanged; an unreadable one is kept', async () => {
+    const api = routeFetch({
+      'GET /trusted-contacts': json(200, [david]),
+      'GET /trusted-contacts/t1': json(200, { ...david, mobile: '+919876543210' }),
+      'PATCH /trusted-contacts/t1': json(200, david),
+    });
+    const { unmount } = renderWithClient(<EditTrustedContact id="t1" />);
+    expect(await screen.findByLabelText(/^Mobile/)).toHaveValue('098765 43210');
+    expect(countryButton()).toHaveTextContent('India (+91)');
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(api.called('PATCH', '/trusted-contacts/t1')).toHaveLength(1));
+    expect(api.called('PATCH', '/trusted-contacts/t1')[0].body).toMatchObject({ mobile: '+919876543210' });
+    unmount();
+
+    const legacy = routeFetch({
+      'GET /trusted-contacts': json(200, [david]),
+      'GET /trusted-contacts/t1': json(200, { ...david, mobile: '+6140000' }),
+      'PATCH /trusted-contacts/t1': json(200, david),
+    });
+    renderWithClient(<EditTrustedContact id="t1" />);
+    expect(await screen.findByLabelText(/^Mobile/)).toHaveValue('+6140000');
+    expect(screen.getByText(/couldn’t work out the country of this saved number/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(legacy.called('PATCH', '/trusted-contacts/t1')).toHaveLength(1));
+    expect(legacy.called('PATCH', '/trusted-contacts/t1')[0].body).toMatchObject({ mobile: '+6140000' });
   });
 
   it('requires an email or a mobile', async () => {
     const api = routeFetch({ 'GET /trusted-contacts': json(200, []) });
     renderWithClient(<NewTrustedContact />);
+    await screen.findByLabelText('First name'); // Step 7: the form opens once the plan is known
     await fill({ 'First name': 'David' });
     expect(await screen.findByText('Provide an email or a mobile (or both).')).toBeInTheDocument();
     expect(api.called('POST', '/trusted-contacts')).toHaveLength(0);
@@ -418,6 +693,7 @@ describe('Trusted Contacts', () => {
       }),
     });
     renderWithClient(<NewTrustedContact />);
+    await screen.findByLabelText('First name'); // Step 7: the form opens once the plan is known
     await screen.findByLabelText(/^First name/);
     await fill({ 'First name': 'Zoe', Email: 'zoe@example.com' });
     expect(await screen.findByRole('alert')).toHaveTextContent('You can nominate up to 2 trusted contacts.');
@@ -549,6 +825,7 @@ describe('Trusted Contacts', () => {
     it('adding a mobile-only contact sends nothing automatically and says SMS is available', async () => {
       const api = routeFetch({ 'GET /trusted-contacts': json(200, []), 'POST /trusted-contacts': json(201, moOnly) });
       renderWithClient(<NewTrustedContact />);
+      await screen.findByLabelText('First name'); // Step 7: the form opens once the plan is known
       await fill({ 'First name': 'David', Mobile: '+61 400 000 000' });
       await waitFor(() => expect(api.called('POST', '/trusted-contacts')).toHaveLength(1));
       expect(api.called('POST', '/trusted-contacts/t1/invitation')).toHaveLength(0);
@@ -557,10 +834,11 @@ describe('Trusted Contacts', () => {
 
   it.each([
     ['email only', { Email: 'david@example.com' }, { email: 'david@example.com', mobile: null }],
-    ['mobile only', { Mobile: '+61 400 000 000' }, { email: null, mobile: '+61 400 000 000' }],
+    ['mobile only', { Mobile: '+61 400 000 000' }, { email: null, mobile: '+61400000000' }],
   ])('accepts %s', async (_name, fields, expected) => {
     const api = routeFetch({ 'GET /trusted-contacts': json(200, []), 'POST /trusted-contacts': json(201, david) });
     renderWithClient(<NewTrustedContact />);
+    await screen.findByLabelText('First name'); // Step 7: the form opens once the plan is known
     await screen.findByLabelText(/^First name/);
     await fill({ 'First name': 'David', ...fields });
     await waitFor(() => expect(router.push).toHaveBeenCalledWith('/trusted-contacts'));
@@ -581,5 +859,117 @@ describe('Trusted Contacts', () => {
     await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Remove' }));
     await waitFor(() => expect(router.replace).toHaveBeenCalledWith('/trusted-contacts'));
     expect(api.called('DELETE', '/trusted-contacts/t1')).toHaveLength(1);
+  });
+});
+
+describe('Free trial caps (Trial Step 3)', () => {
+  const billing = (trialCaps: { recipients: number | null; trustedContacts: number | null }) =>
+    json(200, { enabled: true, state: 'trial_active', enforced: true, hasAccess: true, trialEligible: false, trial: null, subscription: null, plans: [], canManageSubscription: false, trialCaps });
+  const TRIAL = billing({ recipients: 1, trustedContacts: 1 });
+  const PAID = billing({ recipients: null, trustedContacts: null });
+
+  it('People I Love, trial person used: the add control shows Premium and opens an explanation with View plans and Close', async () => {
+    routeFetch({ 'GET /recipients': json(200, page([sofia])), 'GET /billing': TRIAL });
+    renderWithClient(<RecipientList />);
+    const locked = await screen.findByRole('button', { name: /Add someone you love\s*Premium/ });
+    expect(screen.queryByRole('link', { name: /Add someone you love/ })).not.toBeInTheDocument();
+    await userEvent.click(locked);
+    const dialog = await screen.findByRole('dialog', { name: 'Add more people with a plan' });
+    expect(within(dialog).getByText(/includes one person/)).toBeInTheDocument();
+    expect(within(dialog).getByRole('link', { name: 'View plans' })).toHaveAttribute('href', '/settings/plan');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(locked).toHaveFocus();
+  });
+
+  it('People I Love: no tier badge for a paid or exempt account, nor for the trial’s first person (empty state)', async () => {
+    routeFetch({ 'GET /recipients': json(200, page([sofia])), 'GET /billing': PAID });
+    const { unmount } = renderWithClient(<RecipientList />);
+    expect(await screen.findByRole('link', { name: 'Add someone you love' })).toHaveAttribute('href', '/people/new');
+    expect(screen.queryByText(/^(Premium|Complete)$/)).not.toBeInTheDocument();
+    unmount();
+    routeFetch({ 'GET /recipients': json(200, page([])), 'GET /billing': TRIAL });
+    renderWithClient(<RecipientList />);
+    expect(await screen.findByRole('link', { name: 'Add someone you love' })).toHaveAttribute('href', '/people/new');
+    expect(screen.queryByText(/^(Premium|Complete)$/)).not.toBeInTheDocument();
+  });
+
+  it('/people/new opened with the trial person used: an explanation, not a form', async () => {
+    routeFetch({ 'GET /recipients': json(200, page([sofia])), 'GET /billing': TRIAL });
+    renderWithClient(<NewRecipient />);
+    expect(await screen.findByRole('heading', { name: 'Add more people with a plan' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'View plans' })).toHaveAttribute('href', '/settings/plan');
+    expect(screen.queryByRole('button', { name: 'Add person' })).not.toBeInTheDocument();
+  });
+
+  it('a stale form refused by the API (TRIAL_LIMIT) keeps what was typed and offers View plans', async () => {
+    routeFetch({
+      'GET /recipients': json(200, page([])),
+      'GET /billing': TRIAL,
+      'POST /recipients': json(409, { statusCode: 409, code: 'TRIAL_LIMIT', message: 'Your free trial includes one person. Choose a plan to add more.' }),
+    });
+    renderWithClient(<NewRecipient />);
+    await screen.findByLabelText('First name'); // Step 7: the form opens once the plan is known
+    await userEvent.type(await screen.findByLabelText('First name'), 'Mia');
+    await userEvent.click(screen.getByRole('button', { name: 'Add person' }));
+    expect(await screen.findByText('Your free trial includes one person. Choose a plan to add more.')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'View plans' })).toHaveAttribute('href', '/settings/plan');
+    expect(screen.getByLabelText('First name')).toHaveValue('Mia');
+    expect(router.push).not.toHaveBeenCalled();
+  });
+
+  it('a paid plan’s own limit (PLAN_LIMIT, Updated Plans Step 3): message shown, typing kept, no plan offer or upgrade promise', async () => {
+    const message = 'Your plan includes up to 10 people in People I Love. To add someone new, remove someone first.';
+    const api = routeFetch({
+      'GET /recipients': json(200, page([sofia])),
+      'POST /recipients': json(409, { statusCode: 409, error: 'Conflict', code: 'PLAN_LIMIT', message }),
+    });
+    renderWithClient(<NewRecipient />);
+    await userEvent.type(await screen.findByLabelText('First name'), 'Mia');
+    await userEvent.click(screen.getByRole('button', { name: 'Add person' }));
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'View plans' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('First name')).toHaveValue('Mia');
+    expect(router.push).not.toHaveBeenCalled();
+    expect(api.called('POST', '/recipients')).toHaveLength(1);
+  });
+
+  it('a plain conflict (no code) gets no plan offer', async () => {
+    routeFetch({ 'GET /recipients': json(200, page([])), 'POST /recipients': json(409, { statusCode: 409, message: 'Something else conflicted.' }) });
+    renderWithClient(<NewRecipient />);
+    await screen.findByLabelText('First name'); // Step 7: the form opens once the plan is known
+    await userEvent.type(screen.getByLabelText('First name'), 'Mia');
+    await userEvent.click(screen.getByRole('button', { name: 'Add person' }));
+    expect(await screen.findByText('Something else conflicted.')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'View plans' })).not.toBeInTheDocument();
+  });
+
+  it('Trusted Contacts, trial contact used: Premium on the add control; paid: the normal link', async () => {
+    routeFetch({ 'GET /trusted-contacts': json(200, [david]), 'GET /billing': TRIAL });
+    const { unmount } = renderWithClient(<TrustedContactList />);
+    await userEvent.click(await screen.findByRole('button', { name: /Add a trusted contact\s*Premium/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add another trusted contact with a plan' });
+    expect(within(dialog).getByRole('link', { name: 'View plans' })).toHaveAttribute('href', '/settings/plan');
+    unmount();
+    routeFetch({ 'GET /trusted-contacts': json(200, [david]), 'GET /billing': PAID });
+    renderWithClient(<TrustedContactList />);
+    expect(await screen.findByRole('link', { name: 'Add a trusted contact' })).toHaveAttribute('href', '/trusted-contacts/new');
+    expect(screen.queryByText(/^(Premium|Complete)$/)).not.toBeInTheDocument();
+  });
+
+  it('Trusted Contacts at the two-contact maximum (e.g. from before the trial): no add control and no plan offer', async () => {
+    routeFetch({ 'GET /trusted-contacts': json(200, [david, sarah]), 'GET /billing': TRIAL });
+    renderWithClient(<TrustedContactList />);
+    expect(await screen.findByText(/To choose someone else, open a contact and remove them first/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Add a trusted contact/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/^(Premium|Complete)$/)).not.toBeInTheDocument();
+  });
+
+  it('/trusted-contacts/new opened with the trial contact used: an explanation with View plans', async () => {
+    routeFetch({ 'GET /trusted-contacts': json(200, [david]), 'GET /billing': TRIAL });
+    renderWithClient(<NewTrustedContact />);
+    expect(await screen.findByRole('heading', { name: 'Add another trusted contact with a plan' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'View plans' })).toHaveAttribute('href', '/settings/plan');
+    expect(screen.queryByRole('button', { name: 'Add trusted contact' })).not.toBeInTheDocument();
   });
 });

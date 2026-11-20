@@ -2,6 +2,8 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useEffect, useRef, useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { makeQueryClient } from '@/lib/query/query-client';
 import { json } from '@/test/utils';
 import { CompanionProvider, HelpMeWrite } from './companion';
 
@@ -9,21 +11,38 @@ let path = '/dashboard';
 vi.mock('next/navigation', () => ({ usePathname: () => path }));
 
 type Call = { path: string; body: Record<string, unknown> };
+// Updated Plans Step 5: GET /assistant/usage (an account read, never sent to the AI service) answers this; not
+// recorded in `calls`, which are the AI requests only.
+let usageBody: unknown = { metered: false, reason: 'billing_off' };
+const usageReads: string[] = [];
+// Updated Plans Step 7: the companion reads the plan's tier (GET /billing) to decide whether "View plans" fits.
+let tierInForce: 'FREE_TRIAL' | 'PREMIUM' | 'COMPLETE' | null = null;
 /** fetch stub for POST /assistant/reply: each call waits for `reply` (or an abort). */
 function assistantApi() {
   const calls: Call[] = [];
+  const requestIds: string[] = [];
   const answers: ((r: Response) => void)[] = [];
   vi.stubGlobal(
     'fetch',
     vi.fn((input: string, init: RequestInit) => {
-      calls.push({ path: new URL(input).pathname, body: JSON.parse(String(init.body)) });
+      if ((init.method ?? 'GET') === 'GET' && new URL(input).pathname.endsWith('/billing')) {
+        return Promise.resolve(json(200, { enabled: true, state: 'paid_active', hasAccess: true, productTier: { tier: tierInForce, interval: null, mapping: 'mapped' } }));
+      }
+      if ((init.method ?? 'GET') === 'GET' && new URL(input).pathname.endsWith('/assistant/usage')) {
+        usageReads.push(input);
+        return Promise.resolve(json(200, usageBody));
+      }
+      // The per-Send request id (Step 5) is checked on its own, so the body assertions stay exact.
+      const { requestId, ...body } = JSON.parse(String(init.body)) as Record<string, unknown>;
+      requestIds.push(requestId as string);
+      calls.push({ path: new URL(input).pathname, body });
       return new Promise<Response>((resolve, reject) => {
         answers.push(resolve);
         init.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
       });
     }),
   );
-  return { calls, reply: (r: Response) => answers.shift()!(r) };
+  return { calls, requestIds, reply: (r: Response) => answers.shift()!(r) };
 }
 const ok = (reply: string, more: { truncated?: boolean; draft?: boolean; open?: string } = {}) =>
   json(200, { reply, truncated: false, ...more });
@@ -50,10 +69,15 @@ function Editor({ id = 'childhood.home' }: { id?: string }) {
     </>
   );
 }
+// One query client per test file render tree, as the app's shell provides.
+const client = makeQueryClient();
+client.setDefaultOptions({ queries: { retry: false } });
 const ui = (account = 'u1', id?: string) => (
-  <CompanionProvider key={account}>
-    <Editor id={id} />
-  </CompanionProvider>
+  <QueryClientProvider client={client}>
+    <CompanionProvider key={account}>
+      <Editor id={id} />
+    </CompanionProvider>
+  </QueryClientProvider>
 );
 const openPanel = async () => {
   await userEvent.click(screen.getByRole('button', { name: 'Open AI companion' }));
@@ -64,6 +88,10 @@ const type = (text: string) => userEvent.type(within(panel()).getByRole('textbox
 
 afterEach(() => {
   path = '/dashboard';
+  usageBody = { metered: false, reason: 'billing_off' };
+  usageReads.length = 0;
+  tierInForce = null;
+  client.clear();
   vi.unstubAllGlobals();
 });
 
@@ -272,7 +300,11 @@ describe('For After companion (shared, Customer shell)', () => {
   it('no editor on the page: a reply marked as a draft still gets Copy only', async () => {
     path = '/messages';
     const api = assistantApi();
-    render(<CompanionProvider>{null}</CompanionProvider>);
+    render(
+      <QueryClientProvider client={client}>
+        <CompanionProvider>{null}</CompanionProvider>
+      </QueryClientProvider>,
+    );
     const p = await openPanel();
     await type('Help me write to my daughter');
     await userEvent.click(within(p).getByRole('button', { name: 'Send' }));
@@ -386,5 +418,115 @@ describe('For After companion (shared, Customer shell)', () => {
     await waitFor(() => expect(within(panel()).getByRole('button', { name: 'Send' })).toHaveAttribute('aria-disabled', 'false'));
     expect(within(panel()).queryByRole('alert')).toBeNull();
     expect(api.calls).toHaveLength(1);
+  });
+});
+
+describe('AI allowance in the companion (Updated Plans Step 5)', () => {
+  const answer = async (api: ReturnType<typeof assistantApi>, n: number, r: Response) => {
+    await waitFor(() => expect(api.calls).toHaveLength(n));
+    api.reply(r);
+  };
+  const exhausted = (body: object) => json(409, { statusCode: 409, error: 'Conflict', code: 'AI_ALLOWANCE_EXHAUSTED', message: 'used', ...body });
+
+  it('trial: "X of 5 trial AI replies used"; each Send carries a fresh request id', async () => {
+    usageBody = { metered: true, kind: 'trial', allowance: 5, used: 2, inProgress: 0, remaining: 3, periodEndsAt: '2026-11-23T00:00:00.000Z', resetsAt: null };
+    const api = assistantApi();
+    render(ui());
+    const p = await openPanel();
+    expect(await within(p).findByText('2 of 5 trial AI replies used')).toBeInTheDocument();
+    await type('One?');
+    await userEvent.click(within(p).getByRole('button', { name: 'Send' }));
+    await answer(api, 1, ok('First.'));
+    await within(p).findByText('First.');
+    await type('Two?');
+    await userEvent.click(within(p).getByRole('button', { name: 'Send' }));
+    await answer(api, 2, ok('Second.'));
+    await within(p).findByText('Second.');
+    const ids = api.requestIds;
+    expect(ids).toHaveLength(2);
+    expect(ids[0]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(ids[0]).not.toBe(ids[1]);
+  });
+
+  it('paid month: the count and the next reset (UTC); an exempt or unmetered account shows no line and never "unlimited"', async () => {
+    usageBody = { metered: true, kind: 'month', allowance: 50, used: 12, inProgress: 0, remaining: 38, periodEndsAt: '2026-12-01T00:00:00.000Z', resetsAt: '2026-12-01T00:00:00.000Z' };
+    assistantApi();
+    const { unmount } = render(ui());
+    expect(await within(await openPanel()).findByText('12 of 50 AI replies used this month · resets 1 December')).toBeInTheDocument();
+    unmount();
+    usageBody = { metered: false, reason: 'unmapped_paid' };
+    client.clear();
+    assistantApi();
+    render(ui('u2'));
+    const p = await openPanel();
+    await waitFor(() => expect(usageReads.length).toBeGreaterThan(0));
+    expect(within(p).queryByText(/AI replies used/)).toBeNull();
+    expect(within(p).queryByText(/unlimited/i)).toBeNull();
+  });
+
+  it('allowance used: a plain explanation with the reset date, no Try again, the typed text back in the box; nothing is resent', async () => {
+    usageBody = { metered: true, kind: 'month', allowance: 50, used: 50, inProgress: 0, remaining: 0, periodEndsAt: '2026-12-01T00:00:00.000Z', resetsAt: '2026-12-01T00:00:00.000Z' };
+    const api = assistantApi();
+    render(ui());
+    const p = await openPanel();
+    await type('Help me please?');
+    await userEvent.click(within(p).getByRole('button', { name: 'Send' }));
+    await answer(api, 1, exhausted({ kind: 'month', allowance: 50, used: 50, resetsAt: '2026-12-01T00:00:00.000Z' }));
+    const alert = await within(p).findByRole('alert');
+    expect(alert).toHaveTextContent('You’ve used this month’s 50 AI companion replies. They reset on 1 December (UTC). You can keep writing on your own.');
+    expect(within(alert).queryByRole('button', { name: 'Try again' })).toBeNull();
+    expect(alert).not.toHaveTextContent(/busy|hourly/i);
+    expect(within(p).getByRole('textbox')).toHaveValue('Help me please?');
+    await new Promise((r) => setTimeout(r, 50));
+    expect(api.calls).toHaveLength(1);
+  });
+
+  it('trial allowance used: says the trial’s replies are used (no reset date)', async () => {
+    const api = assistantApi();
+    render(ui());
+    const p = await openPanel();
+    await type('Hi?');
+    await userEvent.click(within(p).getByRole('button', { name: 'Send' }));
+    await answer(api, 1, exhausted({ kind: 'trial', allowance: 5, used: 5, resetsAt: null }));
+    expect(await within(p).findByRole('alert')).toHaveTextContent('You’ve used the 5 AI companion replies included in your free trial. You can keep writing on your own.');
+  });
+
+  it('Step 7: a used allowance offers "View plans" on the trial and Premium only; Complete shows the reset alone', async () => {
+    const run = async (tier: typeof tierInForce, allowance: object, account: string) => {
+      tierInForce = tier;
+      client.clear();
+      const api = assistantApi();
+      const r = render(ui(account));
+      const p = await openPanel();
+      await waitFor(() => expect(client.getQueryData(['billing'])).toBeDefined());
+      await type('Hi?');
+      await userEvent.click(within(p).getByRole('button', { name: 'Send' }));
+      await answer(api, 1, exhausted(allowance));
+      const alert = await within(p).findByRole('alert');
+      const link = within(alert).queryByRole('link', { name: 'View plans' });
+      r.unmount();
+      return { link: link?.getAttribute('href') ?? null, text: alert.textContent ?? '' };
+    };
+    const month = { kind: 'month', used: 50, resetsAt: '2026-12-01T00:00:00.000Z' };
+    expect((await run('FREE_TRIAL', { kind: 'trial', allowance: 5, used: 5, resetsAt: null }, 'a')).link).toBe('/settings/plan');
+    expect((await run('PREMIUM', { ...month, allowance: 50 }, 'b')).link).toBe('/settings/plan');
+    const complete = await run('COMPLETE', { ...month, allowance: 200, used: 200 }, 'c');
+    expect(complete.link).toBeNull();
+    expect(complete.text).toMatch(/reset on 1 December \(UTC\)/);
+    expect(complete.text).not.toMatch(/Premium|Complete|upgrade/i);
+  });
+
+  it('the hourly abuse limit stays a separate message, with Try again, and keeps the typed text', async () => {
+    const api = assistantApi();
+    render(ui());
+    const p = await openPanel();
+    await type('Again?');
+    await userEvent.click(within(p).getByRole('button', { name: 'Send' }));
+    await answer(api, 1, json(429, { statusCode: 429, message: 'The assistant is busy. Please try again in a minute.' }));
+    const alert = await within(p).findByRole('alert');
+    expect(alert).toHaveTextContent('The AI companion is busy, or you’ve reached the hourly limit. Please try again later.');
+    expect(within(alert).getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+    expect(within(alert).queryByRole('link', { name: 'View plans' })).toBeNull(); // throttling is not an allowance
+    expect(within(p).getByRole('textbox')).toHaveValue('Again?');
   });
 });

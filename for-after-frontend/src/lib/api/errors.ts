@@ -21,10 +21,15 @@ export class ApiError extends Error {
     readonly status: number | null,
     message: string,
     readonly details: string[] = [],
+    /** A machine code from the API, when it sends one (e.g. TRIAL_LIMIT). */
+    readonly code?: string,
   ) {
     super(message);
     this.name = 'ApiError';
   }
+
+  /** Updated Plans Step 5: for AI_ALLOWANCE_EXHAUSTED only, the checked facts needed to explain it. */
+  allowance?: { kind: 'trial' | 'month'; allowance: number; resetsAt: string | null };
 }
 
 const DEFAULT_MESSAGES: Record<ApiErrorKind, string> = {
@@ -79,6 +84,19 @@ const safeText = (value: unknown): value is string =>
 
 /** Maps an error response body (untrusted, any shape) to an ApiError. */
 export function toApiError(status: number, body: unknown): ApiError {
+  const error = buildApiError(status, body);
+  // Only typed, validated fields (never free text) for the allowance explanation.
+  if (error.code === 'AI_ALLOWANCE_EXHAUSTED' && body && typeof body === 'object') {
+    const b = body as { kind?: unknown; allowance?: unknown; resetsAt?: unknown };
+    if ((b.kind === 'trial' || b.kind === 'month') && Number.isSafeInteger(b.allowance)) {
+      const resetsAt = typeof b.resetsAt === 'string' && !Number.isNaN(Date.parse(b.resetsAt)) ? b.resetsAt : null;
+      error.allowance = { kind: b.kind, allowance: b.allowance as number, resetsAt };
+    }
+  }
+  return error;
+}
+
+function buildApiError(status: number, body: unknown): ApiError {
   const kind = kindFor(status);
   const raw =
     body && typeof body === 'object' && 'message' in body
@@ -89,15 +107,18 @@ export function toApiError(status: number, body: unknown): ApiError {
     .filter(safeText)
     .filter((m) => !REASON_PHRASES.has(m));
 
+  // Only short upper-case codes are kept, never free text from the body.
+  const rawCode = body && typeof body === 'object' && 'code' in body ? body.code : undefined;
+  const code = typeof rawCode === 'string' && /^[A-Z_]{1,40}$/.test(rawCode) ? rawCode : undefined;
+
   if (!TRUST_BACKEND_MESSAGE.has(kind) || messages.length === 0) {
-    return new ApiError(kind, status, DEFAULT_MESSAGES[kind]);
+    return new ApiError(kind, status, DEFAULT_MESSAGES[kind], [], code);
   }
   if (messages.length > 1) {
-    return new ApiError(kind, status, DEFAULT_MESSAGES[kind], messages);
+    return new ApiError(kind, status, DEFAULT_MESSAGES[kind], messages, code);
   }
-  return new ApiError(kind, status, messages[0]);
+  return new ApiError(kind, status, messages[0], [], code);
 }
-
 export const networkError = () =>
   new ApiError('network', null, DEFAULT_MESSAGES.network);
 

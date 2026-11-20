@@ -9,10 +9,10 @@ import { customer, json, routeFetch, router } from '@/test/utils';
 import { AdminLoginForm, MfaSetup, MfaVerify } from './admin-auth';
 import { AdminGate } from './admin-shell';
 import { AuditDetail, AuditList } from './audit-logs';
-import { CaseDetail, CaseList } from './death-verifications';
+import { CaseDetail } from './death-verifications';
 import { AdminOverview } from './overview';
 import { Queues } from './queues';
-import { UserDetail, UserList } from './users';
+import { UserDetail } from './users';
 
 vi.mock('next/navigation', () => ({ useRouter: () => router, usePathname: () => '/admin' }));
 
@@ -477,32 +477,7 @@ const detail = (over: Partial<AdminUserDetail> = {}): AdminUserDetail => ({
   ...over,
 });
 
-describe('Users list', () => {
-  it('pages, searches and filters on the server through the URL', async () => {
-    const api = routeFetch({
-      'GET /admin/users': json(200, page([USER], { page: 1, limit: 25, total: 60, pages: 3 })),
-    });
-    renderAdmin(<UserList filters={{ page: 1, status: 'ACTIVE' }} />);
-    expect(await screen.findByRole('link', { name: 'Clara Customer' })).toHaveAttribute('href', `/admin/users/${USER.id}`);
-    expect(api.calls[0].path).toBe('/admin/users');
-    expect(screen.getByText('Page 1 of 3 · 60 results')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Next' })).toHaveAttribute('href', '/admin/users?page=2&status=ACTIVE');
-
-    await userEvent.selectOptions(screen.getByLabelText('Role'), 'ADMIN');
-    expect(router.replace).toHaveBeenLastCalledWith('/admin/users?status=ACTIVE&role=ADMIN', { scroll: false });
-
-    await userEvent.type(screen.getByLabelText('Search'), 'clara');
-    await waitFor(() =>
-      expect(router.replace).toHaveBeenLastCalledWith('/admin/users?status=ACTIVE&search=clara', { scroll: false }),
-    );
-  });
-
-  it('says when nothing matches', async () => {
-    routeFetch({ 'GET /admin/users': json(200, page([])) });
-    renderAdmin(<UserList filters={{ page: 1, search: 'nobody' }} />);
-    expect(await screen.findByText('No users match these filters')).toBeInTheDocument();
-  });
-});
+// Users list: users.test.tsx.
 
 describe('User detail', () => {
   const seedMe = (me: AdminMe = ADMIN) => [signedIn(me)];
@@ -622,20 +597,7 @@ const deathCase = (over: Partial<DeathCaseDetail> = {}): DeathCaseDetail => ({
   ...over,
 });
 
-describe('Death verification list', () => {
-  it('makes READY_FOR_REVIEW easy to reach and filters through the URL', async () => {
-    routeFetch({ 'GET /admin/death-verifications': json(200, page([])) });
-    renderAdmin(<CaseList filters={{ page: 1, status: 'READY_FOR_REVIEW' }} />);
-    expect(await screen.findByText('No cases ready for review')).toBeInTheDocument();
-    const chips = screen.getByRole('navigation', { name: 'Filter by status' });
-    expect(within(chips).getAllByRole('link')[1]).toHaveTextContent('Ready for review');
-    expect(within(chips).getByRole('link', { name: 'Ready for review' })).toHaveAttribute('aria-current', 'true');
-    expect(within(chips).getByRole('link', { name: 'Cancelled' })).toHaveAttribute(
-      'href',
-      '/admin/death-verifications?status=CANCELLED',
-    );
-  });
-});
+// Death verification list: death-verification-list.test.tsx.
 
 describe('Death verification confirmations (Phase 19B)', () => {
   const PENDING = 'Another independent Trusted Contact confirmation is required before this case can be verified.';

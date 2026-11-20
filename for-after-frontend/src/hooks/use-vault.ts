@@ -116,6 +116,8 @@ const recipientHooks = resourceHooks<Recipient, RecipientInput>(queryKeys.recipi
   queryKeys.recipients,
   queryKeys.recipientPages,
   queryKeys.messages,
+  // Updated Plans Step 7: the plan page's people count (GET /billing people).
+  queryKeys.billing,
 ]);
 export const recipients = {
   ...recipientHooks,
@@ -131,7 +133,7 @@ export const recipients = {
 const trustedContactHooks = resourceHooks<TrustedContact, TrustedContactInput>(
   queryKeys.trustedContacts,
   trustedContactsApi,
-  [queryKeys.trustedContacts, queryKeys.readiness],
+  [queryKeys.trustedContacts, queryKeys.readiness, queryKeys.billing],
 );
 export const trustedContacts = {
   ...trustedContactHooks,
@@ -157,7 +159,8 @@ export const messages = resourceHooks<Message, MessageInput, MessageSummary>(que
 const memoryHooks = resourceHooks<Memory, MemoryInput>(
   queryKeys.memories,
   { ...memoryVaultApi, list: (signal) => memoryVaultApi.list({}, signal).then((p) => p.items) },
-  [['memory-vault', 'list'], queryKeys.memoryTags],
+  // Trial Step 7: the billing status carries the memory count (memoriesSaved) the trial cap uses.
+  [['memory-vault', 'list'], queryKeys.memoryTags, queryKeys.billing],
 );
 export const memories = {
   ...memoryHooks,
@@ -281,8 +284,21 @@ export function useAnswerMutation(area: PromptArea, key: string) {
   const qc = useQueryClient();
   return useMutation<unknown, ApiError, AnswerInput | null>({
     mutationFn: (input) => (input ? promptsApi.save(area, key, input) : promptsApi.remove(area, key)),
-    // The area root covers the list, this prompt and its files.
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.prompts(area) }),
+    // The area root covers the list, this prompt and its files. Billing carries the shared trial question count: it
+    // refreshes too, but the save doesn't wait for it (waiting let the list re-render mid-save).
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: queryKeys.billing });
+      return qc.invalidateQueries({ queryKey: queryKeys.prompts(area) });
+    },
+  });
+}
+
+/** Trial Step 7: unlink memories from a My Story answer (removal only; open even when writing is not). */
+export function useUnlinkMemory(key: string) {
+  const qc = useQueryClient();
+  return useMutation<unknown, ApiError, string>({
+    mutationFn: (memoryId) => promptsApi.unlinkMemories(key, [memoryId]),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.prompts('my-story') }),
   });
 }
 

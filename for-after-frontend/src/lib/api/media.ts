@@ -191,6 +191,12 @@ export const mediaApi = {
  * file id (only a hint: the backend verifies the file itself). Rejects with an
  * ApiError, or a DOMException "AbortError" on cancel.
  */
+/**
+ * Backend MediaCleanup UPLOAD_IN_FLIGHT_MS: an upload still running this long after it started is abandoned, so no
+ * file can reach its path after the server treats the path as settled (and may clean it up).
+ */
+export const UPLOAD_IN_FLIGHT_MS = 60 * 60_000;
+
 export function uploadToProvider(
   upload: UploadTarget,
   file: Blob,
@@ -205,6 +211,7 @@ export function uploadToProvider(
     const xhr = new XMLHttpRequest();
     xhr.open('POST', upload.url);
     xhr.responseType = 'json';
+    xhr.timeout = UPLOAD_IN_FLIGHT_MS;
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) onProgress?.(e.loaded / e.total);
     };
@@ -216,6 +223,8 @@ export function uploadToProvider(
     };
     xhr.onerror = () =>
       reject(new ApiError('network', null, "We couldn't upload this file. Please check your connection and try again."));
+    xhr.ontimeout = () =>
+      reject(new ApiError('network', null, 'This upload took too long and was stopped. Please try again on a faster connection.'));
     xhr.onabort = () => reject(new DOMException('Upload cancelled', 'AbortError'));
     signal?.addEventListener('abort', () => xhr.abort(), { once: true });
     xhr.send(form);

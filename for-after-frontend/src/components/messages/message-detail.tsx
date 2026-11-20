@@ -3,12 +3,15 @@
 import { Lock, Pencil, Trash2 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { useState } from 'react';
 import { toast } from 'sonner';
 import { MediaManager } from '@/components/media/media-manager';
 import { CONTENT_TYPE_INFO, StatusBadge, recipientSummary } from '@/components/messages/message-bits';
 import { SchedulePanel } from '@/components/messages/schedule-panel';
 import { VersionHistory } from '@/components/messages/version-history';
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
+import { UpgradeDialog, usePlanLock } from '@/components/shared/plan-lock';
+import { KeptDraft, messageDraftText } from '@/components/shared/draft-recovery';
 import { PageHeader } from '@/components/shared/page-header';
 import { QueryView } from '@/components/shared/states';
 import { PrivateNoteView } from '@/components/shared/private-note';
@@ -50,9 +53,17 @@ function MessageView({ message: m }: { message: Message }) {
   const draft = m.status === 'DRAFT';
   const type = CONTENT_TYPE_INFO[m.contentType];
   const showMedia = m.contentType !== 'TEXT' || (media.data?.length ?? 0) > 0;
+  // Step 6: opening a message without write access explains it once (View plans / Continue viewing). Decided when the
+  // plan is first known, so a refetch or re-render never reopens it after it was dismissed.
+  const plan = usePlanLock();
+  const [prompt, setPrompt] = useState<boolean | null>(null);
+  if (prompt === null && plan.billing.isSuccess) setPrompt(plan.locked);
 
   return (
     <>
+      <UpgradeDialog open={!!prompt} onOpenChange={setPrompt} closeLabel="Continue viewing" />
+      {/* Step 7 close-out: its edit page is closed without a plan, so a copy kept in this tab is viewable here. */}
+      {plan.locked && <KeptDraft type="MESSAGE" draftKey={m.id} text={messageDraftText} />}
       <PageHeader
         back={{ href: '/messages', label: 'Messages' }}
         eyebrow={`${type.label} message`}

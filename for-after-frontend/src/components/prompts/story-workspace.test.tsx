@@ -2,11 +2,14 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { Prompt, StoryBook } from '@/lib/api/prompts';
-import { json, renderWithClient, routeFetch, router } from '@/test/utils';
+import { json, renderWithClient, routeFetch as stubFetch, router, BILLING_OFF } from '@/test/utils';
 import { CompanionProvider } from '@/components/companion/companion';
 import { StoryWorkspace } from './story-workspace';
 
 vi.mock('next/navigation', () => ({ useRouter: () => router, usePathname: () => '/my-story' }));
+
+// Step 5 gates a new answer on the plan: billing off here (no trial cap). Trial behaviour: trial-questions.test.tsx.
+const routeFetch = (routes: Parameters<typeof stubFetch>[0]) => stubFetch({ 'GET /billing': json(200, BILLING_OFF), ...routes });
 
 const response = (key: string, textContent: string) => ({
   id: `r-${key}`,
@@ -34,6 +37,8 @@ const noDraft = () => new Response(null, { status: 204 });
 const routes = (extra: Record<string, Parameters<typeof routeFetch>[0][string]> = {}) =>
   routeFetch({
     'GET /my-story/prompts': json(200, catalogue),
+    // The chapter preview below the writing area; tests override it with a real book.
+    'GET /my-story/book': json(200, { chapters: [], unsorted: [] }),
     ...Object.fromEntries(catalogue.map((p) => [`GET /users/me/drafts/MY_STORY/${p.key}`, noDraft()])),
     ...Object.fromEntries(catalogue.map((p) => [`GET /my-story/prompts/${p.key}/response/media`, json(200, [])])),
     ...extra,
@@ -45,8 +50,14 @@ describe('My Story workspace (approved design)', () => {
   it('replaces the photo hero with the approved header, tabs and real data', async () => {
     routes();
     const { container } = renderWithClient(<CompanionProvider><StoryWorkspace /></CompanionProvider>);
-    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Every life holds a story.');
-    expect(screen.getByText('Capture the memories and moments that made you.')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(/^Every life holds a story\. This is yours\.$/);
+    for (const paragraph of [
+      'The childhood memories. The people who changed everything. The adventures, challenges and everyday moments that made you who you are.',
+      'With thoughtful prompts to guide you, My Story helps you turn a lifetime of memories into your own life story - one question, one memory, one chapter at a time. Capture the details, share the lessons and tell the stories you want your loved ones to know.',
+      'You don’t need to be a writer or know where to begin. Follow the prompts at your own pace, and by the end, you’ll have created something extraordinary: your life, in your words. A legacy your loved ones can return to, share and treasure for generations.',
+    ]) {
+      expect(screen.getByText(paragraph).tagName).toBe('P');
+    }
     expect(within(screen.getByRole('navigation', { name: 'Breadcrumb' })).getByText('My Story')).toHaveAttribute('aria-current', 'page');
     expect(screen.getByRole('link', { name: 'View my book' })).toHaveAttribute('href', '/my-story/book');
     expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Your answers', 'Chapters']);
@@ -142,6 +153,26 @@ describe('My Story workspace (approved design)', () => {
     expect(question()).toHaveTextContent('What was the place you grew up in like?');
   });
 
+  it('saving the first unanswered question keeps it on screen with its saved status after the list refetches', async () => {
+    // The refetched list reports it answered, so "first unanswered" moves on: the question must already be pinned.
+    let saved = false;
+    const api = routes({
+      'GET /my-story/prompts': () =>
+        json(200, saved ? catalogue.map((p) => (p.key === 'childhood.school' ? prompt(p.key, p.category, p.prompt, 'Long walks.') : p)) : catalogue),
+      'PUT /my-story/prompts/childhood.school/response': () => ((saved = true), json(200, response('childhood.school', 'Long walks.'))),
+      // As in the browser: the list refetch lands while the save still waits for the plan refetch.
+      'GET /billing': () =>
+        saved ? new Promise<Response>((r) => setTimeout(() => r(json(200, BILLING_OFF)), 300)) : json(200, BILLING_OFF),
+    });
+    renderWithClient(<CompanionProvider><StoryWorkspace /></CompanionProvider>);
+    await userEvent.type(await screen.findByLabelText('Your answer'), 'Long walks.');
+    await userEvent.click(screen.getByRole('button', { name: 'Save answer' }));
+    expect(await screen.findByText('Your answer and private note are saved.')).toBeInTheDocument();
+    expect(question()).toHaveTextContent('What do you remember about school?');
+    // The next question's draft was never loaded mid-save.
+    expect(api.called('GET', '/users/me/drafts/MY_STORY/family.tradition')).toEqual([]);
+  });
+
   it('a failed save keeps the text and allows another try', async () => {
     routes({ 'PUT /my-story/prompts/childhood.school/response': json(500, { statusCode: 500, message: 'Something went wrong.' }) });
     renderWithClient(<CompanionProvider><StoryWorkspace /></CompanionProvider>);
@@ -232,6 +263,7 @@ describe('My Story workspace (approved design)', () => {
       source: 'My notes.',
       promptKey: 'childhood.school',
       history: [],
+      requestId: expect.stringMatching(/^[0-9a-f-]{36}$/), // Updated Plans Step 5: a fresh id per Send
     });
     expect(JSON.stringify(api.calls)).not.toContain('kept private');
     await userEvent.click(await within(panel).findByRole('button', { name: 'Use this draft' }));
@@ -273,6 +305,26 @@ describe('My Story workspace (approved design)', () => {
     expect(screen.getByText('1 saved answer')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('tab', { name: 'Your answers' }));
     expect(answer()).toHaveValue('Kept across tabs.');
+  });
+
+  it('chapter preview sits after the writing area; its links wait for the unsaved-changes choice', async () => {
+    const book: StoryBook = {
+      chapters: [{ category: 'CHILDHOOD', entries: [{ promptKey: 'childhood.home', prompt: 'Q', textContent: 'A', mediaCount: 0, memories: [], updatedAt: '2026-09-01T00:00:00Z' }] }],
+      unsorted: [],
+    };
+    routes({ 'GET /my-story/book': json(200, book) });
+    renderWithClient(<CompanionProvider><StoryWorkspace /></CompanionProvider>);
+    const preview = (await screen.findByRole('heading', { level: 2, name: 'Your story, chapter by chapter' })).closest('section')!;
+    // After the tabs (the writing area), never before it.
+    expect(screen.getByRole('tablist').compareDocumentPosition(preview) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const chapter = await within(preview).findByRole('link', { name: /Childhood/ });
+    expect(chapter).toHaveAttribute('href', '/my-story/book?chapter=CHILDHOOD');
+    await userEvent.type(answer(), 'Not saved yet.');
+    await userEvent.click(within(preview).getByRole('link', { name: 'Preview My Story' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(router.push).not.toHaveBeenCalledWith('/my-story/book');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Stay here' }));
+    expect(answer()).toHaveValue('Not saved yet.');
   });
 
   it('Chapters tab: empty state before any saved answer', async () => {

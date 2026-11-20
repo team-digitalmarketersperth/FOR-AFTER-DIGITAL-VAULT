@@ -16,9 +16,11 @@ import { ChoiceGroup, FilterChips, FormError, TextAreaField, TextField } from '@
 import { PageHeader } from '@/components/shared/page-header';
 import { PrivateNoteField, PrivateNoteView } from '@/components/shared/private-note';
 import { QueryView, Spinner } from '@/components/shared/states';
+import { CreateGateNotice, TrialLockedButton, TrialMemories, useCreateGate, useTrialCap } from '@/components/shared/trial-cap';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { useBilling } from '@/hooks/use-billing';
 import { useUnsavedChanges } from '@/hooks/use-unsaved-changes';
 import { memories } from '@/hooks/use-vault';
 import type { ApiError } from '@/lib/api/errors';
@@ -37,8 +39,9 @@ import { TEXT_CONTENT_MAX } from '@/lib/api/messages';
 import { formatDate, humanize } from '@/lib/format';
 import { memorySchema, type MemoryValues } from '@/schemas/vault';
 
+const NEW_BUTTON_CLASS = 'h-11 w-full rounded-md px-5 sm:w-auto';
 const newButton = (
-  <Button asChild className="h-11 w-full rounded-md px-5 sm:w-auto">
+  <Button asChild className={NEW_BUTTON_CLASS}>
     <Link href="/memory-vault/new">
       <Plus aria-hidden strokeWidth={1.5} />
       Save a memory
@@ -77,6 +80,9 @@ export function MemoryList({ filters }: { filters: MemoryFilters }) {
   // A tag from a shared link that is not (or no longer) one of theirs still shows as selected.
   if (filters.tag && !tagNames.some((n) => n.toLowerCase() === filters.tag!.toLowerCase())) tagNames.push(filters.tag);
   const tagValue = tagNames.find((n) => n.toLowerCase() === filters.tag?.toLowerCase()) ?? '';
+  // Trial Step 7: one memory in an enforced active trial, counted by the API (every live memory, whatever the filters).
+  const capLocked = useTrialCap('memories', useBilling(false).data?.memoriesSaved).locked;
+  const add = capLocked ? <TrialLockedButton kind="memories" label="Save a memory" icon={Plus} className={NEW_BUTTON_CLASS} /> : newButton;
   return (
     <>
       <VaultIntro />
@@ -110,8 +116,9 @@ export function MemoryList({ filters }: { filters: MemoryFilters }) {
             ))}
           </select>
         </div>
-        {newButton}
+        {add}
       </div>
+      <TrialMemories className="mb-4 text-sm text-foreground-muted" />
       <FilterChips
         label="Filter by category"
         chips={chips}
@@ -134,7 +141,7 @@ export function MemoryList({ filters }: { filters: MemoryFilters }) {
               <VaultEmpty
                 title="Your Memory Vault is ready when you are"
                 description="Write down a story, a recipe or a moment, and add photos or a recording if you like."
-                action={newButton}
+                action={add}
               />
             )
           ) : (
@@ -181,7 +188,7 @@ function VaultIntro() {
         </h1>
         <p className="max-w-xl text-base leading-relaxed text-foreground-secondary sm:text-[17px]">
           Gather the photos, videos and stories that celebrate your life. After you pass away, your Memory Vault will
-          become a memorial page to share with loved ones and funeral guests.
+          become a memorial page to share with loved ones and funeral guests
         </p>
         <p className="mt-2 flex max-w-xl gap-3 rounded-sm border-l-2 border-primary bg-surface/80 px-4 py-3 text-sm leading-relaxed text-foreground-secondary">
           <Info aria-hidden strokeWidth={1.5} className="mt-0.5 size-4 shrink-0 text-primary" />
@@ -332,10 +339,21 @@ export function MemoryDetail({ id }: { id: string }) {
 export function NewMemory({ category }: { category?: MemoryCategory }) {
   const router = useRouter();
   const create = memories.useCreate();
+  const back = { href: '/memory-vault', label: 'Memory Vault' };
+  // Trial Step 7: opened with the trial's one memory already saved, explain instead of a form the API would refuse.
+  const gate = useCreateGate('memories', useBilling(false).data?.memoriesSaved);
+  if (gate !== 'open' && !create.isSuccess) {
+    return (
+      <>
+        <PageHeader back={back} title={<>Save a <em>memory</em></>} />
+        <CreateGateNotice gate={gate} kind="memories" icon={Images} back={{ href: back.href, label: 'Back to Memory Vault' }} />
+      </>
+    );
+  }
   return (
     <>
       <PageHeader
-        back={{ href: '/memory-vault', label: 'Memory Vault' }}
+        back={back}
         title={<>Save a <em>memory</em></>}
         description="Write it down now. You can add photos or a recording on the next page."
       />

@@ -99,7 +99,7 @@ export type UploadState =
   | { phase: 'idle' }
   | { phase: 'uploading'; fileName: string; progress: number }
   | { phase: 'confirming'; fileName: string }
-  | { phase: 'failed'; fileName: string; message: string };
+  | { phase: 'failed'; fileName: string; message: string; code?: string };
 
 /**
  * upload-url → direct upload to the provider (with progress) → complete →
@@ -125,6 +125,7 @@ export function useUpload(scope: MediaScope) {
       abortRef.current = controller;
       setState({ phase: 'uploading', fileName: file.name, progress: 0 });
       let assetId: string | undefined;
+      let uploaded = false;
       try {
         const target = await mediaApi.requestUpload(scope, kind, file);
         assetId = target.mediaAssetId;
@@ -132,14 +133,17 @@ export function useUpload(scope: MediaScope) {
           signal: controller.signal,
           onProgress: (progress) => setState({ phase: 'uploading', fileName: file.name, progress }),
         });
+        uploaded = true;
         setState({ phase: 'confirming', fileName: file.name });
         const asset = await mediaApi.complete(scope, target.mediaAssetId, providerFileId);
         setState({ phase: 'idle' });
         return asset;
       } catch (error) {
+        // Best effort, cancelled or the upload itself failed: the unconfirmed asset would otherwise block scheduling
+        // and keep its storage reserved until the server retires it (a file that did arrive is removed there). A
+        // failed confirmation keeps its asset: the server has recorded the outcome.
+        if (assetId && (controller.signal.aborted || !uploaded)) await mediaApi.remove(scope, assetId).catch(() => undefined);
         if (controller.signal.aborted) {
-          // Best effort: the pending asset would otherwise block scheduling.
-          if (assetId) await mediaApi.remove(scope, assetId).catch(() => undefined);
           setState({ phase: 'idle' });
           return null;
         } else {
@@ -147,7 +151,10 @@ export function useUpload(scope: MediaScope) {
             phase: 'failed',
             fileName: file.name,
             message: isApiError(error) ? error.message : 'The upload did not finish. Please try again.',
+            code: isApiError(error) ? error.code : undefined,
           });
+          // Paid-only (Trial Step 4): the plan changed under this page; re-read it so the controls show Pro.
+          if (isApiError(error) && error.code === 'PAID_FEATURE') void qc.invalidateQueries({ queryKey: queryKeys.billing });
           return null;
         }
       } finally {

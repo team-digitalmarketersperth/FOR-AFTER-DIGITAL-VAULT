@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { QueryView } from '@/components/shared/states';
 import { useStorageUsage } from '@/hooks/use-media';
 import type { StorageUsage } from '@/lib/api/media';
-import { formatBytes } from '@/lib/format';
+import { decimalLimit, formatBytes } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
 export const STORAGE_MANAGER_HREF = '/settings/storage';
@@ -28,12 +28,13 @@ export function storageNotice(u: StorageUsage): { text: string; tone: string; ct
   }
 }
 
-/** "25.0 MB of 5.0 GB used". Uploads in progress count as used, as the quota does. */
+/** "25.0 MB of 5.0 GB used" (or "… of 100.0 MB" on a trial). Uploads in progress count as used, as the quota does. */
 export function StorageAmount({ usage: u }: { usage: StorageUsage }) {
+  const decimal = decimalLimit(u.limitBytes);
   return (
     <p className="text-[15px]">
-      <span className="font-semibold">{formatBytes(u.usedBytes + u.reservedBytes)}</span> of{' '}
-      {formatBytes(u.limitBytes)} used
+      <span className="font-semibold">{formatBytes(u.usedBytes + u.reservedBytes, decimal)}</span> of{' '}
+      {formatBytes(u.limitBytes, decimal)} used
     </p>
   );
 }

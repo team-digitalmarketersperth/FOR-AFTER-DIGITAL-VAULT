@@ -1,6 +1,6 @@
 'use client';
 
-import { BookOpen, Check, ChevronDown, ChevronLeft, ChevronRight, ImagePlus, Send, X } from 'lucide-react';
+import { BookOpen, Check, ChevronDown, ChevronLeft, ChevronRight, Film, ImagePlus, PenLine, Send, X } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Tabs } from 'radix-ui';
@@ -9,10 +9,12 @@ import { toast } from 'sonner';
 import { HelpMeWrite } from '@/components/companion/companion';
 import { KIND_LABEL, MediaTile, UploadFailed, UploadProgress } from '@/components/media/media-manager';
 import { EarlierWording, EXTRAS, LinkedMemories, MemorySearch } from '@/components/prompts/prompts';
-import { chaptersOf } from '@/components/prompts/story-book';
-import { AutosaveStatus, RecoveryNotice } from '@/components/shared/draft-recovery';
+import { chaptersOf, StoryChapters } from '@/components/prompts/story-book';
+import { AutosaveStatus, KeptDraft, RecoveryNotice } from '@/components/shared/draft-recovery';
 import { FormError, TextAreaField } from '@/components/shared/form-field';
 import { PrivateNoteField } from '@/components/shared/private-note';
+import { PlanLockedButton, usePlanLock } from '@/components/shared/plan-lock';
+import { COMPLETE_VIDEO_COPY, CompleteVideoButton, PaidMemoryLinkButton, QuestionGateNotice, TrialQuestions, usePaidMedia, usePaidMemoryLinks, useQuestionGate } from '@/components/shared/trial-cap';
 import { EmptyState, QueryView, Spinner } from '@/components/shared/states';
 import { Button } from '@/components/ui/button';
 import {
@@ -112,12 +114,27 @@ export function StoryWorkspace({ category }: { category?: string }) {
             </li>
           </ol>
         </nav>
-        <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
+        <div className="grid gap-5">
           <div className="grid gap-3">
-            <h1 className="text-[40px] leading-[1.05] sm:text-5xl">Every life holds a story.</h1>
-            <p className="text-lg text-foreground-muted">Capture the memories and moments that made you.</p>
+            <h1 className="text-[40px] leading-[1.05] sm:text-5xl">Every life holds a story. This is yours.</h1>
+            <div className="grid gap-3 text-base leading-relaxed text-foreground-muted sm:text-lg">
+              <p>
+                The childhood memories. The people who changed everything. The adventures, challenges and everyday
+                moments that made you who you are.
+              </p>
+              <p>
+                With thoughtful prompts to guide you, My Story helps you turn a lifetime of memories into your own life
+                story - one question, one memory, one chapter at a time. Capture the details, share the lessons and tell
+                the stories you want your loved ones to know.
+              </p>
+              <p>
+                You don’t need to be a writer or know where to begin. Follow the prompts at your own pace, and by the
+                end, you’ll have created something extraordinary: your life, in your words. A legacy your loved ones can
+                return to, share and treasure for generations.
+              </p>
+            </div>
           </div>
-          <Button asChild variant="outline" className="w-fit border-brand-maroon text-brand-maroon">
+          <Button asChild variant="outline" className="w-fit border-brand-maroon text-brand-maroon sm:justify-self-end">
             <Link href="/my-story/book" onClick={guardLink('/my-story/book')}>
               <BookOpen aria-hidden strokeWidth={1.5} />
               View my book
@@ -126,6 +143,8 @@ export function StoryWorkspace({ category }: { category?: string }) {
         </div>
       </header>
 
+      {/* quiet: a new question's answer box shows the plan status itself. */}
+      <TrialQuestions quiet className="mb-6 text-sm text-foreground-muted" />
       <Tabs.Root defaultValue="answers" activationMode="manual">
         <Tabs.List aria-label="My Story" className="mb-8 flex gap-6 border-b border-brand-stone">
           {[
@@ -170,8 +189,8 @@ export function StoryWorkspace({ category }: { category?: string }) {
                     }}
                     onPrev={index > 0 ? () => go(prompts[index - 1].key) : undefined}
                     onNext={index < prompts.length - 1 ? () => go(prompts[index + 1].key) : undefined}
-                    // Keeps this question once saved, though "first unanswered" moves on.
-                    onSaved={() => setSelected(p.key)}
+                    // Keeps this question while it saves, though "first unanswered" moves on.
+                    onSaving={() => setSelected(p.key)}
                     guardLink={guardLink}
                   />
                   <BringTogether />
@@ -185,6 +204,11 @@ export function StoryWorkspace({ category }: { category?: string }) {
           <ChaptersTab guardLink={guardLink} />
         </Tabs.Content>
       </Tabs.Root>
+
+      {/* Secondary, after the writing area (moved from the dashboard 2026-11-10). */}
+      <div className="mt-16 lg:mt-20">
+        <StoryChapters guardLink={guardLink} />
+      </div>
 
       <UnsavedDialog
         pending={pending}
@@ -305,7 +329,7 @@ function FocusedEditor({
   registerSave,
   onPrev,
   onNext,
-  onSaved,
+  onSaving,
   guardLink,
 }: {
   prompt: Prompt;
@@ -315,7 +339,7 @@ function FocusedEditor({
   registerSave: (save: () => Promise<boolean>) => void;
   onPrev?: () => void;
   onNext?: () => void;
-  onSaved: () => void;
+  onSaving: () => void;
   guardLink: (href: string) => (e: MouseEvent) => void;
 }) {
   const mutation = useAnswerMutation('my-story', p.key);
@@ -332,6 +356,9 @@ function FocusedEditor({
     latest.current = text;
   }, [text]);
   const dirty = text !== saved.text || note !== saved.note;
+  // Trial Step 5: a new answer opens once the plan is known and a slot is free (never closes while typing). Files and
+  // memories below stay as they are.
+  const gate = useQuestionGate(saved.text, dirty);
   const done = group.filter((x) => x.answered).length;
   const label = humanize(p.category);
 
@@ -345,12 +372,14 @@ function FocusedEditor({
     setErrors({});
     setStatus('Saving your answer…');
     const sent = { text, note };
+    // Pinned before the request: the save refetches the list before it resolves, and with nothing pinned "first
+    // unanswered" would move on mid-save, remounting this editor and losing its saved status.
+    onSaving();
     try {
       // Words and private note, as the full answer page sends them; files and links are saved on their own.
       await mutation.mutateAsync({ textContent: sent.text.trim() ? sent.text : null, privateNote: sent.note.trim() || null });
       setSaved(sent);
       setSaves((n) => n + 1);
-      onSaved();
       setStatus('Your answer and private note are saved.');
       return true;
     } catch {
@@ -389,7 +418,7 @@ function FocusedEditor({
         {p.prompt}
       </h2>
       <EarlierWording prompt={p} />
-      <AutosaveDraft key={saves} promptKey={p.key} saved={saved.text} text={text} setText={setText} active={!mutation.isPending}>
+      <AutosaveDraft key={saves} promptKey={p.key} saved={saved.text} text={text} setText={setText} active={!mutation.isPending && gate !== 'readonly'} readOnly={gate === 'readonly'}>
         {(autosave) => (
           <form
             noValidate
@@ -400,7 +429,15 @@ function FocusedEditor({
             className="grid min-w-0 grid-cols-1 gap-5"
           >
             <FormError error={mutation.error} />
+            {gate === 'readonly' && !saved.text.trim() ? (
+              <div>
+                <PlanLockedButton label="Write your answer" icon={PenLine} />
+              </div>
+            ) : gate !== 'open' && gate !== 'readonly' ? (
+              <QuestionGateNotice gate={gate} />
+            ) : (
             <div className="relative">
+              {gate === 'open' && (
               <HelpMeWrite
                 targetKey={p.key}
                 question={p.prompt}
@@ -410,6 +447,7 @@ function FocusedEditor({
                 write={setText}
                 className="absolute top-0 right-0"
               />
+              )}
               <TextAreaField
                 id="story-answer"
                 label="Your answer"
@@ -418,12 +456,13 @@ function FocusedEditor({
                 maxLength={ANSWER_MAX['my-story']}
                 length={text.length}
                 error={errors.textContent}
-                // Read-only while saving, so nothing typed meanwhile is overwritten by the reply.
-                readOnly={mutation.isPending}
+                // Read-only while saving, so nothing typed meanwhile is overwritten by the reply; Step 6: read-only without access.
+                readOnly={mutation.isPending || gate === 'readonly'}
                 value={text}
                 onChange={(e) => setText(e.target.value)}
               />
             </div>
+            )}
             <StoryAttachments prompt={p} onUploading={onUploading} />
             <details open={!!saved.note} className="group rounded-xl border border-brand-stone">
               <summary className={summary}>Private note</summary>
@@ -434,7 +473,7 @@ function FocusedEditor({
                   placeholder="Anything you’d like to remember about this answer?"
                   length={note.length}
                   error={errors.privateNote}
-                  readOnly={mutation.isPending}
+                  readOnly={mutation.isPending || gate === 'readonly'}
                   value={note}
                   onChange={(e) => setNote(e.target.value)}
                 />
@@ -463,10 +502,13 @@ function FocusedEditor({
               {status && !dirty ? status : ''}
             </p>
             <div className="flex flex-wrap items-center gap-3">
-              <Button type="submit" size="lg" disabled={!dirty || mutation.isPending} className={maroon}>
-                {mutation.isPending && <Spinner />}
-                Save answer
-              </Button>
+              {gate === 'open' && (
+                <Button type="submit" size="lg" disabled={!dirty || mutation.isPending} className={maroon}>
+                  {mutation.isPending && <Spinner />}
+                  Save answer
+                </Button>
+              )}
+              {gate === 'readonly' && saved.text.trim() && <PlanLockedButton label="Edit answer" icon={PenLine} size="lg" />}
               <Button type="button" size="lg" variant="outline" disabled={!onNext || mutation.isPending} onClick={onNext}>
                 Next question
                 <ChevronRight aria-hidden />
@@ -490,6 +532,8 @@ const summary =
   'flex cursor-pointer list-none items-center justify-between gap-3 rounded-xl px-4 py-3 font-semibold outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring after:text-brand-bronze after:content-["+"] group-open:after:content-["−"] [&::-webkit-details-marker]:hidden';
 
 const ACCEPT = Object.values(MIME_TYPES).flat().join(',');
+// Updated Plans Step 4: Premium picks photos and audio only (new video is For After Complete).
+const ACCEPT_NO_VIDEO = [...MIME_TYPES.PHOTO, ...MIME_TYPES.AUDIO].join(',');
 // The kind follows the file's type; audio/webm and video/webm stay distinct.
 const kindOf = (file: File) =>
   (Object.keys(MIME_TYPES) as MediaKind[]).find((k) => MIME_TYPES[k].includes(file.type.split(';')[0].trim().toLowerCase()));
@@ -509,6 +553,10 @@ function StoryAttachments({ prompt: p, onUploading }: { prompt: Prompt; onUpload
   const [last, setLast] = useState<File | null>(null);
   const [refused, setRefused] = useState<string | null>(null);
   const busy = state.phase === 'uploading' || state.phase === 'confirming';
+  // Trial Step 5: no new memory links in the trial; linked ones stay listed with Unlink.
+  const linksLocked = usePaidMemoryLinks();
+  const planLocked = usePlanLock().locked;
+  const { videoLocked } = usePaidMedia();
   useEffect(() => onUploading(busy), [busy, onUploading]);
   useEffect(() => () => onUploading(false), [onUploading]);
 
@@ -518,6 +566,11 @@ function StoryAttachments({ prompt: p, onUploading }: { prompt: Prompt; onUpload
     const kind = kindOf(file);
     if (!kind) {
       setRefused('Please choose a JPEG, PNG or WebP photo, an MP3, M4A, WebM or WAV recording, or an MP4 or WebM video.');
+      return;
+    }
+    // Said here, before anything is sent (the API refuses it too, with TIER_REQUIRED).
+    if (kind === 'VIDEO' && videoLocked) {
+      setRefused(COMPLETE_VIDEO_COPY.description);
       return;
     }
     if (await upload(kind, file)) toast.success(`${KIND_LABEL[kind]} added`);
@@ -536,7 +589,7 @@ function StoryAttachments({ prompt: p, onUploading }: { prompt: Prompt; onUpload
       <input
         ref={input}
         type="file"
-        accept={ACCEPT}
+        accept={videoLocked ? ACCEPT_NO_VIDEO : ACCEPT}
         className="sr-only"
         tabIndex={-1}
         aria-hidden
@@ -550,11 +603,22 @@ function StoryAttachments({ prompt: p, onUploading }: { prompt: Prompt; onUpload
         <UploadProgress state={state} onCancel={cancel} />
       ) : (
         <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-          <Button type="button" variant="outline" className="border-brand-maroon text-brand-maroon" onClick={() => input.current?.click()}>
-            <ImagePlus aria-hidden strokeWidth={1.5} />
-            Add media
-          </Button>
-          <MemoryPicker prompt={p} />
+          {planLocked ? (
+            // Step 6: no write access: adding is locked; files and links below stay viewable.
+            <>
+              <PlanLockedButton label="Add media" icon={ImagePlus} />
+              <PlanLockedButton label="Choose from Memory Vault" icon={BookOpen} />
+            </>
+          ) : (
+            <>
+              <Button type="button" variant="outline" className="border-brand-maroon text-brand-maroon" onClick={() => input.current?.click()}>
+                <ImagePlus aria-hidden strokeWidth={1.5} />
+                Add media
+              </Button>
+              {videoLocked && <CompleteVideoButton label="Add a video" icon={Film} />}
+              {linksLocked ? <PaidMemoryLinkButton label="Choose from Memory Vault" /> : <MemoryPicker prompt={p} />}
+            </>
+          )}
         </div>
       )}
       {failed && (
@@ -595,13 +659,7 @@ function StoryAttachments({ prompt: p, onUploading }: { prompt: Prompt; onUpload
 }
 
 function LinkedMemoriesInline({ prompt: p }: { prompt: Prompt }) {
-  const save = useAnswerMutation('my-story', p.key);
-  return (
-    <>
-      <FormError error={save.error} />
-      <LinkedMemories prompt={p} save={save} />
-    </>
-  );
+  return <LinkedMemories prompt={p} />;
 }
 
 /**
@@ -692,6 +750,7 @@ function AutosaveDraft({
   text,
   setText,
   active,
+  readOnly = false,
   children,
 }: {
   promptKey: string;
@@ -699,6 +758,8 @@ function AutosaveDraft({
   text: string;
   setText: (v: string) => void;
   active: boolean;
+  /** No write access: a kept tab copy is only viewable (Step 7 close-out), never restored into the locked box. */
+  readOnly?: boolean;
   children: (autosave: ReactNode) => ReactNode;
 }) {
   const editor = useDraftEditor({
@@ -711,7 +772,11 @@ function AutosaveDraft({
   });
   return (
     <>
-      <RecoveryNotice editor={editor} describe={(d) => ({ text: d.textContent })} onRestore={(v) => setText(v.textContent)} />
+      {readOnly ? (
+        <KeptDraft type="MY_STORY" draftKey={promptKey} text={(d) => String(d.textContent ?? '')} />
+      ) : (
+        <RecoveryNotice editor={editor} describe={(d) => ({ text: d.textContent })} onRestore={(v) => setText(v.textContent)} />
+      )}
       {children(<AutosaveStatus editor={editor} />)}
     </>
   );

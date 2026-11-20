@@ -38,6 +38,9 @@ export const OUTCOME_LABEL: Record<AiRequestOutcome, string> = {
   provider_failure: 'Provider unavailable or invalid response',
   timeout: 'Timed out',
   cancelled: 'Cancelled by the customer',
+  allowance_exhausted: 'Customer’s AI allowance used',
+  duplicate_request: 'Repeated request refused',
+  usage_unrecorded: 'Reply not shown (usage could not be recorded)',
   unknown: 'Unknown',
 };
 

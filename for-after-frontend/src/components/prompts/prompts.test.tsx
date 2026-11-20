@@ -2,11 +2,14 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { Prompt } from '@/lib/api/prompts';
-import { json, renderWithClient, routeFetch, router } from '@/test/utils';
+import { json, renderWithClient, routeFetch as stubFetch, router, BILLING_OFF } from '@/test/utils';
 import { answerSchema } from '@/schemas/vault';
 import { PromptEditor, PromptList } from './prompts';
 
 vi.mock('next/navigation', () => ({ useRouter: () => router, usePathname: () => '/my-story' }));
+
+// Step 5 gates a new answer on the plan: billing off here (no trial cap). Trial behaviour: trial-questions.test.tsx.
+const routeFetch = (routes: Parameters<typeof stubFetch>[0]) => stubFetch({ 'GET /billing': json(200, BILLING_OFF), ...routes });
 
 const prompt = (over: Partial<Prompt> = {}): Prompt => ({
   key: 'childhood.home',
@@ -46,6 +49,14 @@ describe('My Story', () => {
     renderWithClient(<PromptList area="my-wishes" />);
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('My Wishes');
     expect(screen.queryByText(/Follow thoughtful prompts/)).not.toBeInTheDocument();
+    // Approved introduction: subheading, then two separate paragraphs.
+    for (const text of [
+      'Your farewell, your way.',
+      'Share how you’d like to be farewelled and remembered - from burial or cremation to a ceremony, gathering or quiet goodbye, with the traditions and personal touches that matter to you.',
+      'Gentle prompts guide you at your own pace, giving your loved ones clarity and comfort in knowing your wishes.',
+    ]) {
+      expect(screen.getByText(text).tagName).toBe('P');
+    }
   });
 
   it('saves the answer exactly as written with PUT', async () => {

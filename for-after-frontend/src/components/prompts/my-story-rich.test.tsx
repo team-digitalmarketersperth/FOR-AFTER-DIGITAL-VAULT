@@ -3,10 +3,13 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { CreateMessageFromPrompt } from '@/components/memory-vault/memory-to-message';
 import type { Prompt } from '@/lib/api/prompts';
-import { FAKE_PROVIDER_FILE_ID, fakeStorage, json, renderWithClient, routeFetch, router } from '@/test/utils';
+import { FAKE_PROVIDER_FILE_ID, fakeStorage, json, renderWithClient, routeFetch as stubFetch, router, BILLING_OFF } from '@/test/utils';
 import { PromptEditor, PromptList } from './prompts';
 
 vi.mock('next/navigation', () => ({ useRouter: () => router, usePathname: () => '/my-story' }));
+
+// Step 5 gates a new answer on the plan: billing off here (no trial cap). Trial behaviour: trial-questions.test.tsx.
+const routeFetch = (routes: Parameters<typeof stubFetch>[0]) => stubFetch({ 'GET /billing': json(200, BILLING_OFF), ...routes });
 
 // Phase 14B: rich My Story answers (files, linked memories) and Story → Message.
 const KEY = 'travel.journey';
@@ -147,10 +150,11 @@ describe('My Story editor: rich answers (Phase 14B)', () => {
     await waitFor(() => expect(api.called('PUT', `${base}/response`)[0]?.body).toEqual({ textContent: null, privateNote: null }));
   });
 
-  it('links and unlinks own memories by replacing the set; the server’s refusal is shown', async () => {
+  it('links by replacing the set and unlinks with the removal-only request (Step 7)', async () => {
     const api = routeFetch(
       routes(answered({ memories: [{ id: 'm2', title: 'Night in Esperance', category: 'TRAVEL' }] }), {
         [`PUT ${base}/response`]: json(200, {}),
+        [`DELETE ${base}/response/memories`]: json(200, {}),
       }),
     );
     renderWithClient(<PromptEditor area="my-story" promptKey={KEY} />);
@@ -163,7 +167,8 @@ describe('My Story editor: rich answers (Phase 14B)', () => {
       expect(api.called('PUT', `${base}/response`)[0]?.body).toEqual({ memoryVaultItemIds: ['m2', 'm1'] }),
     );
     await userEvent.click(screen.getByRole('button', { name: 'Unlink Night in Esperance' }));
-    await waitFor(() => expect(api.called('PUT', `${base}/response`)[1]?.body).toEqual({ memoryVaultItemIds: [] }));
+    await waitFor(() => expect(api.called('DELETE', `${base}/response/memories`)[0]?.body).toEqual({ memoryVaultItemIds: ['m2'] }));
+    expect(api.called('PUT', `${base}/response`)).toHaveLength(1);
     expect(screen.getByText(/Links stay private and are never shared/)).toBeInTheDocument();
   });
 

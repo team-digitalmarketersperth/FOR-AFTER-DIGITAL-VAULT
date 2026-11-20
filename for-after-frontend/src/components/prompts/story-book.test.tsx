@@ -45,8 +45,8 @@ describe('My Story book: chapters', () => {
   });
 });
 
-describe('Dashboard: Your story, chapter by chapter', () => {
-  it('shows up to three chapter links, real progress and both actions; never the answers', async () => {
+describe('My Story page: Your story, chapter by chapter', () => {
+  it('shows up to three chapter links, real progress and the book; never the answers', async () => {
     routeFetch({ 'GET /my-story/book': json(200, book), 'GET /my-story/prompts': json(200, prompts) });
     renderWithClient(<StoryChapters />);
     expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Your story, chapter by chapter');
@@ -62,7 +62,8 @@ describe('Dashboard: Your story, chapter by chapter', () => {
     // The existing calculation: answered prompts of the listed prompts.
     expect(screen.getByText('2 of 4 answered')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Preview My Story' })).toHaveAttribute('href', '/my-story/book');
-    expect(screen.getByRole('link', { name: 'Continue writing' })).toHaveAttribute('href', '/my-story');
+    // On /my-story itself: no link back to the same page.
+    expect(screen.queryByRole('link', { name: 'Continue writing' })).not.toBeInTheDocument();
     expect(document.body).not.toHaveTextContent(/Sunday lunch|A small house/);
   });
 
@@ -74,7 +75,7 @@ describe('Dashboard: Your story, chapter by chapter', () => {
     expect(screen.queryByText('Your story begins with a memory.')).not.toBeInTheDocument();
     expect(await screen.findByText('Your story begins with a memory.')).toBeInTheDocument();
     expect(screen.getByText('Answer a few thoughtful prompts and watch your chapters take shape.')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Begin your story' })).toHaveAttribute('href', '/my-story');
+    expect(screen.queryByRole('link', { name: 'Begin your story' })).not.toBeInTheDocument();
     expect(screen.queryByText(/Chapter \d/)).not.toBeInTheDocument();
     expect(screen.queryByText(/answered/)).not.toBeInTheDocument();
   });

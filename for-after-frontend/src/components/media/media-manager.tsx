@@ -1,11 +1,14 @@
 'use client';
 
-import { AlertCircle, AudioLines, Clock, Film, ImagePlus, Play, Trash2, Upload } from 'lucide-react';
+import { AlertCircle, AudioLines, Clock, Film, ImagePlus, Mic, Play, Trash2, Upload, Video } from 'lucide-react';
+import Link from 'next/link';
 import { useRef, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import { Recorder } from '@/components/media/recorder';
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import { Spinner } from '@/components/shared/states';
+import { PlanLockedButton, usePlanLock } from '@/components/shared/plan-lock';
+import { CompleteVideoButton, PaidMediaButton, PlanCheck, usePaidMedia } from '@/components/shared/trial-cap';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -35,6 +38,9 @@ export function MediaManager({
   const [recorderKeys, setRecorderKeys] = useState({ AUDIO: 0, VIDEO: 0 });
   const [lastFile, setLastFile] = useState<{ kind: MediaKind; file: File } | null>(null);
   const busy = state.phase === 'uploading' || state.phase === 'confirming';
+  const paid = usePaidMedia();
+  // Step 6: no write access at all: adding is locked; files above stay viewable, downloadable and removable.
+  const plan = usePlanLock();
 
   const start = async (kind: MediaKind, file: File) => {
     setLastFile({ kind, file });
@@ -79,7 +85,25 @@ export function MediaManager({
 
       {editable && (
         <div className="grid gap-4 border-t border-border pt-5">
-          {busy ? (
+          {kinds.length > 0 && <PlanCheck billing={paid.billing} />}
+          {plan.locked ? (
+            <div className="flex flex-wrap gap-3">
+              {kinds.includes('PHOTO') && <PlanLockedButton label="Add a photo" icon={ImagePlus} />}
+              {kinds.includes('AUDIO') && <PlanLockedButton label="Upload audio" icon={Upload} />}
+              {kinds.includes('AUDIO') && <PlanLockedButton label="Record your voice" icon={Mic} />}
+              {kinds.includes('VIDEO') && <PlanLockedButton label="Add a video" icon={Film} />}
+              {kinds.includes('VIDEO') && <PlanLockedButton label="Record a video" icon={Video} />}
+            </div>
+          ) : paid.locked ? (
+            // Trial Step 4: the same controls, marked with the tier that adds them (Premium; video: Complete). Files above stay.
+            <div className="flex flex-wrap gap-3">
+              {kinds.includes('PHOTO') && <PaidMediaButton label="Add a photo" icon={ImagePlus} />}
+              {kinds.includes('AUDIO') && <PaidMediaButton label="Upload audio" icon={Upload} />}
+              {kinds.includes('AUDIO') && <PaidMediaButton label="Record your voice" icon={Mic} />}
+              {kinds.includes('VIDEO') && <PaidMediaButton label="Add a video" icon={Film} video />}
+              {kinds.includes('VIDEO') && <PaidMediaButton label="Record a video" icon={Video} video />}
+            </div>
+          ) : busy ? (
             <UploadProgress state={state} onCancel={cancel} />
           ) : (
             <div className="flex flex-wrap gap-3">
@@ -89,20 +113,34 @@ export function MediaManager({
               {kinds.includes('AUDIO') && (
                 <FilePick kind="AUDIO" label="Upload audio" icon={<Upload aria-hidden strokeWidth={1.5} />} onPick={start} />
               )}
-              {kinds.includes('VIDEO') && (
-                <FilePick kind="VIDEO" label="Add a video" icon={<Film aria-hidden strokeWidth={1.5} />} onPick={start} />
-              )}
+              {kinds.includes('VIDEO') &&
+                (paid.videoLocked ? (
+                  // Updated Plans Step 4: Premium keeps photos and audio; new video is For After Complete.
+                  <>
+                    <CompleteVideoButton label="Add a video" icon={Film} />
+                    <CompleteVideoButton label="Record a video" icon={Video} />
+                  </>
+                ) : (
+                  <FilePick kind="VIDEO" label="Add a video" icon={<Film aria-hidden strokeWidth={1.5} />} onPick={start} />
+                ))}
             </div>
           )}
           {state.phase === 'failed' && (
-            <UploadFailed message={state.message} onRetry={lastFile ? () => start(lastFile.kind, lastFile.file) : undefined} onDismiss={reset} />
+            <UploadFailed
+              message={state.message}
+              code={state.code}
+              onRetry={lastFile ? () => start(lastFile.kind, lastFile.file) : undefined}
+              onDismiss={reset}
+            />
           )}
-          {(['AUDIO', 'VIDEO'] as const).map(
-            (kind) =>
-              kinds.includes(kind) && (
-                <Recorder key={`${kind}-${recorderKeys[kind]}`} kind={kind} disabled={busy} onUse={(file) => start(kind, file)} />
-              ),
-          )}
+          {!paid.locked &&
+            (['AUDIO', 'VIDEO'] as const).map(
+              (kind) =>
+                kinds.includes(kind) &&
+                !(kind === 'VIDEO' && paid.videoLocked) && (
+                  <Recorder key={`${kind}-${recorderKeys[kind]}`} kind={kind} disabled={busy} onUse={(file) => start(kind, file)} />
+                ),
+            )}
         </div>
       )}
     </section>
@@ -144,13 +182,33 @@ export function FilePick({
   );
 }
 
-/** A failed upload (refused locally or by the server's checks), with Try again for the same file. */
-export function UploadFailed({ message, onRetry, onDismiss }: { message: string; onRetry?: () => void; onDismiss: () => void }) {
+/**
+ * A failed upload (refused locally or by the server's checks), with Try again for the same file. Refused as paid-only
+ * (the plan changed under the page): View plans instead, since trying again would be refused too.
+ */
+export function UploadFailed({
+  message,
+  code,
+  onRetry,
+  onDismiss,
+}: {
+  message: string;
+  code?: string;
+  onRetry?: () => void;
+  onDismiss: () => void;
+}) {
+  // Trial (PAID_FEATURE) or a kind the plan lacks (TIER_REQUIRED): trying again would be refused too.
+  const paidOnly = code === 'PAID_FEATURE' || code === 'TIER_REQUIRED';
   return (
     <div role="alert" className="flex flex-wrap items-center gap-3 rounded-md bg-danger/8 px-4 py-3 text-sm text-danger">
       <AlertCircle aria-hidden className="size-4" />
       <span className="min-w-0 flex-1">Upload failed: {message}</span>
-      {onRetry && (
+      {paidOnly && (
+        <Button asChild size="sm" variant="outline">
+          <Link href="/settings/plan">View plans</Link>
+        </Button>
+      )}
+      {onRetry && !paidOnly && (
         <Button type="button" size="sm" variant="outline" onClick={onRetry}>
           Try again
         </Button>

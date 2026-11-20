@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { toast } from 'sonner';
 import { CONTENT_TYPE_INFO } from '@/components/messages/message-bits';
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
+import { PlanLockedButton, usePlanLock } from '@/components/shared/plan-lock';
 import { EmptyState, QueryView } from '@/components/shared/states';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetClose, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
@@ -106,6 +107,7 @@ function VersionRow({ version: v, onOpen }: { version: MessageVersionSummary; on
 function VersionPreview({ message: m, versionId, onBack }: { message: Message; versionId: string; onBack: () => void }) {
   const version = useVersion(m.id, versionId);
   const restore = useRestoreVersion(m.id);
+  const planLocked = usePlanLock().locked;
   return (
     <div className="grid gap-6">
       <div>
@@ -135,6 +137,11 @@ function VersionPreview({ message: m, versionId, onBack }: { message: Message; v
             </article>
             {v.isCurrent ? (
               <p className="text-sm text-foreground-muted">This is the current version.</p>
+            ) : m.status === 'DRAFT' && planLocked ? (
+              // Step 6: restoring is an edit; without write access it opens the plan dialog.
+              <div>
+                <PlanLockedButton label="Restore this version" />
+              </div>
             ) : m.status === 'DRAFT' ? (
               <div className="grid gap-2">
                 <ConfirmDialog

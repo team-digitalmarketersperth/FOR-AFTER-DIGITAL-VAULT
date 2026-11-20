@@ -125,12 +125,17 @@ export function timeZones(): string[] {
   }
 }
 
-const GIB = 1024 ** 3;
-export const formatBytes = (bytes: number) =>
-  bytes === 0
+/** Binary units by default; `decimal` uses 1000s (a trial's 100,000,000 bytes reads "100.0 MB", not "95.4 MB"). */
+export const formatBytes = (bytes: number, decimal = false) => {
+  const k = decimal ? 1000 : 1024;
+  return bytes === 0
     ? '0 KB'
-    : bytes < 1024 * 1024
-      ? `${Math.max(1, Math.round(bytes / 1024))} KB`
-      : bytes < GIB
-        ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
-        : `${(bytes / GIB).toFixed(1)} GB`;
+    : bytes < k * k
+      ? `${Math.max(1, Math.round(bytes / k))} KB`
+      : bytes < k ** 3
+        ? `${(bytes / k / k).toFixed(1)} MB`
+        : `${(bytes / k ** 3).toFixed(1)} GB`;
+};
+
+/** A limit set in decimal megabytes (the trial's) is shown in decimal units; the binary GiB default is unchanged. */
+export const decimalLimit = (limitBytes: number) => limitBytes % 1_000_000 === 0;

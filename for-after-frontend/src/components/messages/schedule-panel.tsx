@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { useForm, useWatch, type UseFormRegisterReturn } from "react-hook-form";
 import { toast } from "sonner";
 import { describeSchedule } from "@/components/messages/message-bits";
+import { PlanLockedButton, usePlanLock } from "@/components/shared/plan-lock";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { SelectField } from "@/components/shared/list-controls";
 import { FormError, TextField } from "@/components/shared/form-field";
@@ -106,6 +107,9 @@ export function SchedulePanel({
 }) {
   const [changing, setChanging] = useState(false);
   const mutation = useScheduleMutation(message.id);
+  // Step 6: scheduling and changing the timing are edits (refused without write access). Unscheduling is a DELETE the
+  // API keeps open, so it stays, with a description that doesn't promise editing.
+  const planLocked = usePlanLock().locked;
   const choosing =
     message.status === "DRAFT" || (message.status === "SCHEDULED" && changing);
   const ref = useFocusOnArrival();
@@ -131,7 +135,13 @@ export function SchedulePanel({
         )}
       </div>
 
-      {message.status === "DRAFT" && (
+      {message.status === "DRAFT" && planLocked && (
+        <div>
+          <PlanLockedButton label="Schedule this message" />
+        </div>
+      )}
+
+      {message.status === "DRAFT" && !planLocked && (
         <>
           <Readiness issues={issues} />
           <ScheduleForm
@@ -184,23 +194,32 @@ export function SchedulePanel({
             />
           ) : (
             <div className="flex flex-wrap gap-3">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setChanging(true)}
-              >
-                Change timing
-              </Button>
+              {planLocked ? (
+                <PlanLockedButton label="Change timing" />
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setChanging(true)}
+                >
+                  Change timing
+                </Button>
+              )}
               <ConfirmDialog
                 tone="default"
                 trigger={
                   <Button type="button" variant="ghost">
                     <Undo2 aria-hidden strokeWidth={1.5} />
-                    Unschedule to edit
+                    {/* Step 7: unscheduling stays open without a plan, but editing doesn't, so don't promise it. */}
+                    {planLocked ? "Unschedule" : "Unschedule to edit"}
                   </Button>
                 }
                 title="Unschedule this message?"
-                description="It goes back to being a draft so you can change it, and won't be shared until you schedule it again. Nothing in the message is deleted."
+                description={
+                  planLocked
+                    ? "It goes back to being a draft and won't be shared. Scheduling it again needs a plan. Nothing in the message is deleted."
+                    : "It goes back to being a draft so you can change it, and won't be shared until you schedule it again. Nothing in the message is deleted."
+                }
                 confirmLabel="Unschedule"
                 pending={mutation.isPending}
                 error={mutation.error}

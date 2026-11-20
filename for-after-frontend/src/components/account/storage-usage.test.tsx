@@ -40,6 +40,14 @@ describe('Storage usage (Phase 12C)', () => {
     expect(link).toHaveFocus();
   });
 
+  it('a trial’s 100,000,000-byte allowance from the server reads in decimal MB', async () => {
+    routeFetch({
+      'GET /users/me/storage': json(200, usage(0, 'NORMAL', { usedBytes: 25_000_000, limitBytes: 100_000_000, remainingBytes: 75_000_000, percentage: 25 })),
+    });
+    renderWithClient(<StorageUsageSection />);
+    expect(await screen.findByText(/of 100\.0 MB used/)).toHaveTextContent('25.0 MB of 100.0 MB used');
+  });
+
   it('counts uploads in progress as used', async () => {
     routeFetch({
       'GET /users/me/storage': json(200, usage(0, 'NORMAL', { usedBytes: GIB, reservedBytes: GIB, percentage: 40 })),

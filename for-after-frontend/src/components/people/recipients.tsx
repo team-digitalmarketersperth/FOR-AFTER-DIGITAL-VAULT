@@ -5,15 +5,18 @@ import { useQueryClient } from '@tanstack/react-query';
 import { AlertCircle, ChevronLeft, ChevronRight, Heart, ImagePlus, Pencil, Trash2, UserPlus } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useForm, useWatch } from 'react-hook-form';
 import { toast } from 'sonner';
 import { FilePick, UploadProgress } from '@/components/media/media-manager';
 import { PersonAvatar, PersonCard } from '@/components/people/person-card';
+import { PlanLockedButton, usePlanLock } from '@/components/shared/plan-lock';
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
-import { FormError, TextAreaField, TextField } from '@/components/shared/form-field';
+import { FieldLabel, FormError, TextAreaField, TextField } from '@/components/shared/form-field';
+import { MobileField } from '@/components/shared/mobile-field';
 import { PageHeader } from '@/components/shared/page-header';
 import { EmptyState, QueryView, Spinner } from '@/components/shared/states';
+import { CreateGateNotice, PeopleCounter, TrialLockedButton, useCreateGate, useTrialCap } from '@/components/shared/trial-cap';
 import { Button } from '@/components/ui/button';
 import { useRemoveMedia, useUpload } from '@/hooks/use-media';
 import { useUnsavedChanges } from '@/hooks/use-unsaved-changes';
@@ -22,7 +25,8 @@ import type { MediaScope } from '@/lib/api/media';
 import type { Recipient, RecipientInput } from '@/lib/api/people';
 import { queryKeys } from '@/lib/query/query-client';
 import { formatCalendarDate, fullName } from '@/lib/format';
-import { recipientSchema, toNull, type RecipientValues } from '@/schemas/vault';
+import { browserCountryDefault, mobileForApi, savedToFields, type SavedMobile } from '@/lib/phone';
+import { RELATIONSHIP_OTHER, RELATIONSHIPS, recipientSchema, toNull, type RecipientValues } from '@/schemas/vault';
 
 const addButton = (
   <Button asChild>
@@ -37,6 +41,7 @@ export function RecipientList() {
   const [page, setPage] = useState(1);
   const list = recipients.usePage(page);
   const pages = list.data?.pagination.pages ?? 1;
+  const { locked } = useTrialCap('recipients', list.data?.pagination.total);
   // Removing the last person on the last page: step back instead of showing an
   // empty page while earlier pages still have people (a guarded update during
   // render, React's pattern for state derived from new data).
@@ -47,15 +52,22 @@ export function RecipientList() {
         eyebrow="People"
         title={<>People <em>I love</em></>}
         description="The people your messages and memories are for."
-        action={list.data?.pagination.total ? addButton : undefined}
+        action={
+          !list.data?.pagination.total ? undefined : locked ? (
+            <TrialLockedButton kind="recipients" label="Add someone you love" icon={UserPlus} />
+          ) : (
+            addButton
+          )
+        }
       />
+      <PeopleCounter kind="recipients" className="-mt-4 mb-6 text-sm text-foreground-muted" />
       <QueryView query={list} loadingLabel="Loading the people you love">
         {({ items: people, pagination }) =>
           pagination.total === 0 ? (
             <EmptyState
               icon={Heart}
               title="No one added yet"
-              description="Add the people you'd like to leave something for. You can choose who receives each message later."
+              description="Add the People you Love here. You can create and schedule your messages later"
               action={addButton}
             />
           ) : (
@@ -132,6 +144,8 @@ function RecipientPhotoEditor({ recipient }: { recipient: Recipient }) {
   const remove = useRemoveMedia(scope);
   const [lastFile, setLastFile] = useState<File | null>(null);
   const busy = state.phase === 'uploading' || state.phase === 'confirming';
+  // Step 6: adding or changing the photo is an edit; removing it stays open.
+  const planLocked = usePlanLock().locked;
   // The detail, every list page and the picker carry photoId.
   const refresh = () => qc.invalidateQueries({ queryKey: queryKeys.recipients });
 
@@ -151,12 +165,16 @@ function RecipientPhotoEditor({ recipient }: { recipient: Recipient }) {
         <UploadProgress state={state} onCancel={cancel} />
       ) : (
         <div className="flex flex-col items-center gap-1">
-          <FilePick
-            kind="PHOTO"
-            label={recipient.photoId ? 'Change photo' : 'Add a photo'}
-            icon={<ImagePlus aria-hidden strokeWidth={1.5} />}
-            onPick={(_, file) => void start(file)}
-          />
+          {planLocked ? (
+            <PlanLockedButton label={recipient.photoId ? 'Change photo' : 'Add a photo'} icon={ImagePlus} size="sm" />
+          ) : (
+            <FilePick
+              kind="PHOTO"
+              label={recipient.photoId ? 'Change photo' : 'Add a photo'}
+              icon={<ImagePlus aria-hidden strokeWidth={1.5} />}
+              onPick={(_, file) => void start(file)}
+            />
+          )}
           {recipient.photoId && (
             <Button
               type="button"
@@ -276,22 +294,32 @@ export function Detail({ label, value, multiline }: { label: string; value: stri
   );
 }
 
-const toValues = (p?: Recipient): RecipientValues => ({
-  firstName: p?.firstName ?? '',
-  lastName: p?.lastName ?? '',
-  relationship: p?.relationship ?? '',
-  email: p?.email ?? '',
-  mobile: p?.mobile ?? '',
-  birthday: p?.birthday ?? '',
-  privateNote: p?.privateNote ?? '',
-});
+// A saved relationship that isn't one of the choices (older free text, or an
+// "Other") reopens as Other with its text, so nothing is lost.
+const isChoice = (r: string) => r !== RELATIONSHIP_OTHER && (RELATIONSHIPS as readonly string[]).includes(r);
 
-const toInput = (v: RecipientValues): RecipientInput => ({
+const toValues = (p: Recipient | undefined, mobile: SavedMobile): RecipientValues => {
+  const relationship = p?.relationship ?? '';
+  return {
+    firstName: p?.firstName ?? '',
+    lastName: p?.lastName ?? '',
+    relationship: !relationship || isChoice(relationship) ? relationship : RELATIONSHIP_OTHER,
+    relationshipOther: relationship && !isChoice(relationship) ? relationship : '',
+    email: p?.email ?? '',
+    mobileCountry: mobile.country,
+    mobile: mobile.number,
+    birthday: p?.birthday ?? '',
+    privateNote: p?.privateNote ?? '',
+  };
+};
+
+const toInput = (v: RecipientValues, initialMobile: SavedMobile): RecipientInput => ({
   firstName: v.firstName.trim(),
   lastName: toNull(v.lastName),
-  relationship: toNull(v.relationship),
+  // Only the chosen relationship is sent; text typed for Other is dropped otherwise.
+  relationship: v.relationship === RELATIONSHIP_OTHER ? toNull(v.relationshipOther) : v.relationship || null,
   email: toNull(v.email),
-  mobile: toNull(v.mobile),
+  mobile: mobileForApi(v.mobileCountry, v.mobile, initialMobile),
   birthday: v.birthday || null,
   privateNote: v.privateNote.trim() ? v.privateNote : null,
 });
@@ -299,6 +327,16 @@ const toInput = (v: RecipientValues): RecipientInput => ({
 export function NewRecipient() {
   const router = useRouter();
   const create = recipients.useCreate();
+  const gate = useCreateGate('recipients', recipients.usePage(1).data?.pagination.total);
+  // Opened with the trial's one person already added: explain instead of a form the API would refuse.
+  if (gate !== 'open' && !create.isSuccess) {
+    return (
+      <>
+        <PageHeader back={{ href: '/people', label: 'People I Love' }} title={<>Add someone <em>you love</em></>} />
+        <CreateGateNotice gate={gate} kind="recipients" icon={Heart} back={{ href: '/people', label: 'Back to People I Love' }} />
+      </>
+    );
+  }
   return (
     <>
       <PageHeader
@@ -365,14 +403,32 @@ function RecipientForm({
   error: Parameters<typeof FormError>[0]['error'];
   onSubmit: (input: RecipientInput) => void;
 }) {
-  const form = useForm<RecipientValues>({ resolver: zodResolver(recipientSchema), defaultValues: toValues(initial) });
+  const savedMobile = initial?.mobile ?? null;
+  // The saved number's own country (deterministic, so the server render matches); see the effect below.
+  const [mobile] = useState(() => savedToFields(savedMobile));
+  const form = useForm<RecipientValues>({
+    resolver: zodResolver(recipientSchema(mobile)),
+    defaultValues: toValues(initial, mobile),
+  });
   const { errors, isDirty, isSubmitSuccessful } = form.formState;
-  const privateNote = useWatch({ control: form.control, name: 'privateNote' });
+  const [privateNote, relationship, mobileCountry, mobileValue] = useWatch({
+    control: form.control,
+    name: ['privateNote', 'relationship', 'mobileCountry', 'mobile'],
+  });
   useUnsavedChanges(isDirty && !isSubmitSuccessful);
+  // After mount only: a new number's country defaults to the browser's region, never over a choice or a saved value.
+  useEffect(() => {
+    const region = browserCountryDefault(savedMobile, {
+      country: form.getValues('mobileCountry'),
+      number: form.getValues('mobile'),
+      countryChosen: form.getFieldState('mobileCountry').isDirty,
+    });
+    if (region) form.setValue('mobileCountry', region);
+  }, [form, savedMobile]);
   return (
     <form
       noValidate
-      onSubmit={form.handleSubmit((v) => !pending && onSubmit(toInput(v)))}
+      onSubmit={form.handleSubmit((v) => !pending && onSubmit(toInput(v, mobile)))}
       className="grid max-w-3xl gap-8 rounded-xl border border-border bg-surface p-6 sm:p-10"
     >
       <FormError error={error} />
@@ -381,17 +437,49 @@ function RecipientForm({
           <TextField id="firstName" label="First name" autoComplete="off" error={errors.firstName?.message} {...form.register('firstName')} />
           <TextField id="lastName" label="Last name" optional autoComplete="off" error={errors.lastName?.message} {...form.register('lastName')} />
         </div>
-        <TextField
-          id="relationship"
-          label="Relationship"
-          optional
-          placeholder="e.g. Daughter, Partner, Oldest friend"
-          error={errors.relationship?.message}
-          {...form.register('relationship')}
-        />
-        <div className="grid gap-6 sm:grid-cols-2">
+        <div className="grid items-start gap-6 sm:grid-cols-2">
+          <div className="grid content-start gap-2">
+            <FieldLabel htmlFor="relationship" label="Relationship" optional />
+            <select
+              id="relationship"
+              aria-describedby="relationship-hint"
+              className="h-11 w-full min-w-0 rounded-sm border border-input bg-surface px-3 text-base text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/15"
+              {...form.register('relationship')}
+            >
+              <option value="">Not set</option>
+              {RELATIONSHIPS.map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+            </select>
+            <p id="relationship-hint" className="text-sm text-foreground-muted">
+              Their relationship to you.
+            </p>
+          </div>
+          {/* Kept mounted while hidden, so text typed for Other survives switching options. */}
+          <div hidden={relationship !== RELATIONSHIP_OTHER}>
+            <TextField
+              id="relationshipOther"
+              label="Please specify the relationship"
+              autoComplete="off"
+              maxLength={50}
+              placeholder="e.g. Godmother, Oldest friend"
+              error={errors.relationshipOther?.message}
+              {...form.register('relationshipOther')}
+            />
+          </div>
+        </div>
+        <div className="grid items-start gap-6 sm:grid-cols-2">
           <TextField id="email" label="Email" type="email" inputMode="email" optional autoComplete="off" error={errors.email?.message} {...form.register('email')} />
-          <TextField id="mobile" label="Mobile" type="tel" inputMode="tel" optional autoComplete="off" placeholder="+61 400 000 000" hint="With the country code. They can sign in with a code sent to this number." error={errors.mobile?.message} {...form.register('mobile')} />
+          <MobileField
+            optional
+            country={mobileCountry}
+            onCountryChange={(code) => form.setValue('mobileCountry', code, { shouldDirty: true, shouldValidate: form.formState.isSubmitted })}
+            registration={form.register('mobile')}
+            error={errors.mobile?.message}
+            unreadable={!mobile.readable && mobileValue.trim() === savedMobile}
+          />
         </div>
         <TextField id="birthday" label="Birthday" type="date" optional className="sm:max-w-60" error={errors.birthday?.message} {...form.register('birthday')} />
         <TextAreaField

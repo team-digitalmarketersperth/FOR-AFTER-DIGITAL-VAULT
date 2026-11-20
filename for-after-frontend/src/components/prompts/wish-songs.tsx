@@ -5,6 +5,7 @@ import { ArrowDown, ArrowRight, ArrowUp, Check, ExternalLink, Info, Lock, Music,
 import { useEffect, useRef, useState, type BaseSyntheticEvent, type ReactNode } from 'react';
 import { useForm, useWatch } from 'react-hook-form';
 import { toast } from 'sonner';
+import { PlanLockedButton, usePlanLock } from '@/components/shared/plan-lock';
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import { FormError, TextAreaField, TextField } from '@/components/shared/form-field';
 import { EmptyState, QueryView, Spinner } from '@/components/shared/states';
@@ -67,6 +68,8 @@ export function WishSongs() {
 }
 
 function AddSong() {
+  // Step 6: no write access: adding opens the plan dialog.
+  if (usePlanLock().locked) return <PlanLockedButton label="Add a song" icon={Plus} variant="default" />;
   return (
     <SongDialog
       trigger={
@@ -80,6 +83,8 @@ function AddSong() {
 }
 
 function SongList({ songs, onRemoved }: { songs: WishSong[]; onRemoved: () => void }) {
+  // Step 6: reordering is an edit; without write access the order controls are not offered.
+  const planLocked = usePlanLock().locked;
   const reorder = wishSongs.useReorder();
   const moved = useRef<{ id: string; dir: 'up' | 'down' } | null>(null);
   const [announcement, setAnnouncement] = useState('');
@@ -115,6 +120,7 @@ function SongList({ songs, onRemoved }: { songs: WishSong[]; onRemoved: () => vo
             key={song.id}
             song={song}
             controls={
+              planLocked ? null : (
               <>
                 <Button
                   id={`song-up-${song.id}`}
@@ -139,6 +145,7 @@ function SongList({ songs, onRemoved }: { songs: WishSong[]; onRemoved: () => vo
                   <ArrowDown aria-hidden strokeWidth={1.5} />
                 </Button>
               </>
+              )
             }
             onRemoved={onRemoved}
           />
@@ -155,6 +162,7 @@ function SongList({ songs, onRemoved }: { songs: WishSong[]; onRemoved: () => vo
 }
 
 function SongItem({ song, controls, onRemoved }: { song: WishSong; controls: ReactNode; onRemoved: () => void }) {
+  const planLocked = usePlanLock().locked;
   const remove = wishSongs.useRemove();
   // Only a link that still passes the check is ever offered as a link.
   const link = song.link && normaliseSongLink(song.link);
@@ -185,15 +193,19 @@ function SongItem({ song, controls, onRemoved }: { song: WishSong; controls: Rea
       </div>
       <div className="flex flex-wrap items-center gap-2">
         {controls}
-        <SongDialog
-          song={song}
-          trigger={
-            <Button type="button" variant="outline" size="sm" aria-label={`Edit ${song.title}`}>
-              <Pencil aria-hidden strokeWidth={1.5} />
-              Edit
-            </Button>
-          }
-        />
+        {planLocked ? (
+          <PlanLockedButton label="Edit" icon={Pencil} size="sm" aria-label={`Edit ${song.title}`} />
+        ) : (
+          <SongDialog
+            song={song}
+            trigger={
+              <Button type="button" variant="outline" size="sm" aria-label={`Edit ${song.title}`}>
+                <Pencil aria-hidden strokeWidth={1.5} />
+                Edit
+              </Button>
+            }
+          />
+        )}
         <ConfirmDialog
           trigger={
             <Button type="button" variant="ghost" size="sm" aria-label={`Remove ${song.title}`}>

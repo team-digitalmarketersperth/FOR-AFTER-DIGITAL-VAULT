@@ -34,7 +34,7 @@ import { conditionalLabel, upcomingDetail, whenLabel } from '@/lib/delivery-time
 import { cn } from '@/lib/utils';
 
 /*
- * Dashboard: preview a scheduled message as a Story before it is delivered. Owner-only and read-only: it uses the same GETs as the message
+ * Messages page: preview a scheduled message as a Story before it is delivered. Owner-only and read-only: it uses the same GETs as the message
  * page (GET /messages/:id, its media list and signed access URLs), so it never
  * sends, schedules, releases or marks anything, and creates no public link.
  * The private note is never shown. Recipients do not get a Story view yet, so

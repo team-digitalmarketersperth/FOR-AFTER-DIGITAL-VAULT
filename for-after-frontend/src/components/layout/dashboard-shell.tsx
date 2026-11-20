@@ -3,12 +3,14 @@
 import { ChevronDown, CreditCard, LogOut, Menu, UserRound } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type MouseEvent, type ReactNode } from 'react';
 import { CompanionProvider } from '@/components/companion/companion';
 import { BrandLogo } from '@/components/layout/brand-logo';
 import { HELP_SUPPORT, NAV_GROUPS, type NavItem } from '@/components/layout/nav';
 import { SafetyBanner } from '@/components/layout/safety-banner';
+import { UpgradeDialog, usePlanLock } from '@/components/shared/plan-lock';
 import { Spinner } from '@/components/shared/states';
+import { PlanCheck, ShellShowsPlanCheck } from '@/components/shared/trial-cap';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -26,7 +28,6 @@ import {
   SheetTrigger,
 } from '@/components/ui/sheet';
 import { useLogout } from '@/hooks/use-auth';
-import { useBilling } from '@/hooks/use-billing';
 import type { CurrentUser } from '@/lib/api/auth';
 import type { AccessState } from '@/lib/api/billing';
 import { cn } from '@/lib/utils';
@@ -91,59 +92,106 @@ export function DashboardShell({ user, children }: { user: CurrentUser; children
 // Pages whose only purpose is to add or change content (docs/billing.md §3). Support's own /new stays open.
 const PLAN_ROUTE = /^\/(messages|memory-vault|my-story|my-wishes|people|trusted-contacts)\/(.*\/)?(new|edit|create-message)$/;
 
-const PLAN_NOTICE: Partial<Record<AccessState, [title: string, action: string]>> = {
-  trial_available: ['Start your free trial', 'Start free trial'],
-  trial_expired: ['Your free trial has ended', 'Choose a plan'],
-  payment_pending: ['Your payment hasn’t been confirmed yet', 'View your plan'],
-  access_ended: ['Your plan has ended', 'Choose a plan'],
+const PLAN_ACTION: Partial<Record<AccessState, string>> = {
+  trial_available: 'Start free trial',
+  trial_expired: 'View plans',
+  payment_pending: 'View your plan',
+  plan_unresolved: 'View your plan',
+  access_ended: 'View plans',
+};
+
+/** Where a blocked page can be read instead: the item itself for …/edit and …/create-message, the list for …/new. */
+const readOnlyHref = (pathname: string) => {
+  const parts = pathname.split('/').filter(Boolean);
+  const last = parts.pop();
+  if (last === 'new') return { href: `/${parts.join('/')}`, label: 'Back to the list' };
+  return { href: `/${parts.join('/')}`, label: 'View it read-only' };
 };
 
 /**
- * Billing on and no access: what is saved stays readable, downloadable and deletable
- * (docs/billing.md §1), so every page stays open under a plain notice; only pages for
- * adding or changing content show a blocker instead. UX only: the API refuses gated
- * writes itself (402, shown where the action failed), and an unknown state hides nothing.
+ * Billing on and no access (Step 6: an ended trial, or another state without access): what is saved stays readable,
+ * downloadable and deletable, so every page stays open under a compact notice. Pages only for adding or changing
+ * content explain instead (with a way back to read-only viewing, no redirect), and links to them open the shared plan
+ * dialog. The plan is re-read when the trial ends, on tab focus and after any refused write. UX only: the API refuses
+ * gated writes itself (402); an unreadable plan hides nothing and says so.
  */
 function PlanAccess({ children }: { children: ReactNode }) {
-  const { data } = useBilling(false);
+  const { locked, copy, billing } = usePlanLock();
+  const { data, isError, refetch } = billing;
   const pathname = usePathname();
-  if (!data?.enabled || data.hasAccess) return children;
-  const [title, action] = PLAN_NOTICE[data.state] ?? ['Your plan needs attention', 'View your plan'];
-  const planLink = (
-    <Button asChild>
-      <Link href="/settings/plan">{action}</Link>
+  const [dialog, setDialog] = useState(false);
+  // Re-read the plan the moment an active trial ends (a single timer, no polling); focus refetch is the query default.
+  const endsAt = data?.state === 'trial_active' ? data.trial?.endsAt : undefined;
+  useEffect(() => {
+    if (!endsAt) return;
+    const wait = new Date(endsAt).getTime() - Date.now() + 1000;
+    if (wait > 2 ** 31 - 1) return;
+    const timer = setTimeout(() => void refetch(), Math.max(wait, 0));
+    return () => clearTimeout(timer);
+  }, [endsAt, refetch]);
+
+  const unreadable = isError && !data;
+  const blocked = locked && PLAN_ROUTE.test(pathname);
+  // Links to add/edit pages open the plan dialog instead (capture phase: before the link navigates).
+  const intercept = (e: MouseEvent) => {
+    if (!locked) return;
+    const a = (e.target as HTMLElement).closest?.('a[href]');
+    if (!a) return;
+    const url = new URL(a.getAttribute('href')!, window.location.origin);
+    if (url.origin === window.location.origin && PLAN_ROUTE.test(url.pathname)) {
+      e.preventDefault();
+      e.stopPropagation();
+      setDialog(true);
+    }
+  };
+  const planLink = data && (
+    <Button asChild size="sm">
+      <Link href="/settings/plan">{PLAN_ACTION[data.state] ?? 'View your plan'}</Link>
     </Button>
   );
-  const blocked = PLAN_ROUTE.test(pathname);
+  const back = readOnlyHref(pathname);
+  // One stable tree whatever the plan state: the page is never remounted when the plan loads or changes (typing kept).
   return (
     <>
-      {pathname !== '/settings/plan' && !blocked && (
-        <section aria-labelledby="plan-notice" className="mb-10 flex flex-wrap items-center justify-between gap-4 rounded-xl border-l-4 border-primary bg-primary-soft p-6">
-          <div className="grid max-w-2xl gap-1">
-            <h2 id="plan-notice" className="text-xl">
-              {title}
+      {unreadable ? (
+        <div className="mb-6">
+          <PlanCheck billing={billing} />
+        </div>
+      ) : locked && !pathname.startsWith('/settings/plan') && !blocked ? (
+        <section
+          aria-labelledby="plan-notice"
+          className="mb-8 flex flex-wrap items-center justify-between gap-x-6 gap-y-3 rounded-xl border-l-4 border-primary bg-primary-soft px-5 py-4"
+        >
+          <div className="grid max-w-2xl gap-0.5">
+            <h2 id="plan-notice" className="text-lg">
+              {copy.title}
             </h2>
-            <p className="text-[15px] text-foreground-secondary">
-              You can still read, download and delete what you’ve saved. To add or change anything, or use the AI companion, you’ll need a plan.
-            </p>
+            <p className="text-sm text-foreground-secondary">{copy.description}</p>
           </div>
           {planLink}
         </section>
-      )}
+      ) : null}
       {blocked ? (
         <section aria-labelledby="plan-required" className="grid max-w-2xl gap-4 rounded-xl border border-border bg-surface p-8">
           <CreditCard aria-hidden strokeWidth={1.5} className="size-6 text-primary" />
           <h1 id="plan-required" className="text-[28px] leading-tight">
-            {title}
+            {copy.title}
           </h1>
-          <p className="text-foreground-secondary">
-            Adding or changing content needs a plan. Everything you’ve saved is still here to read, download or delete.
-          </p>
-          <div className="flex flex-wrap gap-3">{planLink}</div>
+          <p className="text-foreground-secondary">{copy.description}</p>
+          <div className="flex flex-wrap gap-3">
+            {planLink}
+            <Button asChild size="sm" variant="outline">
+              <Link href={back.href}>{back.label}</Link>
+            </Button>
+          </div>
         </section>
       ) : (
-        children
+        // Step 7: while the notice above offers "Check plan again", pages don't repeat it (same tree, no remount).
+        <ShellShowsPlanCheck.Provider value={unreadable}>
+          <div onClickCapture={intercept}>{children}</div>
+        </ShellShowsPlanCheck.Provider>
       )}
+      <UpgradeDialog open={dialog} onOpenChange={setDialog} />
     </>
   );
 }

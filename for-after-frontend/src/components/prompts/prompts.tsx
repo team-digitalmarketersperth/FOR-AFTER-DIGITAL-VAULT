@@ -1,7 +1,7 @@
 'use client';
 
 import { zodResolver } from '@hookform/resolvers/zod';
-import { BookOpen, Feather, Info, Send, Trash2, X } from 'lucide-react';
+import { BookOpen, Feather, Info, PenLine, Send, Trash2, X } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useDeferredValue, useState, type ReactNode } from 'react';
@@ -9,11 +9,23 @@ import { useForm, useWatch } from 'react-hook-form';
 import { toast } from 'sonner';
 import { MediaManager } from '@/components/media/media-manager';
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
-import { AutosaveStatus, RecoveryNotice } from '@/components/shared/draft-recovery';
+import { AutosaveStatus, KeptDraft, RecoveryNotice } from '@/components/shared/draft-recovery';
 import { HelpMeWrite } from '@/components/companion/companion';
 import { FilterChips, FormError, TextAreaField } from '@/components/shared/form-field';
 import { PageHeader } from '@/components/shared/page-header';
 import { PrivateNoteField } from '@/components/shared/private-note';
+import { PlanLockedButton, usePlanLock } from '@/components/shared/plan-lock';
+import {
+  ProBadge,
+  ProDialog,
+  PaidMemoryLinkButton,
+  QuestionGateNotice,
+  TRIAL_QUESTIONS_COPY,
+  TrialQuestions,
+  usePaidMemoryLinks,
+  useQuestionGate,
+  useTrialQuestions,
+} from '@/components/shared/trial-cap';
 import { EmptyState, QueryView, Spinner } from '@/components/shared/states';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -25,6 +37,7 @@ import {
   useAnswerMutation,
   usePrompt,
   usePrompts,
+  useUnlinkMemory,
   useWishesNotice,
 } from '@/hooks/use-vault';
 import { textRevision } from '@/lib/api/drafts';
@@ -36,7 +49,7 @@ import { answerSchema, type AnswerValues } from '@/schemas/vault';
 
 const AREAS: Record<
   PromptArea,
-  { label: string; title: ReactNode; description: string; icon: typeof BookOpen; notice?: boolean }
+  { label: string; title: ReactNode; description: ReactNode; icon: typeof BookOpen; notice?: boolean }
 > = {
   'my-story': {
     label: 'My Story',
@@ -48,7 +61,23 @@ const AREAS: Record<
   'my-wishes': {
     label: 'My Wishes',
     title: <>My <em>Wishes</em></>,
-    description: 'How you would like to be remembered, as guidance for the people you love.',
+    // Approved copy (2026-11-10), word for word.
+    description: (
+      <div className="grid gap-3">
+        <p className="font-heading text-2xl leading-snug tracking-tight text-foreground sm:text-[28px]">
+          Your farewell, your way.
+        </p>
+        <div className="grid gap-3 text-base leading-relaxed text-foreground-muted sm:text-lg">
+          <p>
+            Share how you’d like to be farewelled and remembered - from burial or cremation to a ceremony, gathering or
+            quiet goodbye, with the traditions and personal touches that matter to you.
+          </p>
+          <p>
+            Gentle prompts guide you at your own pace, giving your loved ones clarity and comfort in knowing your wishes.
+          </p>
+        </div>
+      </div>
+    ),
     icon: Feather,
     // Phase 15A: the notice comes from the API (WishesNotice), never a copy here.
     notice: true,
@@ -127,9 +156,12 @@ export function PromptList({ area, category }: { area: PromptArea; category?: st
           }
           return (
             <>
-              <p className="mb-6 text-sm text-foreground-muted" aria-live="polite">
+              <p className="mb-2 text-sm text-foreground-muted" aria-live="polite">
                 {answered} of {prompts.length} answered
               </p>
+              <div className="mb-6">
+                <TrialQuestions />
+              </div>
               <FilterChips
                 label="Filter by category"
                 chips={[
@@ -154,12 +186,31 @@ export function PromptList({ area, category }: { area: PromptArea; category?: st
   );
 }
 
+const cardClass =
+  'flex h-full flex-col gap-4 rounded-lg border border-border bg-surface p-6 outline-none transition-colors hover:border-border-strong focus-visible:outline-2 focus-visible:outline-ring sm:p-7';
+
 function PromptCard({ area, prompt: p }: { area: PromptArea; prompt: Prompt }) {
+  const { full } = useTrialQuestions();
+  // Trial Step 5: every slot used and nothing saved here: the card explains the plan. A files-only answer still opens.
+  if (full && !p.response) {
+    return (
+      <ProDialog
+        trigger={
+          <button type="button" className={cn(cardClass, 'w-full text-left')}>
+            <span className="eyebrow">{humanize(p.category)}</span>
+            <span className="font-heading text-[26px] leading-snug">{p.prompt}</span>
+            <span className="mt-auto flex items-center gap-2 text-sm">
+              <span className="font-semibold text-primary">Write your answer</span>
+              <ProBadge />
+            </span>
+          </button>
+        }
+        {...TRIAL_QUESTIONS_COPY}
+      />
+    );
+  }
   return (
-    <Link
-      href={`/${area}/${encodeURIComponent(p.key)}`}
-      className="flex h-full flex-col gap-4 rounded-lg border border-border bg-surface p-6 outline-none transition-colors hover:border-border-strong focus-visible:outline-2 focus-visible:outline-ring sm:p-7"
-    >
+    <Link href={`/${area}/${encodeURIComponent(p.key)}`} className={cardClass}>
       <span className="eyebrow">{humanize(p.category)}</span>
       <span className="font-heading text-[26px] leading-snug">{p.prompt}</span>
       {p.response ? (
@@ -195,6 +246,7 @@ export function PromptEditor({ area, promptKey }: { area: PromptArea; promptKey:
           <PageHeader back={{ href: `/${area}`, label: config.label }} eyebrow={humanize(p.category)} title={p.prompt} />
           {config.notice && <WishesNotice />}
           <EarlierWording prompt={p} />
+          <TrialQuestions quiet className="mb-4 text-sm text-foreground-muted" />
           <AnswerForm area={area} prompt={p} />
           <AnswerExtras area={area} prompt={p} />
         </>
@@ -228,6 +280,8 @@ function AnswerForm({ area, prompt: p }: { area: PromptArea; prompt: Prompt }) {
   const answer = useWatch({ control: form.control, name: 'textContent' });
   const note = useWatch({ control: form.control, name: 'privateNote' });
   useUnsavedChanges(isDirty && !isSubmitSuccessful);
+  // Trial Step 5: a new answer opens once the plan is known and a slot is free (never closes while typing).
+  const gate = useQuestionGate(p.response?.textContent, isDirty);
   const back = () => router.push(`/${area}`);
   // Unsaved text is autosaved server-side; it becomes the answer only on Save.
   const saved = p.response?.textContent ?? '';
@@ -237,16 +291,67 @@ function AnswerForm({ area, prompt: p }: { area: PromptArea; prompt: Prompt }) {
     baseRevision: textRevision(saved),
     saved: { textContent: saved },
     current: { textContent: answer },
-    active: !mutation.isPending && !isSubmitSuccessful,
+    active: !mutation.isPending && !isSubmitSuccessful && gate === 'open',
+    submitted: isSubmitSuccessful && mutation.isSuccess,
   });
 
+  // Step 6: no write access. A saved answer stays readable (and deletable); editing opens the plan dialog.
+  const readOnly = gate === 'readonly';
+  const deleteAnswer = p.answered && (
+    <ConfirmDialog
+      trigger={
+        <Button type="button" variant="ghost">
+          <Trash2 aria-hidden strokeWidth={1.5} />
+          Delete answer
+        </Button>
+      }
+      title="Delete this answer?"
+      description={
+        area === 'my-story'
+          ? 'Your answer to this prompt will be removed, with its photos, recordings and videos and its links to memories. You can write a new one at any time.'
+          : 'Your wish will be removed, with its photos, recordings and videos. Messages you already created from it are separate and stay as they are.'
+      }
+      confirmLabel="Delete answer"
+      pending={mutation.isPending}
+      error={mutation.error}
+      onConfirm={() =>
+        mutation.mutateAsync(null).then(() => {
+          toast.success('Answer deleted');
+          back();
+        })
+      }
+    />
+  );
+  // Step 7 close-out: read-only, a copy kept in this tab can be viewed or discarded (never restored or saved here).
+  const kept = <KeptDraft type={area === 'my-story' ? 'MY_STORY' : 'MY_WISHES'} draftKey={p.key} text={(d) => String(d.textContent ?? '')} />;
+  if (readOnly && !saved.trim()) {
+    return (
+      <>
+        {kept}
+        <div className="flex max-w-3xl flex-wrap items-center gap-3">
+          <PlanLockedButton label="Write your answer" icon={PenLine} />
+          {deleteAnswer}
+        </div>
+      </>
+    );
+  }
+  if (gate !== 'open' && !readOnly) {
+    return (
+      <div className="max-w-3xl">
+        <QuestionGateNotice gate={gate} />
+      </div>
+    );
+  }
   return (
     <>
-    <RecoveryNotice
-      editor={editor}
-      describe={(d) => ({ text: d.textContent })}
-      onRestore={(v) => form.setValue('textContent', v.textContent, { shouldDirty: true })}
-    />
+    {readOnly && kept}
+    {!readOnly && (
+      <RecoveryNotice
+        editor={editor}
+        describe={(d) => ({ text: d.textContent })}
+        onRestore={(v) => form.setValue('textContent', v.textContent, { shouldDirty: true })}
+      />
+    )}
     <form
       noValidate
       onSubmit={form.handleSubmit(
@@ -266,6 +371,7 @@ function AnswerForm({ area, prompt: p }: { area: PromptArea; prompt: Prompt }) {
       <fieldset disabled={mutation.isPending} className="grid gap-6">
         <div className="grid gap-2">
         {/* My Story sends this key as its question id; the answer only, never the private note. */}
+        {!readOnly && (
         <HelpMeWrite
           targetKey={p.key}
           question={p.prompt}
@@ -275,8 +381,10 @@ function AnswerForm({ area, prompt: p }: { area: PromptArea; prompt: Prompt }) {
           write={(v) => form.setValue('textContent', v, { shouldDirty: true, shouldValidate: form.formState.isSubmitted })}
           className="justify-self-end"
         />
+        )}
         <TextAreaField
           id="answer"
+          readOnly={readOnly}
           label="Your answer"
           hint={p.response ? `Last saved ${formatDate(p.response.updatedAt)}.` : 'Write as much or as little as you like.'}
           className="min-h-72"
@@ -296,40 +404,23 @@ function AnswerForm({ area, prompt: p }: { area: PromptArea; prompt: Prompt }) {
           }
           length={note.length}
           error={errors.privateNote?.message}
+          readOnly={readOnly}
           {...form.register('privateNote')}
         />
       </fieldset>
       <div className="flex flex-wrap items-center gap-3">
-        <Button type="submit" size="lg" disabled={mutation.isPending}>
-          {mutation.isPending && <Spinner />}
-          Save answer
-        </Button>
-        <AutosaveStatus editor={editor} />
-        {p.answered && (
-          <ConfirmDialog
-            trigger={
-              <Button type="button" variant="ghost">
-                <Trash2 aria-hidden strokeWidth={1.5} />
-                Delete answer
-              </Button>
-            }
-            title="Delete this answer?"
-            description={
-              area === 'my-story'
-                ? 'Your answer to this prompt will be removed, with its photos, recordings and videos and its links to memories. You can write a new one at any time.'
-                : 'Your wish will be removed, with its photos, recordings and videos. Messages you already created from it are separate and stay as they are.'
-            }
-            confirmLabel="Delete answer"
-            pending={mutation.isPending}
-            error={mutation.error}
-            onConfirm={() =>
-              mutation.mutateAsync(null).then(() => {
-                toast.success('Answer deleted');
-                back();
-              })
-            }
-          />
+        {readOnly ? (
+          <PlanLockedButton label="Edit answer" icon={PenLine} size="lg" />
+        ) : (
+          <>
+            <Button type="submit" size="lg" disabled={mutation.isPending}>
+              {mutation.isPending && <Spinner />}
+              Save answer
+            </Button>
+            <AutosaveStatus editor={editor} />
+          </>
         )}
+        {deleteAnswer}
       </div>
     </form>
     </>
@@ -409,6 +500,10 @@ function AnswerExtras({ area, prompt: p }: { area: PromptArea; prompt: Prompt })
 /** Link and unlink the Customer's own memories (private context, never shared). */
 function MemoryLinks({ prompt: p }: { prompt: Prompt }) {
   const save = useAnswerMutation('my-story', p.key);
+  // Trial Step 5: no new links in the trial; unlinking (below) stays open.
+  const linksLocked = usePaidMemoryLinks();
+  // Step 6: no write access: linking is locked (changing links is an edit); linked memories stay listed and open.
+  const planLocked = usePlanLock().locked;
   return (
     <section aria-labelledby="story-memories" className="grid gap-4">
       <div className="grid gap-1">
@@ -420,45 +515,57 @@ function MemoryLinks({ prompt: p }: { prompt: Prompt }) {
         </p>
       </div>
       <FormError error={save.error} />
-      <LinkedMemories prompt={p} save={save} />
-      <MemorySearch
-        exclude={(p.response?.memories ?? []).map((m) => m.id)}
-        disabled={save.isPending}
-        onLink={({ id }) => save.mutate({ memoryVaultItemIds: [...(p.response?.memories ?? []).map((m) => m.id), id] })}
-      />
+      <LinkedMemories prompt={p} />
+      {planLocked ? (
+        <div>
+          <PlanLockedButton label="Link a memory" icon={BookOpen} />
+        </div>
+      ) : linksLocked ? (
+        <div>
+          <PaidMemoryLinkButton label="Link a memory" />
+        </div>
+      ) : (
+        <MemorySearch
+          exclude={(p.response?.memories ?? []).map((m) => m.id)}
+          disabled={save.isPending}
+          onLink={({ id }) => save.mutate({ memoryVaultItemIds: [...(p.response?.memories ?? []).map((m) => m.id), id] })}
+        />
+      )}
     </section>
   );
 }
 
-type LinkSave = ReturnType<typeof useAnswerMutation>;
-
 /**
- * The answer's linked memories. Unlinking replaces the set (the API's
- * contract): the memory itself, and its files, are never touched.
+ * The answer's linked memories. Unlinking removes the link only (its own request, Step 7), so it stays available after
+ * a trial ends; the memory itself, and its files, are never touched.
  */
-export function LinkedMemories({ prompt: p, save }: { prompt: Prompt; save: LinkSave }) {
+export function LinkedMemories({ prompt: p }: { prompt: Prompt }) {
   const linked = p.response?.memories ?? [];
+  const unlink = useUnlinkMemory(p.key);
   if (linked.length === 0) return null;
   return (
-    <ul aria-label="Linked memories" className="flex flex-wrap gap-2">
-      {linked.map((m) => (
-        <li key={m.id} className="inline-flex max-w-full items-center gap-1 rounded-full bg-surface-muted py-1 pr-1 pl-3 text-sm">
-          <Link href={`/memory-vault/${m.id}`} className="min-w-0 truncate hover:underline">
-            {m.title}
-          </Link>
-          <span className="shrink-0 text-foreground-muted">· {humanize(m.category)}</span>
-          <button
-            type="button"
-            aria-label={`Unlink ${m.title}`}
-            disabled={save.isPending}
-            onClick={() => save.mutate({ memoryVaultItemIds: linked.filter((x) => x.id !== m.id).map((x) => x.id) })}
-            className="inline-flex size-6 shrink-0 items-center justify-center rounded-full outline-none hover:bg-border focus-visible:outline-2 focus-visible:outline-ring"
-          >
-            <X aria-hidden className="size-3.5" />
-          </button>
-        </li>
-      ))}
-    </ul>
+    <>
+      <FormError error={unlink.error} />
+      <ul aria-label="Linked memories" className="flex flex-wrap gap-2">
+        {linked.map((m) => (
+          <li key={m.id} className="inline-flex max-w-full items-center gap-1 rounded-full bg-surface-muted py-1 pr-1 pl-3 text-sm">
+            <Link href={`/memory-vault/${m.id}`} className="min-w-0 truncate hover:underline">
+              {m.title}
+            </Link>
+            <span className="shrink-0 text-foreground-muted">· {humanize(m.category)}</span>
+            <button
+              type="button"
+              aria-label={`Unlink ${m.title}`}
+              disabled={unlink.isPending}
+              onClick={() => unlink.mutate(m.id)}
+              className="inline-flex size-6 shrink-0 items-center justify-center rounded-full outline-none hover:bg-border focus-visible:outline-2 focus-visible:outline-ring"
+            >
+              <X aria-hidden className="size-3.5" />
+            </button>
+          </li>
+        ))}
+      </ul>
+    </>
   );
 }
 

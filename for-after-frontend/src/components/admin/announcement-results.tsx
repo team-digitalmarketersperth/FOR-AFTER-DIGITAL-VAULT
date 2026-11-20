@@ -21,7 +21,7 @@ import {
 import Link from 'next/link';
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { toast } from 'sonner';
-import { Badge, DataTable, linkClass } from '@/components/admin/admin-ui';
+import { Badge, DataTable, linkClass, SummaryCard } from '@/components/admin/admin-ui';
 import { CopyButton } from '@/components/shared/copy-button';
 import { FormError } from '@/components/shared/form-field';
 import { EmptyState, ErrorState, Spinner } from '@/components/shared/states';
@@ -245,38 +245,6 @@ function Results({ id, runId, b, stale, checkedAt }: { id: string; runId: string
       )}
 
       <RecipientResults id={id} runId={runId} b={b} />
-    </div>
-  );
-}
-
-function SummaryCard({ icon: Icon, label, value, tone }: { icon: LucideIcon; label: string; value: string; tone?: 'done' | 'danger' | 'warning' }) {
-  return (
-    <div className="flex items-center gap-4 rounded-xl border border-border bg-surface p-5">
-      <span
-        aria-hidden
-        className={cn(
-          'grid size-11 shrink-0 place-items-center rounded-lg',
-          !tone && 'bg-primary-soft text-primary',
-          tone === 'done' && 'bg-success/10 text-success',
-          tone === 'danger' && 'bg-danger/10 text-danger',
-          tone === 'warning' && 'bg-warning/10 text-warning',
-        )}
-      >
-        <Icon strokeWidth={1.5} className="size-5" />
-      </span>
-      <div className="grid min-w-0">
-        <span className="text-sm text-foreground-secondary">{label}</span>
-        <span
-          className={cn(
-            'font-heading text-3xl leading-tight tabular-nums',
-            tone === 'done' && 'text-success',
-            tone === 'danger' && 'text-danger',
-            tone === 'warning' && 'text-warning',
-          )}
-        >
-          {value}
-        </span>
-      </div>
     </div>
   );
 }

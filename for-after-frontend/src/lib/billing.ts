@@ -10,6 +10,7 @@ export const ACCESS_LABEL: Record<AccessState, string> = {
   cancellation_scheduled: 'Cancels at period end',
   payment_issue: 'Payment issue',
   payment_pending: 'Payment pending',
+  plan_unresolved: 'Plan being checked',
   access_ended: 'Plan ended',
 };
 
@@ -22,8 +23,11 @@ export const ACCESS_TONE: Record<AccessState, 'neutral' | 'open' | 'done' | 'war
   cancellation_scheduled: 'warning',
   payment_issue: 'danger',
   payment_pending: 'warning',
+  plan_unresolved: 'warning',
   access_ended: 'warning',
 };
+
+export const TIER_LABEL: Record<'PREMIUM' | 'COMPLETE', string> = { PREMIUM: 'For After Premium', COMPLETE: 'For After Complete' };
 
 export const PLAN_LABEL: Record<PlanKey | 'unknown', string> = { monthly: 'Monthly', annual: 'Annual', unknown: 'Unknown plan' };
 export const planLabel = (p: string | null) => (p ? (PLAN_LABEL[p as PlanKey] ?? p) : '—');

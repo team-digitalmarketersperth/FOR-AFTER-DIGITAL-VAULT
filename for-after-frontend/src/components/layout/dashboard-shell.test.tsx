@@ -70,8 +70,8 @@ describe('Customer shell: Help & support and logout', () => {
         shell(where, billing({}));
         expect(await screen.findByRole('heading', { name: 'Your free trial has ended' })).toBeInTheDocument();
         expect(screen.getByText('Page content')).toBeInTheDocument();
-        expect(screen.getByText(/still read, download and delete/)).toBeInTheDocument();
-        expect(screen.getByRole('link', { name: 'Choose a plan' })).toHaveAttribute('href', '/settings/plan');
+        expect(screen.getByText(/still view, download and delete/)).toBeInTheDocument();
+        expect(screen.getByRole('link', { name: 'View plans' })).toHaveAttribute('href', '/settings/plan');
         expect(router.replace).not.toHaveBeenCalled(); // nobody is sent away from their own content
       },
     );
@@ -82,7 +82,7 @@ describe('Customer shell: Help & support and logout', () => {
         shell(where, billing({ state: 'access_ended' }));
         expect(await screen.findByRole('heading', { name: 'Your plan has ended', level: 1 })).toBeInTheDocument();
         expect(screen.queryByText('Page content')).not.toBeInTheDocument();
-        expect(screen.getByRole('link', { name: 'Choose a plan' })).toHaveAttribute('href', '/settings/plan');
+        expect(screen.getByRole('link', { name: 'View plans' })).toHaveAttribute('href', '/settings/plan');
       },
     );
 
@@ -104,7 +104,7 @@ describe('Customer shell: Help & support and logout', () => {
       shell('/messages/new', data);
       await settled();
       expect(screen.getByText('Page content')).toBeInTheDocument();
-      expect(screen.queryByRole('link', { name: 'Choose a plan' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('link', { name: 'View plans' })).not.toBeInTheDocument();
     });
 
     it('while the plan cannot be read, nothing is hidden: the API remains the authority', async () => {
@@ -125,6 +125,6 @@ describe('Customer shell: Help & support and logout', () => {
     expect(error.kind).toBe('plan_required');
     renderWithClient(<FormError error={error} />);
     expect(screen.getByText(/Your free trial or plan has ended/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Choose a plan' })).toHaveAttribute('href', '/settings/plan');
+    expect(screen.getByRole('link', { name: 'View plans' })).toHaveAttribute('href', '/settings/plan');
   });
 });

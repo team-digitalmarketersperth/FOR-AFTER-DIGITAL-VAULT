@@ -8,6 +8,7 @@ import {
   TRIGGER_TYPES,
 } from '@/lib/api/messages';
 import { localToday } from '@/lib/format';
+import { mobileIssue, NO_SAVED_MOBILE, type SavedMobile } from '@/lib/phone';
 import { ANSWER_MAX, SONG_MOMENTS, type PromptArea } from '@/lib/api/prompts';
 import { normaliseSongLink, SONG_LINK_INVALID, SONG_LINK_MAX } from '@/lib/song-link';
 
@@ -26,17 +27,6 @@ const email = z
   .trim()
   .max(254, 'Email address is too long.')
   .refine((v) => !v || z.email().safeParse(v).success, 'Enter a valid email address.');
-// Backend IsE164Mobile(): Recipients and Trusted Contacts sign in by SMS, so
-// the country code is required; spaces, dashes and brackets are fine (the API
-// strips them).
-const mobile = z
-  .string()
-  .trim()
-  .refine(
-    (v) => !v || /^\+[1-9]\d{6,14}$/.test(v.replace(/[\s().-]/g, '')),
-    'Include the country code, e.g. +61 400 000 000.',
-  );
-
 // Private notes to self (and a Recipient's private note): plain text, 2,000 max.
 const privateNote = z.string().max(2000, 'Private note must be 2,000 characters or fewer.');
 
@@ -47,24 +37,61 @@ const person = {
   lastName: optional('Last name', 100),
   relationship: optional('Relationship', 50),
   email,
-  mobile,
 };
 
-export const recipientSchema = z.object({
-  ...person,
-  // <input type="date"> yields "YYYY-MM-DD", sent exactly as typed.
-  birthday: z.string().refine((v) => !v || /^\d{4}-\d{2}-\d{2}$/.test(v), 'Enter a valid date.'),
-  privateNote,
-});
-export type RecipientValues = z.infer<typeof recipientSchema>;
+/**
+ * People I Love relationship choices. The API stores plain text (max 50), so
+ * a choice is saved as its label and "Other" as the text typed for it. Labels
+ * are descriptive only: they never affect access, roles or delivery.
+ */
+export const RELATIONSHIPS = ['Partner', 'Parent', 'Child', 'Sibling', 'Grandparent', 'Grandchild', 'Friend', 'Relative', 'Other'] as const;
+export const RELATIONSHIP_OTHER = 'Other';
+
+/**
+ * `savedMobile` (Edit: the saved number as it opened) is accepted while its
+ * fields are unchanged, even if it can't be read, so an older value is never
+ * rewritten or blocked by a save of other fields.
+ */
+export const recipientSchema = (savedMobile: SavedMobile = NO_SAVED_MOBILE) =>
+  z
+    .object({
+      firstName: person.firstName,
+      lastName: person.lastName,
+      email,
+      // '' (not set), a RELATIONSHIPS label, or RELATIONSHIP_OTHER with relationshipOther.
+      relationship: z.string(),
+      relationshipOther: z.string(),
+      mobileCountry: z.string(),
+      mobile: z.string(),
+      // <input type="date"> yields "YYYY-MM-DD", sent exactly as typed.
+      birthday: z.string().refine((v) => !v || /^\d{4}-\d{2}-\d{2}$/.test(v), 'Enter a valid date.'),
+      privateNote,
+    })
+    .superRefine((v, ctx) => {
+      if (v.relationship === RELATIONSHIP_OTHER) {
+        const other = v.relationshipOther.trim();
+        const message = !other
+          ? 'Please specify the relationship.'
+          : other.length > 50
+            ? 'Relationship must be 50 characters or fewer.'
+            : null;
+        if (message) ctx.addIssue({ code: 'custom', path: ['relationshipOther'], message });
+      }
+      const message = mobileIssue(v.mobileCountry, v.mobile, savedMobile);
+      if (message) ctx.addIssue({ code: 'custom', path: ['mobile'], message });
+    });
+export type RecipientValues = z.infer<ReturnType<typeof recipientSchema>>;
 
 // Backend CONTACT_METHOD_REQUIRED.
 export const CONTACT_METHOD_REQUIRED = 'Provide an email or a mobile (or both).';
-export const trustedContactSchema = z.object(person).refine((v) => v.email.trim() || v.mobile.trim(), {
-  message: CONTACT_METHOD_REQUIRED,
-  path: ['email'],
-});
-export type TrustedContactValues = z.infer<typeof trustedContactSchema>;
+/** Same mobile rules as recipientSchema, including the unchanged saved value. */
+export const trustedContactSchema = (savedMobile: SavedMobile = NO_SAVED_MOBILE) =>
+  z.object({ ...person, mobileCountry: z.string(), mobile: z.string() }).superRefine((v, ctx) => {
+    if (!v.email.trim() && !v.mobile.trim()) ctx.addIssue({ code: 'custom', path: ['email'], message: CONTACT_METHOD_REQUIRED });
+    const message = mobileIssue(v.mobileCountry, v.mobile, savedMobile);
+    if (message) ctx.addIssue({ code: 'custom', path: ['mobile'], message });
+  });
+export type TrustedContactValues = z.infer<ReturnType<typeof trustedContactSchema>>;
 
 // Drafts may be incomplete (scheduling checks composition), but the API needs a
 // title and at least one person on every message.

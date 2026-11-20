@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { billingApi, type BillingStatus, type PlanKey } from '@/lib/api/billing';
+import { billingApi, type BillingStatus, type CheckoutOption } from '@/lib/api/billing';
 import type { ApiError } from '@/lib/api/errors';
 import { queryKeys } from '@/lib/query/query-client';
 
@@ -24,8 +24,8 @@ export function useStartTrial() {
 
 /** Leaves for Stripe-hosted pages; access only changes once Stripe tells the server. */
 export function useBillingRedirect(kind: 'checkout' | 'portal') {
-  return useMutation<{ url: string }, ApiError, PlanKey | void>({
-    mutationFn: (plan) => (kind === 'checkout' ? billingApi.checkout(plan as PlanKey) : billingApi.portal()),
+  return useMutation<{ url: string }, ApiError, CheckoutOption | void>({
+    mutationFn: (option) => (kind === 'checkout' ? billingApi.checkout(option as CheckoutOption) : billingApi.portal()),
     onSuccess: ({ url }) => window.location.assign(url),
   });
 }

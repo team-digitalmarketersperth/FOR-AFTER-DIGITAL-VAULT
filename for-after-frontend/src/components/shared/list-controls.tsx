@@ -27,7 +27,7 @@ export function Pager({ pagination, hrefFor }: { pagination: Pagination; hrefFor
       <Link
         href={hrefFor(to)}
         scroll={false}
-        className="inline-flex min-h-11 items-center gap-1 rounded-full border border-border bg-surface px-4 outline-none hover:border-border-strong focus-visible:outline-2 focus-visible:outline-ring"
+        className="inline-flex min-h-11 items-center gap-1 rounded-full border border-border bg-surface px-4 outline-none hover:border-border-strong focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring"
       >
         {icon}
         {label}
@@ -73,7 +73,7 @@ export function SelectField({
       <Label htmlFor={id}>{label}</Label>
       <select
         id={id}
-        className="h-11 rounded-sm border border-input bg-surface px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+        className="h-11 rounded-sm border border-input bg-surface px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-1 focus-visible:outline-ring"
         {...props}
       >
         {options.map((o) => (

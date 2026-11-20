@@ -1,13 +1,28 @@
-'use client';
+"use client";
 
-import { ArrowRight, Copy, Send, Settings, Sparkles, X } from 'lucide-react';
-import { usePathname } from 'next/navigation';
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import { NAV_GROUPS } from '@/components/layout/nav';
-import { Spinner } from '@/components/shared/states';
-import { cn } from '@/lib/utils';
-import { Button } from '@/components/ui/button';
-import { Sheet, SheetClose, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import { ArrowRight, Copy, Send, Settings, Sparkles, X } from "lucide-react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { NAV_GROUPS } from "@/components/layout/nav";
+import { Spinner } from "@/components/shared/states";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import {
+  Sheet,
+  SheetClose,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import {
   ASSISTANT_LIMITS,
   assistantApi,
@@ -16,10 +31,19 @@ import {
   type AssistantPage,
   type AssistantRequest,
   type AssistantTurn,
-} from '@/lib/api/assistant';
-import { isApiError } from '@/lib/api/errors';
+} from "@/lib/api/assistant";
+import { isApiError } from "@/lib/api/errors";
+import { useBilling } from "@/hooks/use-billing";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import type { AssistantUsage } from "@/lib/api/assistant";
+import { queryKeys } from "@/lib/query/query-client";
 
-type Page = { id: AssistantPage; title: string; suggestions: string[]; writing: { label: string; action: AssistantAction }[] };
+type Page = {
+  id: AssistantPage;
+  title: string;
+  suggestions: string[];
+  writing: { label: string; action: AssistantAction }[];
+};
 
 /**
  * What the companion knows about each Customer page: a safe id (the only page
@@ -29,85 +53,110 @@ type Page = { id: AssistantPage; title: string; suggestions: string[]; writing: 
  */
 export const PAGES: (Page & { prefix: string })[] = [
   {
-    prefix: '/dashboard',
-    id: 'dashboard',
-    title: 'Dashboard',
-    suggestions: ['Where should I start?', 'Help me understand my dashboard.', 'How do I write my first message?'],
+    prefix: "/dashboard",
+    id: "dashboard",
+    title: "Dashboard",
+    suggestions: [
+      "Where should I start?",
+      "Help me understand my dashboard.",
+      "How do I write my first message?",
+    ],
     writing: [],
   },
   {
-    prefix: '/people',
-    id: 'people',
-    title: 'People I Love',
-    suggestions: ['What do the details for a person mean?', 'How will the people I love receive messages?'],
+    prefix: "/people",
+    id: "people",
+    title: "People I Love",
+    suggestions: [
+      "What do the details for a person mean?",
+      "How will the people I love receive messages?",
+    ],
     writing: [],
   },
   {
-    prefix: '/trusted-contacts',
-    id: 'trusted-contacts',
-    title: 'Trusted Contacts',
-    suggestions: ['What does a trusted contact do?', 'How do invitations work?'],
+    prefix: "/trusted-contacts",
+    id: "trusted-contacts",
+    title: "Trusted Contacts",
+    suggestions: [
+      "What does a trusted contact do?",
+      "How do invitations work?",
+    ],
     writing: [],
   },
   {
-    prefix: '/messages',
-    id: 'messages',
-    title: 'Messages',
-    suggestions: ['How do I write my first message?', 'When will my messages be shared?'],
+    prefix: "/messages",
+    id: "messages",
+    title: "Messages",
+    suggestions: [
+      "How do I write my first message?",
+      "When will my messages be shared?",
+    ],
     writing: [
-      { label: 'Help me start a message', action: 'draft' },
-      { label: 'Polish my text', action: 'improve' },
-      { label: 'Make it shorter', action: 'shorten' },
+      { label: "Help me start a message", action: "draft" },
+      { label: "Polish my text", action: "improve" },
+      { label: "Make it shorter", action: "shorten" },
     ],
   },
   {
-    prefix: '/memory-vault',
-    id: 'memory-vault',
-    title: 'Memory Vault',
-    suggestions: ['What can I keep in the Memory Vault?', 'Can I link a memory to My Story?'],
+    prefix: "/memory-vault",
+    id: "memory-vault",
+    title: "Memory Vault",
+    suggestions: [
+      "What can I keep in the Memory Vault?",
+      "Can I link a memory to My Story?",
+    ],
     writing: [
-      { label: 'Help describe a memory', action: 'expand' },
-      { label: 'Suggest a caption from details I provide', action: 'caption' },
+      { label: "Help describe a memory", action: "expand" },
+      { label: "Suggest a caption from details I provide", action: "caption" },
     ],
   },
   {
-    prefix: '/my-story',
-    id: 'my-story',
-    title: 'My Story',
-    suggestions: ['How does My Story work?', 'How do I save my answer?'],
+    prefix: "/my-story",
+    id: "my-story",
+    title: "My Story",
+    suggestions: ["How does My Story work?", "How do I save my answer?"],
     writing: [
-      { label: 'Expand my notes', action: 'expand' },
-      { label: 'Ask me a question', action: 'questions' },
-      { label: 'Polish my answer', action: 'improve' },
+      { label: "Expand my notes", action: "expand" },
+      { label: "Ask me a question", action: "questions" },
+      { label: "Polish my answer", action: "improve" },
     ],
   },
   {
-    prefix: '/my-wishes',
-    id: 'my-wishes',
-    title: 'My Wishes',
-    suggestions: ['What is My Wishes for?', 'Is My Wishes a legal document?'],
+    prefix: "/my-wishes",
+    id: "my-wishes",
+    title: "My Wishes",
+    suggestions: ["What is My Wishes for?", "Is My Wishes a legal document?"],
     writing: [
-      { label: 'Help me express a preference', action: 'draft' },
-      { label: 'Suggest a question to consider', action: 'questions' },
+      { label: "Help me express a preference", action: "draft" },
+      { label: "Suggest a question to consider", action: "questions" },
     ],
   },
   {
-    prefix: '/settings',
-    id: 'account',
-    title: 'Account settings',
-    suggestions: ['What can I change in my settings?', 'How do I free up storage?'],
+    prefix: "/settings",
+    id: "account",
+    title: "Account settings",
+    suggestions: [
+      "What can I change in my settings?",
+      "How do I free up storage?",
+    ],
     writing: [],
   },
 ];
 
-const pageOf = (path: string) => PAGES.find((p) => path === p.prefix || path.startsWith(`${p.prefix}/`));
+const pageOf = (path: string) =>
+  PAGES.find((p) => path === p.prefix || path.startsWith(`${p.prefix}/`));
 // The section chip reuses the menu's icons; Account settings is not in the menu.
-const NAV_ICONS = new Map(NAV_GROUPS.flatMap((g) => g.items).map((i) => [i.href, i.icon]));
+const NAV_ICONS = new Map(
+  NAV_GROUPS.flatMap((g) => g.items).map((i) => [i.href, i.icon]),
+);
 
 /** The companion's mark beside its replies. */
 function Avatar() {
   return (
-    <span aria-hidden className="inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-brand-maroon text-white">
+    <span
+      aria-hidden
+      className="inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-brand-maroon text-white"
+    >
       <Sparkles strokeWidth={1.5} className="size-4" />
     </span>
   );
@@ -128,7 +177,10 @@ export type WritingTarget = {
   write: (text: string) => void;
 };
 
-const Ctx = createContext<{ openFor: (target: WritingTarget) => void; release: (key: string) => void } | null>(null);
+const Ctx = createContext<{
+  openFor: (target: WritingTarget) => void;
+  release: (key: string) => void;
+} | null>(null);
 
 /**
  * The "Help me write" button for one editor field. Leaving the field (or the
@@ -139,7 +191,7 @@ export function HelpMeWrite({
   targetKey,
   className,
   ...rest
-}: Omit<WritingTarget, 'key'> & { targetKey: string; className?: string }) {
+}: Omit<WritingTarget, "key"> & { targetKey: string; className?: string }) {
   const target = { key: targetKey, ...rest };
   const ctx = useContext(Ctx);
   const release = ctx?.release;
@@ -151,7 +203,7 @@ export function HelpMeWrite({
       variant="outline"
       size="sm"
       onClick={() => ctx.openFor(target)}
-      className={cn('border-brand-maroon text-brand-maroon', className)}
+      className={cn("border-brand-maroon text-brand-maroon", className)}
     >
       <Sparkles aria-hidden strokeWidth={1.5} />
       Help me write
@@ -159,8 +211,12 @@ export function HelpMeWrite({
   );
 }
 
-type Turn = AssistantTurn & { truncated?: boolean; draft?: { key: string; base: string }; open?: AssistantPage };
-type Pending = { req: AssistantRequest; label: string; draft?: Turn['draft'] };
+type Turn = AssistantTurn & {
+  truncated?: boolean;
+  draft?: { key: string; base: string };
+  open?: AssistantPage;
+};
+type Pending = { req: AssistantRequest; label: string; draft?: Turn["draft"] };
 /**
  * One context's conversation. `id` changes whenever the context does (page,
  * question, editor gone), so a reply from an earlier context never lands.
@@ -173,28 +229,66 @@ type Conv = {
   /** The included text exactly as previewed (null: not included). */
   source: string | null;
   pending: boolean;
-  error: { message: string; retry: Pending | null } | null;
+  // plans: Updated Plans Step 7, the allowance is used and a higher plan includes more (trial or Premium only).
+  error: { message: string; retry: Pending | null; plans?: boolean } | null;
   notice: string;
 };
-const fresh = (c: Pick<Conv, 'id'>, target: WritingTarget | null = null): Conv => ({
+const fresh = (
+  c: Pick<Conv, "id">,
+  target: WritingTarget | null = null,
+): Conv => ({
   id: c.id + 1,
   target,
   turns: [],
-  input: '',
+  input: "",
   source: null,
   pending: false,
   error: null,
-  notice: '',
+  notice: "",
 });
 // Requests whose reply may come back as editor text (the server decides whether it is).
-const WRITES: AssistantAction[] = ['ask', 'draft', 'improve', 'shorten', 'expand'];
+const WRITES: AssistantAction[] = [
+  "ask",
+  "draft",
+  "improve",
+  "shorten",
+  "expand",
+];
+
+// Updated Plans Step 5: dates for the allowance reset, in UTC like the server's month.
+const utcDay = (iso: string) =>
+  new Date(iso).toLocaleDateString("en-AU", { day: "numeric", month: "long", timeZone: "UTC" });
+
+/** The allowance is used: a plain explanation (never "busy"), the next reset if there is one, and no retry. */
+function allowanceText(error: unknown) {
+  if (!isApiError(error) || error.code !== "AI_ALLOWANCE_EXHAUSTED") return null;
+  const a = error.allowance;
+  if (!a) return error.message;
+  if (a.kind === "month")
+    return `You’ve used this month’s ${a.allowance} AI companion replies.${a.resetsAt ? ` They reset on ${utcDay(a.resetsAt)} (UTC).` : ""} You can keep writing on your own.`;
+  return `You’ve used the ${a.allowance} AI companion replies included in your free trial. You can keep writing on your own.`;
+}
+
+/** One quiet line under the composer: the trial's or this month's use. Nothing when no allowance applies. */
+function usageLine(u: AssistantUsage | undefined) {
+  if (!u?.metered) return null;
+  return u.kind === "trial"
+    ? `${u.used} of ${u.allowance} trial AI replies used`
+    : `${u.used} of ${u.allowance} AI replies used this month${u.resetsAt ? ` · resets ${utcDay(u.resetsAt)}` : ""}`;
+}
 
 // UI states, never answers: no provider names, codes or raw errors.
 function errorText(error: unknown) {
-  if (isApiError(error) && error.status === 503) return 'The AI companion is unavailable right now. Please try again later.';
-  if (isApiError(error) && error.status === 429) return 'The AI companion is busy, or you’ve reached the hourly limit. Please try again later.';
-  if (isApiError(error) && (error.kind === 'validation' || error.kind === 'plan_required')) return error.message;
-  return 'The AI companion is temporarily unavailable. Please try again.';
+  if (isApiError(error) && error.status === 503)
+    return "The AI companion is unavailable right now. Please try again later.";
+  if (isApiError(error) && error.status === 429)
+    return "The AI companion is busy, or you’ve reached the hourly limit. Please try again later.";
+  if (
+    isApiError(error) &&
+    (error.kind === "validation" || error.kind === "plan_required")
+  )
+    return error.message;
+  return "The AI companion is temporarily unavailable. Please try again.";
 }
 
 /**
@@ -206,10 +300,19 @@ function errorText(error: unknown) {
  */
 export function CompanionProvider({ children }: { children: ReactNode }) {
   const path = usePathname();
+  const tier = useBilling(false).data?.productTier?.tier ?? null;
   const page = pageOf(path);
   const [open, setOpen] = useState(false);
   const [conv, setConv] = useState<Conv>(() => fresh({ id: 0 }));
   const opener = useRef<HTMLElement | null>(null);
+  const qc = useQueryClient();
+  // Updated Plans Step 5: the allowance line, read only while the panel is open (a failed read just hides it).
+  const usage = useQuery({
+    queryKey: queryKeys.assistantUsage,
+    queryFn: ({ signal }) => assistantApi.usage(signal),
+    enabled: open,
+    retry: false,
+  });
   const request = useRef<AbortController | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const nearBottom = useRef(true);
@@ -230,28 +333,40 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
   // Created once, so editors can depend on it.
   const [value] = useState(() => ({
     openFor: (t: WritingTarget) => {
-      setConv((c) => (c.target?.key === t.key ? { ...c, target: t } : fresh(c, t)));
+      setConv((c) =>
+        c.target?.key === t.key ? { ...c, target: t } : fresh(c, t),
+      );
       setOpen(true);
     },
     // The editor this target belongs to is gone (another question): forget its text and replies.
-    release: (key: string) => setConv((c) => (c.target?.key === key ? fresh(c) : c)),
+    release: (key: string) =>
+      setConv((c) => (c.target?.key === key ? fresh(c) : c)),
   }));
 
   // `first`: show the question as the Customer's turn now (a retry reuses it, so it never repeats).
-  const send = async ({ req, label, draft }: Pending, first?: { clearInput: boolean }) => {
+  const send = async (
+    { req, label, draft }: Pending,
+    first?: { clearInput: boolean },
+  ) => {
     const id = conv.id;
     const controller = new AbortController();
     request.current = controller;
+    // Kept so a failed request can give the typed text back (it is cleared as the request goes out).
+    const typed = first?.clearInput ? conv.input : "";
     setConv((c) => ({
       ...c,
       pending: true,
       error: null,
-      notice: '',
-      ...(first && { turns: [...c.turns, { role: 'user' as const, content: label }] }),
-      ...(first?.clearInput && { input: '' }),
+      notice: "",
+      ...(first && {
+        turns: [...c.turns, { role: "user" as const, content: label }],
+      }),
+      ...(first?.clearInput && { input: "" }),
     }));
     try {
-      const res = await assistantApi.reply(req, controller.signal);
+      // A fresh id for this one Send (a retry is a new Send): the server never runs an id twice.
+      const res = await assistantApi.reply({ ...req, requestId: crypto.randomUUID() }, controller.signal);
+      void qc.invalidateQueries({ queryKey: queryKeys.assistantUsage });
       // "Use this draft" only when the server marked the reply as editor text; a section link only if it is ours.
       const open = PAGES.some((p) => p.id === res.open) ? res.open : undefined;
       setConv((c) =>
@@ -262,36 +377,76 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
               pending: false,
               turns: [
                 ...c.turns,
-                { role: 'assistant', content: res.reply, truncated: res.truncated, draft: res.draft ? draft : undefined, open },
+                {
+                  role: "assistant",
+                  content: res.reply,
+                  truncated: res.truncated,
+                  draft: res.draft ? draft : undefined,
+                  open,
+                },
               ],
             },
       );
     } catch (error) {
       const stopped = controller.signal.aborted;
+      void qc.invalidateQueries({ queryKey: queryKeys.assistantUsage });
+      const used = allowanceText(error);
+      // Complete's allowance is the largest: it only shows the reset, never a plan to compare.
+      const plans =
+        !!used && isApiError(error) && (error.allowance?.kind === "trial" || (error.allowance?.kind === "month" && tier === "PREMIUM"));
       setConv((c) =>
-        c.id !== id ? c : { ...c, pending: false, error: stopped ? null : { message: errorText(error), retry: { req, label, draft } } },
+        c.id !== id
+          ? c
+          : {
+              ...c,
+              pending: false,
+              // Nothing typed since: the text that was sent comes back to the box.
+              input: c.input === "" ? typed : c.input,
+              error: stopped
+                ? null
+                : // The allowance is used: no Try again (it would be refused); nothing is resent later on its own.
+                  { message: used ?? errorText(error), retry: used ? null : { req, label, draft }, plans },
+            },
       );
     }
   };
 
   // `suggestion`: a suggested question, sent exactly like a typed one (the typed text is left alone).
-  const ask = (action: AssistantAction, actionLabel?: string, suggestion?: string) => {
+  const ask = (
+    action: AssistantAction,
+    actionLabel?: string,
+    suggestion?: string,
+  ) => {
     if (!page || conv.pending) return;
     const message = (suggestion ?? conv.input).trim();
     const t = conv.target;
     // What is sent is exactly what the preview shows: if the text changed since, show the new text first.
     if (t && conv.source !== null && t.read() !== conv.source) {
       const now = t.read();
-      setConv((c) => ({ ...c, source: now, notice: 'Your text has changed, so the preview is updated. Check it, then send again.' }));
+      setConv((c) => ({
+        ...c,
+        source: now,
+        notice:
+          "Your text has changed, so the preview is updated. Check it, then send again.",
+      }));
       return;
     }
-    const source = conv.source?.trim() ?? '';
-    if (action === 'ask' ? !message : !message && !source) {
-      setConv((c) => ({ ...c, notice: action === 'ask' ? 'Type your question first.' : 'Type some notes, or include your text, first.' }));
+    const source = conv.source?.trim() ?? "";
+    if (action === "ask" ? !message : !message && !source) {
+      setConv((c) => ({
+        ...c,
+        notice:
+          action === "ask"
+            ? "Type your question first."
+            : "Type some notes, or include your text, first.",
+      }));
       return;
     }
     if (source.length > ASSISTANT_LIMITS.source) {
-      setConv((c) => ({ ...c, notice: `Your text is too long to include (over ${ASSISTANT_LIMITS.source.toLocaleString()} characters).` }));
+      setConv((c) => ({
+        ...c,
+        notice: `Your text is too long to include (over ${ASSISTANT_LIMITS.source.toLocaleString()} characters).`,
+      }));
       return;
     }
     const req: AssistantRequest = {
@@ -299,13 +454,16 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
       action,
       ...(message && { message }),
       ...(source && { source }),
-      ...(t && page.id === 'my-story' && { promptKey: t.key }),
+      ...(t && page.id === "my-story" && { promptKey: t.key }),
       // Earlier turns of this context only: the current message goes once, as the last turn.
       history: boundedHistory(conv.turns, message.length + source.length),
     };
-    const label = [actionLabel ?? message, source && '(with your text)'].filter(Boolean).join(' ');
+    const label = [actionLabel ?? message, source && "(with your text)"]
+      .filter(Boolean)
+      .join(" ");
     // A draft can go back only into the editor it was written for, and only if that text hasn't changed since.
-    const draft = t && WRITES.includes(action) ? { key: t.key, base: t.read() } : undefined;
+    const draft =
+      t && WRITES.includes(action) ? { key: t.key, base: t.read() } : undefined;
     void send({ req, label, draft }, { clearInput: !suggestion });
   };
 
@@ -313,11 +471,17 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
     const t = conv.target;
     if (!turn.draft || t?.key !== turn.draft.key) return;
     if (t.read() !== turn.draft.base) {
-      setConv((c) => ({ ...c, notice: `“${t.field}” has changed since you asked, so the draft wasn’t placed. Copy it instead, or ask again.` }));
+      setConv((c) => ({
+        ...c,
+        notice: `“${t.field}” has changed since you asked, so the draft wasn’t placed. Copy it instead, or ask again.`,
+      }));
       return;
     }
     t.write(turn.content);
-    setConv((c) => ({ ...c, notice: `The draft is in “${t.field}”. It isn’t saved: review it, then choose ${t.save}.` }));
+    setConv((c) => ({
+      ...c,
+      notice: `The draft is in “${t.field}”. It isn’t saved: review it, then choose ${t.save}.`,
+    }));
   };
 
   const close = (next: boolean) => {
@@ -345,15 +509,28 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
           className="max-h-[85dvh] gap-0 overflow-hidden rounded-t-[22px] border-brand-stone bg-surface shadow-[0_18px_48px_rgb(99_47_59/0.16)] motion-reduce:animate-none sm:left-auto! sm:right-6! sm:bottom-24! sm:max-h-[calc(100dvh-8rem)] sm:w-[min(440px,calc(100vw-3rem))] sm:rounded-[22px] sm:border"
         >
           <SheetHeader className="shrink-0 flex-row items-center gap-3 border-b border-brand-stone px-5 py-4 sm:px-6">
-            <span aria-hidden className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-brand-maroon text-white">
+            <span
+              aria-hidden
+              className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-brand-maroon text-white"
+            >
               <Sparkles strokeWidth={1.5} className="size-5" />
             </span>
             <div className="grid min-w-0 flex-1 gap-0.5">
-              <SheetTitle className="font-heading text-2xl leading-tight font-normal text-brand-maroon">For After AI companion</SheetTitle>
-              <SheetDescription className="text-sm text-foreground-muted">A little guidance, at your pace.</SheetDescription>
+              <SheetTitle className="font-heading text-2xl leading-tight font-normal text-brand-maroon">
+                For After AI companion
+              </SheetTitle>
+              <SheetDescription className="text-sm text-foreground-muted">
+                A little guidance, at your pace.
+              </SheetDescription>
             </div>
             <SheetClose asChild>
-              <Button type="button" variant="ghost" size="icon" aria-label="Close" className="size-11 shrink-0 rounded-full text-foreground-secondary">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label="Close"
+                className="size-11 shrink-0 rounded-full text-foreground-secondary"
+              >
                 <X aria-hidden strokeWidth={1.5} className="size-5" />
               </Button>
             </SheetClose>
@@ -362,7 +539,8 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
             ref={scroller}
             onScroll={(e) => {
               const el = e.currentTarget;
-              nearBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+              nearBottom.current =
+                el.scrollHeight - el.scrollTop - el.clientHeight < 80;
             }}
             className="companion-scroll grid min-h-0 flex-1 grid-cols-1 content-start gap-5 overflow-y-auto px-5 py-4 sm:px-6"
           >
@@ -389,17 +567,25 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
                     }}
                     className="mt-0.5 size-5 accent-brand-maroon"
                   />
-                  <span>Include the text in “{t.field}” (it will be sent to the AI service)</span>
+                  <span>
+                    Include the text in “{t.field}” (it will be sent to the AI
+                    service)
+                  </span>
                 </label>
                 {conv.source !== null && (
                   <blockquote
                     aria-label="Text that will be included"
                     className="companion-scroll max-h-40 overflow-y-auto rounded-xl border border-brand-stone px-4 py-3 text-sm break-words whitespace-pre-wrap"
                   >
-                    {conv.source.trim() ? conv.source : `“${t.field}” is empty.`}
+                    {conv.source.trim()
+                      ? conv.source
+                      : `“${t.field}” is empty.`}
                   </blockquote>
                 )}
-                <p className="text-xs text-foreground-muted">Your private note, other fields, files and linked memories are never included.</p>
+                <p className="text-xs text-foreground-muted">
+                  Your private note, other fields, files and linked memories are
+                  never included.
+                </p>
               </section>
             )}
 
@@ -416,7 +602,7 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
                           type="button"
                           variant="outline"
                           className="h-auto min-h-11 w-full justify-start rounded-xl border-brand-stone py-2 text-left whitespace-normal"
-                          onClick={() => ask('ask', undefined, q)}
+                          onClick={() => ask("ask", undefined, q)}
                         >
                           {q}
                         </Button>
@@ -428,9 +614,14 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
             )}
 
             {(conv.turns.length > 0 || conv.pending) && (
-              <section role="log" aria-label="Conversation" aria-live="polite" className="grid gap-4">
+              <section
+                role="log"
+                aria-label="Conversation"
+                aria-live="polite"
+                className="grid gap-4"
+              >
                 {conv.turns.map((turn, i) =>
-                  turn.role === 'user' ? (
+                  turn.role === "user" ? (
                     <div key={i} className="ml-10 grid justify-items-end">
                       <p className="sr-only">You:</p>
                       <p className="max-w-full rounded-2xl rounded-br-md bg-brand-maroon px-4 py-2.5 text-[15px] leading-relaxed text-white wrap-anywhere whitespace-pre-wrap">
@@ -438,7 +629,10 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
                       </p>
                     </div>
                   ) : (
-                    <div key={i} className="mr-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-2">
+                    <div
+                      key={i}
+                      className="mr-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-2"
+                    >
                       <Avatar />
                       <div className="grid min-w-0 grid-cols-1 gap-2">
                         <span className="sr-only">AI companion</span>
@@ -446,19 +640,36 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
                         <p className="justify-self-start rounded-2xl rounded-tl-md bg-brand-ivory px-4 py-3 text-[15px] leading-relaxed wrap-anywhere whitespace-pre-wrap">
                           {turn.content}
                         </p>
-                        {turn.truncated && <p className="text-xs text-foreground-muted">This reply was cut short.</p>}
+                        {turn.truncated && (
+                          <p className="text-xs text-foreground-muted">
+                            This reply was cut short.
+                          </p>
+                        )}
                         <div className="flex flex-wrap items-center gap-2">
                           {turn.open && turn.open !== page?.id && (
                             // A full page load on purpose: the page's own "leave with unsaved changes?" check still runs.
-                            <Button asChild variant="outline" className="h-11 rounded-full border-brand-maroon px-4 text-brand-maroon">
-                              <a href={PAGES.find((p) => p.id === turn.open)!.prefix}>
-                                Open {PAGES.find((p) => p.id === turn.open)!.title}
+                            <Button
+                              asChild
+                              variant="outline"
+                              className="h-11 rounded-full border-brand-maroon px-4 text-brand-maroon"
+                            >
+                              <a
+                                href={
+                                  PAGES.find((p) => p.id === turn.open)!.prefix
+                                }
+                              >
+                                Open{" "}
+                                {PAGES.find((p) => p.id === turn.open)!.title}
                                 <ArrowRight aria-hidden strokeWidth={1.5} />
                               </a>
                             </Button>
                           )}
                           {turn.draft && turn.draft.key === t?.key && (
-                            <Button type="button" className="h-11 rounded-full bg-brand-maroon px-4 text-white hover:bg-brand-maroon/90" onClick={() => applyDraft(turn)}>
+                            <Button
+                              type="button"
+                              className="h-11 rounded-full bg-brand-maroon px-4 text-white hover:bg-brand-maroon/90"
+                              onClick={() => applyDraft(turn)}
+                            >
                               Use this draft
                             </Button>
                           )}
@@ -471,11 +682,23 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
                             onClick={() =>
                               void navigator.clipboard
                                 ?.writeText(turn.content)
-                                .then(() => setConv((c) => ({ ...c, notice: 'Copied.' })))
-                                .catch(() => setConv((c) => ({ ...c, notice: 'Couldn’t copy. Select the text instead.' })))
+                                .then(() =>
+                                  setConv((c) => ({ ...c, notice: "Copied." })),
+                                )
+                                .catch(() =>
+                                  setConv((c) => ({
+                                    ...c,
+                                    notice:
+                                      "Couldn’t copy. Select the text instead.",
+                                  })),
+                                )
                             }
                           >
-                            <Copy aria-hidden strokeWidth={1.5} className="size-[18px]" />
+                            <Copy
+                              aria-hidden
+                              strokeWidth={1.5}
+                              className="size-[18px]"
+                            />
                           </Button>
                         </div>
                       </div>
@@ -487,9 +710,15 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
                     <Avatar />
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <span className="inline-flex items-center gap-2 rounded-2xl rounded-tl-md bg-brand-ivory px-4 py-3 text-sm text-foreground-secondary">
-                        <Spinner className="motion-reduce:animate-none" /> Thinking…
+                        <Spinner className="motion-reduce:animate-none" />{" "}
+                        Thinking…
                       </span>
-                      <Button type="button" variant="outline" className="h-11 rounded-full border-brand-stone" onClick={() => request.current?.abort()}>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-11 rounded-full border-brand-stone"
+                        onClick={() => request.current?.abort()}
+                      >
                         Stop
                       </Button>
                     </div>
@@ -499,21 +728,34 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
             )}
 
             {conv.error && (
-              <div role="alert" className="grid gap-2 rounded-xl border border-danger/40 px-4 py-3 text-sm">
+              <div
+                role="alert"
+                className="grid gap-2 rounded-xl border border-danger/40 px-4 py-3 text-sm"
+              >
                 <p>{conv.error.message}</p>
+                {conv.error.plans && (
+                  <Link href="/settings/plan" className="justify-self-start text-sm font-medium text-primary underline underline-offset-2">
+                    View plans
+                  </Link>
+                )}
                 {conv.error.retry && (
                   <Button
                     type="button"
                     variant="outline"
                     className="h-11 justify-self-start rounded-full border-brand-stone"
-                    onClick={() => conv.error?.retry && void send(conv.error.retry)}
+                    onClick={() =>
+                      conv.error?.retry && void send(conv.error.retry)
+                    }
                   >
                     Try again
                   </Button>
                 )}
               </div>
             )}
-            <p role="status" className="text-sm text-foreground-secondary empty:hidden">
+            <p
+              role="status"
+              className="text-sm text-foreground-secondary empty:hidden"
+            >
               {conv.notice}
             </p>
 
@@ -543,7 +785,7 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
               className="grid shrink-0 grid-cols-1 gap-2 border-t border-brand-stone px-5 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6"
               onSubmit={(e) => {
                 e.preventDefault();
-                ask('ask');
+                ask("ask");
               }}
             >
               <label htmlFor="companion-input" className="sr-only">
@@ -557,7 +799,9 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
                   rows={2}
                   placeholder="Ask a question or share a thought…"
                   aria-describedby="companion-privacy"
-                  onChange={(e) => setConv((c) => ({ ...c, input: e.target.value }))}
+                  onChange={(e) =>
+                    setConv((c) => ({ ...c, input: e.target.value }))
+                  }
                   // Grows with the text up to a limit, then scrolls inside itself.
                   className="companion-scroll field-sizing-content max-h-36 min-h-12 min-w-0 flex-1 resize-none bg-transparent py-1.5 text-[15px] leading-relaxed outline-none placeholder:text-foreground-muted"
                 />
@@ -572,17 +816,27 @@ export function CompanionProvider({ children }: { children: ReactNode }) {
                 </Button>
               </div>
               <div className="flex flex-wrap items-center justify-between gap-x-3 text-xs text-foreground-muted">
-                <p id="companion-privacy">AI suggestions · You choose what to share</p>
+                <p id="companion-privacy">
+                  AI suggestions · You choose what to share
+                </p>
+                {usageLine(usage.data) && (
+                  <p className="basis-full" aria-live="polite">
+                    {usageLine(usage.data)}
+                  </p>
+                )}
                 <details className="group open:basis-full">
                   <summary className="inline-flex min-h-11 cursor-pointer list-none items-center rounded-sm underline underline-offset-2 outline-none group-open:min-h-8 focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
                     Privacy
                   </summary>
                   <p className="companion-scroll max-h-[25dvh] overflow-y-auto pb-1">
-                    Only your messages and text you choose to include are sent to an external AI service. Replies are
-                    written by AI from Groq, an external service that For After uses. With each request we send your
-                    message, any text you chose to include, the name of this page and earlier messages from this
-                    conversation. For After doesn’t save the conversation: it’s cleared when you move to another page or
-                    sign out. AI can be wrong, so check every reply before you use it.
+                    Only your messages and text you choose to include are sent
+                    to an external AI service. Replies are written by AI from
+                    Groq, an external service that For After uses. With each
+                    request we send your message, any text you chose to include,
+                    the name of this page and earlier messages from this
+                    conversation. For After doesn’t save the conversation: it’s
+                    cleared when you move to another page or sign out. AI can be
+                    wrong, so check every reply before you use it.
                   </p>
                 </details>
               </div>

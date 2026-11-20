@@ -56,6 +56,22 @@ export function renderWithClient(ui: ReactElement) {
 
 export const router = { replace: vi.fn(), push: vi.fn(), refresh: vi.fn() };
 
+/** GET /billing with billing off (no trial caps, media allowed): for screens that read the plan but don't test it. */
+export const BILLING_OFF = {
+  enabled: false,
+  state: 'no_billing_record',
+  enforced: false,
+  hasAccess: true,
+  trialEligible: false,
+  trial: null,
+  subscription: null,
+  plans: [],
+  canManageSubscription: false,
+  trialCaps: { recipients: null, trustedContacts: null, questions: null },
+  questionsAnswered: 0,
+  features: { media: true },
+};
+
 type Handler = Response | ((body: unknown, url: URL) => Response | Promise<Response>);
 
 /**

@@ -15,6 +15,7 @@ import { ChoiceGroup, FormError, TextAreaField, TextField } from '@/components/s
 import { PageHeader } from '@/components/shared/page-header';
 import { PrivateNoteField } from '@/components/shared/private-note';
 import { ListSkeleton, QueryView, Spinner } from '@/components/shared/states';
+import { COMPLETE_VIDEO_COPY, PAID_MEDIA_COPY, PlanCheck, TRIAL_VIDEO_COPY, usePaidMedia } from '@/components/shared/trial-cap';
 import { Button } from '@/components/ui/button';
 import { useDraftEditor } from '@/hooks/use-draft-editor';
 import { useUnsavedChanges } from '@/hooks/use-unsaved-changes';
@@ -167,6 +168,7 @@ function MessageForm({
   });
   const { errors, isDirty, isSubmitSuccessful, isSubmitting } = form.formState;
   const busy = pending || isSubmitting;
+  const paid = usePaidMedia();
   useUnsavedChanges(isDirty && !isSubmitSuccessful);
   const [title, contentType, text, selected, note] = useWatch({
     control: form.control,
@@ -182,6 +184,7 @@ function MessageForm({
     saved: { title: start?.title ?? '', contentType: start?.contentType ?? 'TEXT', textContent: start?.textContent ?? '' },
     current: { title, contentType, textContent: text },
     active: !busy && !isSubmitSuccessful,
+    submitted: isSubmitSuccessful && !pending && !error,
   });
 
   const toggle = (id: string) =>
@@ -235,6 +238,7 @@ function MessageForm({
         </Section>
 
         <Section title="What kind of message?">
+          <PlanCheck billing={paid.billing} />
           <ChoiceGroup
             legend="Message type"
             className="sm:grid-cols-2"
@@ -246,6 +250,16 @@ function MessageForm({
                 label: info.label,
                 description: info.description,
                 icon: <info.icon aria-hidden strokeWidth={1.5} className="size-4 text-primary" />,
+                // Trial Step 4: text is open; other formats are paid-only, except the one this message already has.
+                locked:
+                  paid.locked && t !== 'TEXT' && t !== initial?.contentType
+                    ? t === 'VIDEO'
+                      ? TRIAL_VIDEO_COPY
+                      : PAID_MEDIA_COPY
+                    : // Updated Plans Step 4: Premium can't switch to VIDEO; a message already VIDEO keeps it.
+                      paid.videoLocked && t === 'VIDEO' && initial?.contentType !== 'VIDEO'
+                      ? COMPLETE_VIDEO_COPY
+                      : undefined,
               };
             })}
           />

@@ -86,7 +86,7 @@ describe('Messages', () => {
     await userEvent.click(within(p).getByRole('checkbox', { name: /Include the text in “Message”/ }));
     expect(within(p).getByLabelText('Text that will be included')).toHaveTextContent('proud notes');
     await userEvent.click(within(p).getByRole('button', { name: 'Polish my text' }));
-    expect(api.called('POST', '/assistant/reply')[0].body).toEqual({ page: 'messages', action: 'improve', source: 'proud notes', history: [] });
+    expect(api.called('POST', '/assistant/reply')[0].body).toEqual({ page: 'messages', action: 'improve', source: 'proud notes', history: [], requestId: expect.stringMatching(/^[0-9a-f-]{36}$/) });
     expect(JSON.stringify(api.calls)).not.toContain('Synthetic private reason');
     await userEvent.click(await within(p).findByRole('button', { name: 'Use this draft' }));
     expect(within(p).getByRole('status')).toHaveTextContent('The draft is in “Message”. It isn’t saved: review it, then choose Save draft.');

@@ -2,11 +2,25 @@ import { describe, expect, it } from 'vitest';
 import { compositionIssues } from './composition';
 import { checkFile } from './api/media';
 import {
+  decimalLimit,
+  formatBytes,
   formatCalendarDate,
   humanize,
   isoToLocalInputs,
   localToOffsetIso,
 } from './format';
+
+describe('formatBytes', () => {
+  it('binary by default (the 5 GiB limit and file sizes unchanged); decimal for a decimal limit', () => {
+    expect(formatBytes(5 * 1024 ** 3)).toBe('5.0 GB');
+    expect(formatBytes(20 * 1024 * 1024)).toBe('20.0 MB');
+    expect(formatBytes(100_000_000)).toBe('95.4 MB');
+    expect(formatBytes(100_000_000, true)).toBe('100.0 MB');
+    expect(formatBytes(1_500, true)).toBe('2 KB');
+    expect(decimalLimit(100_000_000)).toBe(true);
+    expect(decimalLimit(5 * 1024 ** 3)).toBe(false);
+  });
+});
 
 describe('dates', () => {
   it('builds an ISO timestamp with an explicit offset for the same local moment', () => {
