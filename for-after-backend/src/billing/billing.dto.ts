@@ -1,11 +1,18 @@
 import { IsIn, IsISO8601, IsOptional, IsUUID, Matches } from 'class-validator';
 import { PageQueryDto } from '../admin/dto/admin.dto.js';
+import { PaidTier } from '../generated/prisma/client.js';
 import { ADMIN_BILLING_FILTERS, type AdminBillingFilter } from './billing-access.js';
 
-/** Only a plan key: never a price id, amount or currency from the client. */
+/**
+ * Updated Plans Step 6: a tier and an interval only; the server picks the price. Never a price id, amount, currency or
+ * metadata from the client (any other field is refused by the global whitelist).
+ */
 export class CheckoutDto {
-  @IsIn(['monthly', 'annual'], { message: 'plan must be one of: monthly, annual' })
-  plan: 'monthly' | 'annual';
+  @IsIn([PaidTier.PREMIUM, PaidTier.COMPLETE], { message: 'tier must be one of: PREMIUM, COMPLETE' })
+  tier: PaidTier;
+
+  @IsIn(['monthly', 'annual'], { message: 'interval must be one of: monthly, annual' })
+  interval: 'monthly' | 'annual';
 }
 
 export class BillingAdminQueryDto extends PageQueryDto {

@@ -81,6 +81,13 @@ export class AdminSupportQueryDto extends PageQueryDto {
   @IsUUID()
   reference?: string;
 
+  /** Subject text (case-insensitive contains), or a full request id. Never the conversation; never logged. */
+  @IsOptional()
+  @Transform(trim)
+  @IsString()
+  @MaxLength(SUBJECT_MAX)
+  search?: string;
+
   /** Exact owner (User) id. */
   @IsOptional()
   @IsUUID()

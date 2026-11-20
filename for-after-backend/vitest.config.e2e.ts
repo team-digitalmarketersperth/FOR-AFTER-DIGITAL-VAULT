@@ -17,6 +17,8 @@ const RELEASE_WORKER_SUITES = [
   'test/email-delivery.e2e-spec.ts',
   'test/error-boundary.e2e-spec.ts',
   'test/media.e2e-spec.ts',
+  // Calls MediaCleanup.reconcile(), which scans every media table.
+  'test/storage-lifecycle.e2e-spec.ts',
   'test/memory-to-message.e2e-spec.ts',
   'test/my-story-rich.e2e-spec.ts',
   'test/my-wishes-rich.e2e-spec.ts',

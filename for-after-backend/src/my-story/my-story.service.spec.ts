@@ -1,3 +1,5 @@
+import type { ConfigService } from '@nestjs/config';
+import { PAID_FEATURE, PAID_MEMORY_LINK_MESSAGE } from '../billing/billing-access.js';
 import {
   BadRequestException,
   type ExecutionContext,
@@ -101,6 +103,8 @@ const setup = () => {
     service: new MyStoryService(
       { ...tx, $transaction } as unknown as PrismaService,
       cleanup as unknown as MediaCleanup,
+      // Billing off: no trial question cap, no lock.
+      { get: () => undefined } as unknown as ConfigService,
     ),
   };
 };
@@ -722,4 +726,93 @@ describe('MyStoryController guards', () => {
       expect(new CustomerGuard().canActivate(ctx)).toBe(false);
     },
   );
+});
+
+// Trial Step 5: memory links during an enforced active trial. Billing on, real policy (billing-access), mocked rows.
+describe('MyStoryService memory links in the trial (Step 5)', () => {
+  const DAY = 86_400_000;
+  const later = () => new Date(Date.now() + 3 * DAY);
+  const accounts = {
+    trial: { createdAt: new Date(), trial: { startedAt: new Date(), endsAt: later() }, billingAccount: null },
+    paid: {
+      createdAt: new Date(),
+      trial: { startedAt: new Date(), endsAt: later() },
+      billingAccount: { plan: 'monthly', subscriptionStatus: 'active', cancelAtPeriodEnd: false, currentPeriodEnd: later() },
+    },
+    grandfathered: { createdAt: new Date('2025-01-01T00:00:00Z'), trial: { startedAt: new Date(), endsAt: later() }, billingAccount: null },
+  };
+  const ON = { BILLING_ENABLED: 'true', BILLING_ENFORCE_FROM: '2026-01-01T00:00:00Z' } as Record<string, string>;
+  const make = (account: keyof typeof accounts | 'billingOff', existing: object | null = { id: 'r1', deletedAt: null, textContent: 'Words.', memoryLinks: [{ memoryVaultItemId: MEM1 }] }) => {
+    const tx = {
+      // The User row lock, then (only for a new answer with words) the question count.
+      $queryRaw: vi.fn(async (strings: TemplateStringsArray) => (strings.join('').includes('count(*)') ? [{ n: 0 }] : [])),
+      user: { findUniqueOrThrow: vi.fn(async () => accounts[account === 'billingOff' ? 'trial' : account]) },
+      myStoryResponse: {
+        findUnique: vi.fn(async () => existing),
+        update: vi.fn(async () => ({ id: 'r1' })),
+        upsert: vi.fn(async () => ({ id: 'r1' })),
+        findUniqueOrThrow: vi.fn(async () => dbRow({ memoryLinks: [{ memoryVaultItem: { id: MEM1, title: 'M', category: 'OTHER' } }] })),
+      },
+      memoryVaultItem: { count: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) => where.id.in.length) },
+      myStoryMemoryLink: { deleteMany: vi.fn(async () => ({ count: 1 })), createMany: vi.fn(async () => ({ count: 0 })) },
+      customerActivity: { create: vi.fn(async () => ({})) },
+      draftRecovery: { deleteMany: vi.fn(async () => ({ count: 0 })) },
+    };
+    const prisma = { ...tx, $transaction: vi.fn((fn: (t: typeof tx) => unknown) => fn(tx)) };
+    const config = { get: (k: string) => (account === 'billingOff' ? undefined : ON[k]) };
+    const service = new MyStoryService(prisma as unknown as PrismaService, { purge: vi.fn() } as unknown as MediaCleanup, config as unknown as ConfigService);
+    return { tx, service };
+  };
+  const refused = async (p: Promise<unknown>) => {
+    const err = await p.then(() => null, (e: unknown) => e);
+    expect((err as { getResponse?: () => unknown })?.getResponse?.()).toEqual({
+      statusCode: 409,
+      error: 'Conflict',
+      code: PAID_FEATURE,
+      message: PAID_MEMORY_LINK_MESSAGE,
+    });
+  };
+
+  it('a new link (with a text change in the same save) is refused before anything is written', async () => {
+    const { tx, service } = make('trial');
+    await refused(service.save('lisa', prompt, { textContent: 'Changed.', memoryVaultItemIds: [MEM1, MEM2] }));
+    expect(tx.myStoryResponse.update).not.toHaveBeenCalled();
+    expect(tx.myStoryMemoryLink.deleteMany).not.toHaveBeenCalled();
+    expect(tx.myStoryMemoryLink.createMany).not.toHaveBeenCalled();
+  });
+
+  it('a replacement set is refused; a first answer made of links only is refused with no row created', async () => {
+    await refused(make('trial').service.save('lisa', prompt, { memoryVaultItemIds: [MEM2] }));
+    const fresh = make('trial', null);
+    await refused(fresh.service.save('lisa', prompt, { memoryVaultItemIds: [MEM1] }));
+    expect(fresh.tx.myStoryResponse.upsert).not.toHaveBeenCalled();
+  });
+
+  it('unchanged links in a text save are kept (any letter case); a text-only save leaves links alone', async () => {
+    const { tx, service } = make('trial');
+    await service.save('lisa', prompt, { textContent: 'Edited.', memoryVaultItemIds: [MEM1.toUpperCase()] });
+    expect(tx.myStoryResponse.update).toHaveBeenCalled();
+    const textOnly = make('trial');
+    await textOnly.service.save('lisa', prompt, { textContent: 'Edited.' });
+    expect(textOnly.tx.myStoryMemoryLink.deleteMany).not.toHaveBeenCalled();
+    expect(textOnly.tx.myStoryMemoryLink.createMany).not.toHaveBeenCalled();
+  });
+
+  it('removing links is allowed and only touches the links (no memory or file is deleted)', async () => {
+    const { tx, service } = make('trial');
+    await service.save('lisa', prompt, { memoryVaultItemIds: [] });
+    expect(tx.myStoryMemoryLink.deleteMany).toHaveBeenCalledWith({ where: { myStoryResponseId: 'r1' } });
+    expect(tx.myStoryMemoryLink.createMany).toHaveBeenCalledWith({ data: [] });
+    // The mocks have no memoryVaultItem/media writes: calling one would throw.
+    expect(Object.keys(tx.memoryVaultItem)).toEqual(['count']);
+  });
+
+  it.each(['paid', 'grandfathered', 'billingOff'] as const)('%s: new and replacement links stay open', async (account) => {
+    const { tx, service } = make(account);
+    await service.save('lisa', prompt, { memoryVaultItemIds: [MEM1, MEM2] });
+    await service.save('lisa', prompt, { memoryVaultItemIds: [MEM2] });
+    expect(tx.myStoryMemoryLink.createMany).toHaveBeenCalledTimes(2);
+    // Billing off reads nothing and takes no lock.
+    if (account === 'billingOff') expect(tx.$queryRaw).not.toHaveBeenCalled();
+  });
 });

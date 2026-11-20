@@ -36,6 +36,7 @@ import { MyStoryMediaService } from './my-story-media.service.js';
 import { StoryToMessageService } from './story-to-message.service.js';
 import {
   MyStoryPromptsQueryDto,
+  RemoveMemoryLinksDto,
   SaveMyStoryResponseDto,
 } from './dto/save-my-story-response.dto.js';
 import {
@@ -128,6 +129,16 @@ export class MyStoryController {
     @Body() dto: SaveMyStoryResponseDto,
   ): Promise<StoryResponse> {
     return this.story.save(user.id, prompt, dto);
+  }
+
+  // Trial Step 7: unlink memories only (a DELETE, so open after a trial ends; PUT stays gated). 200 with the answer.
+  @Delete(':promptKey/response/memories')
+  unlinkMemories(
+    @CurrentUser() user: SafeUser,
+    @Param('promptKey', PromptKeyPipe) prompt: MyStoryPrompt,
+    @Body() dto: RemoveMemoryLinksDto,
+  ): Promise<StoryResponse> {
+    return this.story.unlinkMemories(user.id, prompt, dto.memoryVaultItemIds);
   }
 
   // Also removes the answer's files and memory links (Phase 14B).

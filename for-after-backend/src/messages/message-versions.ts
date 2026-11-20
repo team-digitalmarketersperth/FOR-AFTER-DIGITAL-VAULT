@@ -1,6 +1,7 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import {
-  type MessageContentType,
+  MediaKind,
+  MessageContentType,
   MessageStatus,
   MessageVersionReason,
   type Prisma,
@@ -68,6 +69,20 @@ export async function lockOwnedDraft(
   if (row.status !== MessageStatus.DRAFT) throw new ConflictException(NOT_DRAFT);
   return row;
 }
+
+/**
+ * Trial Step 4: does this save or restore switch the message to a non-text format it doesn't already have? Only that is
+ * paid-only; keeping the current format (text edits to an older photo message) or going to TEXT never is.
+ */
+export const isNewNonTextFormat = (next: MessageContentType | undefined, current: MessageContentType) =>
+  next !== undefined && next !== MessageContentType.TEXT && next !== current;
+
+/**
+ * Updated Plans Step 4: the media a format itself requires. MIXED is 'any': it doesn't imply video (its actual files are
+ * checked by kind when each is uploaded or copied), so a Premium MIXED message of photos and audio is allowed.
+ */
+export const formatMediaKinds = (format: MessageContentType): readonly MediaKind[] | 'any' =>
+  format === MessageContentType.MIXED ? 'any' : format === MessageContentType.TEXT ? [] : [MediaKind[format]];
 
 /**
  * Records `after` as the next version when this save changed the content.

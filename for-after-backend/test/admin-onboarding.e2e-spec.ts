@@ -47,6 +47,7 @@ describe('Admin onboarding and SUPER_ADMIN (e2e, PostgreSQL)', () => {
 
   beforeAll(async () => {
     process.env.THROTTLE_KEY_PREFIX = `for_after:test_onboard_throttle:${run}:`;
+    process.env.BILLING_ENABLED = 'false'; // these tests are about billing off: never the developer .env
     const moduleRef = await Test.createTestingModule({
       imports: [ConfigModule.forRoot({ isGlobal: true }), PrismaModule, RedisModule, AuthModule, AdminModule, BillingModule],
     })
@@ -78,6 +79,7 @@ describe('Admin onboarding and SUPER_ADMIN (e2e, PostgreSQL)', () => {
 
   afterAll(async () => {
     delete process.env.THROTTLE_KEY_PREFIX;
+    delete process.env.BILLING_ENABLED;
     await prisma?.user.deleteMany({ where: { email: { in: Object.values(emails) } } });
     await db?.end();
     await app?.close();
@@ -136,6 +138,36 @@ describe('Admin onboarding and SUPER_ADMIN (e2e, PostgreSQL)', () => {
     await request(app.getHttpServer()).get(api('/admin/billing/accounts')).expect(401);
     await root.get(api('/admin/users')).expect(200);
     await root.get(api('/admin/access/admins')).expect(200);
+  });
+
+  it('billing off: recorded states still counted (never forced to zero); nothing-yet accounts read "no billing record"', async () => {
+    const day = 86_400_000;
+    const paid = await prisma.user.create({
+      data: {
+        email: `onboard.paid.${run}@example.test`,
+        passwordHash: 'x',
+        role: 'CUSTOMER',
+        billingAccount: {
+          create: { stripeCustomerId: `cus_onb${run}`, livemode: false, subscriptionStatus: 'active', plan: 'monthly', currentPeriodEnd: new Date(Date.now() + 10 * day), cancelAtPeriodEnd: false, syncedAt: new Date() },
+        },
+      },
+    });
+    const opened = await prisma.user.create({
+      data: { email: `onboard.opened.${run}@example.test`, passwordHash: 'x', role: 'CUSTOMER', billingAccount: { create: { stripeCustomerId: `cus_onc${run}`, livemode: false } } },
+    });
+    try {
+      const one = (await root.get(api('/admin/billing/accounts')).query({ accountId: paid.id }).expect(200)).body;
+      expect(one.enabled).toBe(false);
+      expect(one.summary).toMatchObject({ accounts: 1, verified: 1 });
+      expect(one.summary.states).toMatchObject({ paid_active: 1, trial_active: 0, no_billing_record: 0, trial_available: 0 });
+      expect(one.items[0]).toMatchObject({ state: 'paid_active', hasAccess: true, lastSyncedAt: expect.any(String) });
+      const none = (await root.get(api('/admin/billing/accounts')).query({ accountId: opened.id }).expect(200)).body;
+      expect(none.summary).toMatchObject({ accounts: 1, verified: 0 });
+      expect(none.summary.states).toMatchObject({ no_billing_record: 1, trial_available: 0 });
+      expect(JSON.stringify([one, none])).not.toMatch(/cus_|whsec|sk_|card|payment_method/);
+    } finally {
+      await prisma.user.deleteMany({ where: { id: { in: [paid.id, opened.id] } } });
+    }
   });
 
   it('create admin: SUPER_ADMIN only; names + email only; never SUPER_ADMIN; collisions never elevate; concurrent duplicates', async () => {

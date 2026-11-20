@@ -2,6 +2,9 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
+// Loaded here, in the import phase: NestFactory.create otherwise imports the Express adapter lazily inside the test,
+// so the 5 s test timeout measured module loading (0.3–3.8 s in plain Node, far more under load), not configureApp.
+import '@nestjs/platform-express';
 import session from 'express-session';
 import { configureApp } from './app.setup.js';
 

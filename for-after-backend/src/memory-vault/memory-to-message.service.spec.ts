@@ -1,5 +1,6 @@
+import { PAID_FEATURE, paidFeatureError } from '../billing/billing-access.js';
 import type { StorageQuota } from '../media/storage-quota.service.js';
-import { Logger, NotFoundException } from '@nestjs/common';
+import { ConflictException, Logger, NotFoundException } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
@@ -19,6 +20,7 @@ import {
   INVALID_MEMORY_MEDIA,
   MemoryToMessageService,
 } from './memory-to-message.service.js';
+import type { PaidFeatures } from '../billing/paid-features.service.js';
 
 const OWNER = 'owner-a';
 const R1 = '11111111-1111-4111-8111-111111111111';
@@ -96,6 +98,12 @@ const setup = () => {
     assertOwnedRecipients: vi.fn().mockResolvedValue(undefined),
     findOwnedById: vi.fn(async (_o: string, id: string) => ({ id })),
   };
+  // Trial Step 4: media allowed unless a test turns it off (then assertMedia refuses like the real one).
+  const features = {
+    mediaAllowed: vi.fn(async () => true),
+    mediaRefusal: vi.fn(async (): Promise<ConflictException | null> => null),
+    assertMedia: vi.fn(async () => undefined),
+  };
   // Phase 12C: within quota unless a test says otherwise.
   const quota = { reserve: vi.fn().mockResolvedValue(undefined) };
   const cleanup = {
@@ -115,11 +123,13 @@ const setup = () => {
     messages as unknown as MessagesService,
     quota as unknown as StorageQuota,
     { get: () => undefined } as unknown as ConfigService,
+    features as unknown as PaidFeatures,
   );
   const service = new MemoryToMessageService(prisma, snapshot);
   const created = () => message.create.mock.calls.at(-1)![0].data;
   const onlyPhotoOnMemory = () => (memoryFiles = [photo]);
   return {
+    features,
     quota,
     $transaction,
     onlyPhotoOnMemory,
@@ -423,6 +433,24 @@ describe('MemoryToMessageService', () => {
     );
     expect(t.message.create).not.toHaveBeenCalled();
     expect(t.storage.copyObject).not.toHaveBeenCalled();
+  });
+
+  it('Trial Step 4: copying files (or a non-text format) is checked first; refused, no draft, no copy, no reservation', async () => {
+    const t = setup();
+    t.features.assertMedia.mockRejectedValue(paidFeatureError());
+    const err = await t.service.createMessage(OWNER, 'v1', dto()).catch((e: unknown) => e);
+    expect((err as ConflictException).getResponse()).toMatchObject({ code: PAID_FEATURE });
+    expect(t.message.create).not.toHaveBeenCalled();
+    expect(t.storage.copyObject).not.toHaveBeenCalled();
+    expect(t.quota.reserve).not.toHaveBeenCalled();
+  });
+
+  it('Trial Step 4: a text-only copy (TEXT, no files) needs no paid access', async () => {
+    const t = setup();
+    t.features.assertMedia.mockRejectedValue(paidFeatureError());
+    await t.service.createMessage(OWNER, 'v1', dto({ contentType: 'TEXT', mediaAssetIds: [] }));
+    expect(t.features.assertMedia).not.toHaveBeenCalled();
+    expect(t.message.create).toHaveBeenCalled();
   });
 
   it('the same memory can make several independent messages', async () => {

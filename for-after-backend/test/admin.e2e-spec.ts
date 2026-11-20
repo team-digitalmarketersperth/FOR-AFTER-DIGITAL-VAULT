@@ -136,6 +136,10 @@ describe('Admin backend (e2e)', () => {
 
   beforeAll(async () => {
     Object.assign(process.env, {
+      // Explicit, not inherited from the developer's .env: these Customers write content as an un-gated account would,
+      // and the admin views under test don't depend on enforcement (billing states are still resolved and listed).
+      // Billing enforcement has its own suites (billing, trial-*, plan-tiers).
+      BILLING_ENABLED: 'false',
       RELEASE_QUEUE_NAME: releaseQueueName,
       RELEASE_RECONCILE_INTERVAL_SECONDS: '3600',
       DEATH_VERIFICATION_QUEUE_NAME: deathQueueName,
@@ -250,6 +254,7 @@ describe('Admin backend (e2e)', () => {
   });
 
   afterAll(async () => {
+    delete process.env.BILLING_ENABLED;
     await prisma?.user.deleteMany({
       where: { email: { in: Object.values(users) } },
     });
@@ -629,6 +634,7 @@ describe('Admin backend (e2e)', () => {
         lastName: 'Test',
         role: 'CUSTOMER',
         status: 'ACTIVE',
+        emailVerifiedAt: null,
         createdAt: expect.any(String),
         updatedAt: expect.any(String),
       });
@@ -659,6 +665,56 @@ describe('Admin backend (e2e)', () => {
       await agents.admin.get(api('/admin/users?status=GONE')).expect(400);
       await agents.admin.get(api('/admin/users?role=OWNER')).expect(400);
       await agents.admin.get(api('/admin/users?password=x')).expect(400);
+      await agents.admin.get(api('/admin/users?verification=maybe')).expect(400);
+    });
+
+    it('summary covers the whole filtered population, not the page; billing counts for SUPER_ADMIN only', async () => {
+      const noah = await userId(users.noah);
+      const now = Date.now();
+      await prisma.user.update({ where: { id: ids.lisa }, data: { emailVerifiedAt: new Date(now) } });
+      await prisma.user.update({
+        where: { id: noah },
+        data: { trial: { create: { startedAt: new Date(now - 3_600_000), endsAt: new Date(now + 86_400_000) } } },
+      });
+      try {
+        const scope = { search: `.${tag}@` };
+        const all = (await agents.admin.get(api('/admin/users')).query({ ...scope, limit: 2 }).expect(200)).body;
+        expect(all.items).toHaveLength(2);
+        expect(all.summary).toEqual({
+          generatedAt: expect.any(String),
+          total: 7,
+          active: 7,
+          emailVerified: 1,
+          customers: 3,
+        });
+        const lisa = (await agents.admin.get(api('/admin/users')).query({ search: users.lisa }).expect(200)).body.items[0];
+        expect(lisa.emailVerifiedAt).toEqual(expect.any(String));
+
+        const unverified = (
+          await agents.admin.get(api('/admin/users')).query({ ...scope, role: 'CUSTOMER', verification: 'unverified' }).expect(200)
+        ).body;
+        expect(unverified.items.map((u: { email: string }) => u.email).sort()).toEqual([users.noah, users.olga].sort());
+        expect(unverified.items.every((u: { emailVerifiedAt: unknown }) => u.emailVerifiedAt === null)).toBe(true);
+        expect(unverified.summary).toMatchObject({ total: 2, active: 2, emailVerified: 0, customers: 2 });
+        const verified = (await agents.admin.get(api('/admin/users')).query({ ...scope, verification: 'verified' }).expect(200)).body;
+        expect(verified.items.map((u: { id: string }) => u.id)).toEqual([ids.lisa]);
+
+        const admins = (await agents.admin.get(api('/admin/users')).query({ ...scope, role: 'ADMIN' }).expect(200)).body;
+        expect(admins.summary).toMatchObject({ total: 3, customers: 0 });
+
+        const root = await agents.root.get(api('/admin/users')).query({ ...scope, limit: 1 }).expect(200);
+        expect(root.headers['cache-control']).toBe('no-store');
+        expect(root.body.summary).toMatchObject({ total: 7, customers: 3, customersWithBillingRecord: 1 });
+        const rootNoah = (await agents.root.get(api('/admin/users')).query({ search: users.noah }).expect(200)).body;
+        expect(rootNoah.items[0].billing).toMatchObject({ state: 'trial_active' });
+        expect(rootNoah.summary.customersWithBillingRecord).toBe(1);
+        expect(JSON.stringify([all, root.body, rootNoah])).not.toMatch(
+          /passwordHash|twoFactorSecret|recoveryCode|token|sessionId|privateNote|textContent|Fictional private note|cus_/i,
+        );
+      } finally {
+        await prisma.user.update({ where: { id: ids.lisa }, data: { emailVerifiedAt: null } });
+        await prisma.customerTrial.deleteMany({ where: { userId: noah } });
+      }
     });
 
     it('detail: counts, no private content; view audited; 400 / 404', async () => {
@@ -945,6 +1001,161 @@ describe('Admin backend (e2e)', () => {
         metadata: { queue: 'message-release', attemptsMade: 1 },
       });
       release.mockRestore();
+    });
+  });
+
+  describe('death verification review queue (list + counts)', () => {
+    const NOTE = 'Fictional reporter note for the queue test.';
+    const owners: string[] = [];
+    const caseIds: Record<string, string> = {};
+    const now = Date.now();
+    const DAY = 86_400_000;
+    type Fixture = {
+      status: 'PENDING_VERIFICATION' | 'SAFEGUARD_ACTIVE' | 'READY_FOR_REVIEW' | 'VERIFIED' | 'REJECTED' | 'CANCELLED';
+      openedDaysAgo: number;
+      attempts?: number;
+      sent?: boolean;
+      required?: number;
+      reporters?: string[];
+    };
+    // One owner per case (one open case per account); reporters by email: two rows for one email are one person.
+    const FIXTURES: Record<string, Fixture> = {
+      queued: { status: 'PENDING_VERIFICATION', openedDaysAgo: 730 },
+      attempted: { status: 'PENDING_VERIFICATION', openedDaysAgo: 3, attempts: 2 },
+      safeguard: { status: 'SAFEGUARD_ACTIVE', openedDaysAgo: 2, sent: true },
+      readyShort: { status: 'READY_FOR_REVIEW', openedDaysAgo: 20, sent: true, required: 2, reporters: ['a', 'a'] },
+      readyMet: { status: 'READY_FOR_REVIEW', openedDaysAgo: 21, sent: true, required: 1, reporters: ['b'] },
+      cancelled: { status: 'CANCELLED', openedDaysAgo: 30, sent: true },
+      rejected: { status: 'REJECTED', openedDaysAgo: 31, sent: true },
+      verified: { status: 'VERIFIED', openedDaysAgo: 32, sent: true },
+    };
+    const mine = (items: { caseId: string; accountHolder: { email: string } }[]) =>
+      items.filter((i) => i.accountHolder.email.endsWith(`.${tag}@example.test`));
+
+    beforeAll(async () => {
+      for (const [key, f] of Object.entries(FIXTURES)) {
+        const owner = await prisma.user.create({
+          data: { email: at(`dvq.${key}`), passwordHash: 'x', role: 'CUSTOMER', firstName: 'Fictional', lastName: key },
+        });
+        owners.push(owner.id);
+        // One report per contact row per case; two rows sharing an email are still one person.
+        const reporters = f.reporters ?? ['z'];
+        const contacts: { id: string }[] = [];
+        for (const r of reporters) {
+          contacts.push(
+            await prisma.trustedContact.create({
+              data: { ownerUserId: owner.id, firstName: 'Reporter', email: `${r}.${tag}@example.test` },
+            }),
+          );
+        }
+        const openedAt = new Date(now - f.openedDaysAgo * DAY);
+        const sentAt = f.sent ? new Date(openedAt.getTime() + 60_000) : null;
+        const kase = await prisma.deathVerificationCase.create({
+          data: {
+            ownerUserId: owner.id,
+            status: f.status,
+            openedAt,
+            requiredConfirmations: f.required ?? 1,
+            safetyNoticeAttemptCount: f.attempts ?? (f.sent ? 1 : 0),
+            safetyNoticeSentAt: sentAt,
+            safeguardStartedAt: sentAt,
+            safeguardEndsAt: sentAt && new Date(sentAt.getTime() + (f.status === 'SAFEGUARD_ACTIVE' ? 14 : 1) * DAY),
+            reports: {
+              create: reporters.map((r, i) => ({
+                reportedByTrustedContactId: contacts[i]!.id,
+                reporterFirstNameSnapshot: 'Reporter',
+                reporterEmailNormalized: `${r}.${tag}@example.test`,
+                note: NOTE,
+              })),
+            },
+          },
+        });
+        caseIds[key] = kase.id;
+      }
+    });
+    afterAll(async () => {
+      await prisma?.user.deleteMany({ where: { id: { in: owners } } });
+    });
+
+    it('counts cover the whole search scope (not the page, not the status tab) and reconcile with the total', async () => {
+      const before = await prisma.deathVerificationCase.findMany({ where: { id: { in: Object.values(caseIds) } }, select: { id: true, status: true, updatedAt: true } });
+      const auditBefore = await prisma.auditLog.count();
+      const caseEventsBefore = await prisma.deathVerificationAuditEvent.count();
+
+      const all = (await agents.admin.get(api('/admin/death-verifications')).query({ search: `.${tag}@`, limit: 2 }).expect(200));
+      expect(all.headers['cache-control']).toBe('no-store');
+      expect(all.body.items).toHaveLength(2);
+      expect(all.body.counts).toEqual({
+        PENDING_VERIFICATION: 2,
+        SAFEGUARD_ACTIVE: 1,
+        READY_FOR_REVIEW: 2,
+        VERIFIED: 1,
+        REJECTED: 1,
+        CANCELLED: 1,
+      });
+      const sum = Object.values(all.body.counts as Record<string, number>).reduce((a, b) => a + b, 0);
+      expect(sum).toBe(all.body.pagination.total);
+      expect(all.body.readyAwaitingConfirmations).toBe(1);
+      expect(Date.parse(all.body.evaluatedAt)).not.toBeNaN();
+
+      const ready = (await agents.admin.get(api('/admin/death-verifications')).query({ search: `.${tag}@`, status: 'READY_FOR_REVIEW' }).expect(200)).body;
+      expect(ready.pagination.total).toBe(2);
+      expect(ready.counts).toEqual(all.body.counts);
+      expect(ready.items.every((i: { status: string }) => i.status === 'READY_FOR_REVIEW')).toBe(true);
+
+      // Reading changes nothing: no status, timestamps, audit rows or case events.
+      const after = await prisma.deathVerificationCase.findMany({ where: { id: { in: Object.values(caseIds) } }, select: { id: true, status: true, updatedAt: true } });
+      expect(after).toEqual(expect.arrayContaining(before));
+      expect(await prisma.auditLog.count()).toBe(auditBefore);
+      expect(await prisma.deathVerificationAuditEvent.count()).toBe(caseEventsBefore);
+    });
+
+    it('rows: recorded notice state, report count, confirmations by distinct person; no private fields; old open cases still listed', async () => {
+      const res = (await agents.admin.get(api('/admin/death-verifications')).query({ search: `.${tag}@`, limit: 100 }).expect(200)).body;
+      const row = (key: string) => res.items.find((i: { caseId: string }) => i.caseId === caseIds[key]);
+      expect(row('queued')).toMatchObject({ status: 'PENDING_VERIFICATION', safetyNotice: 'queued', safeguardEndsAt: null, reportCount: 1 });
+      expect(row('attempted').safetyNotice).toBe('attempted');
+      expect(row('safeguard')).toMatchObject({ safetyNotice: 'provider_accepted', safeguardStartedAt: expect.any(String) });
+      expect(row('readyShort')).toMatchObject({ reportCount: 2, receivedConfirmations: 1, requiredConfirmations: 2, confirmationRequirementMet: false });
+      expect(row('readyMet')).toMatchObject({ reportCount: 1, confirmationRequirementMet: true });
+      // The summary count follows each row's own rule (distinct reporters per case), over every ready case.
+      const short = res.items.filter((i: { status: string; confirmationRequirementMet: boolean }) => i.status === 'READY_FOR_REVIEW' && !i.confirmationRequirementMet);
+      expect(res.readyAwaitingConfirmations).toBe(short.length);
+      expect(row('cancelled').safetyNotice).toBe('provider_accepted');
+      // Opened two years ago and still unresolved: no default date window hides it.
+      expect(row('queued')).toBeDefined();
+      // Newest first, id tie-break: the two-year-old case is last.
+      expect(res.items.at(-1).caseId).toBe(caseIds.queued);
+      expect(Object.keys(row('queued')).sort()).toEqual(
+        ['accountHolder', 'caseId', 'confirmationRequirementMet', 'openedAt', 'receivedConfirmations', 'reportCount', 'requiredConfirmations', 'safeguardEndsAt', 'safeguardStartedAt', 'safetyNotice', 'status'].sort(),
+      );
+      expect(JSON.stringify(res)).not.toMatch(new RegExp(`${NOTE}|[abz]\\.${tag}@|reporterEmail|reporterMobile|passwordHash|adminDecisionNote`));
+    });
+
+    it('search: account email/name and a full case id; bounded and validated', async () => {
+      const byId = (await agents.admin.get(api('/admin/death-verifications')).query({ search: caseIds.readyMet }).expect(200)).body;
+      expect(byId.items.map((i: { caseId: string }) => i.caseId)).toEqual([caseIds.readyMet]);
+      expect(byId.counts.READY_FOR_REVIEW).toBe(1);
+      const byName = (await agents.admin.get(api('/admin/death-verifications')).query({ search: 'READYSHORT' }).expect(200)).body;
+      expect(mine(byName.items).map((i) => i.caseId)).toEqual([caseIds.readyShort]);
+      await agents.admin.get(api('/admin/death-verifications')).query({ search: 'x'.repeat(255) }).expect(400);
+      await agents.admin.get(api('/admin/death-verifications?limit=101')).expect(400);
+    });
+
+    it('list is admin-only; a Ready row is still re-checked by the existing verify rule', async () => {
+      await agents.lisa.get(api('/admin/death-verifications')).expect(401);
+      await http().get(api('/admin/death-verifications')).expect(401);
+      const refused = await agents.admin
+        .post(api(`/admin/death-verifications/${caseIds.readyShort}/verify`))
+        .send({ verifiedDeathAt: new Date(now - DAY).toISOString(), confirmVerification: true })
+        .expect(409);
+      expect(refused.body.message).toMatch(/confirmation/i);
+      expect((await prisma.deathVerificationCase.findUniqueOrThrow({ where: { id: caseIds.readyShort } })).status).toBe('READY_FOR_REVIEW');
+      const cancelled = await agents.admin
+        .post(api(`/admin/death-verifications/${caseIds.cancelled}/verify`))
+        .send({ verifiedDeathAt: new Date(now - DAY).toISOString(), confirmVerification: true })
+        .expect(409);
+      expect(cancelled.body.message).toBeTruthy();
     });
   });
 

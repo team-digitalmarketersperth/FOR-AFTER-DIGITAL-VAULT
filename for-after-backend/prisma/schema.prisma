@@ -66,6 +66,7 @@ model User {
   supportRequests  SupportRequest[]
   trial            CustomerTrial?
   billingAccount   BillingAccount?
+  aiUsage          AiUsage[]
 
   // Phase 10: history. At most one open (or VERIFIED) case per Customer,
   // enforced by a partial unique index in the migration.
@@ -1441,6 +1442,40 @@ model CustomerTrial {
   @@index([endsAt])
 }
 
+// Updated Plans Step 5: AI companion allowance accounting. One row per metered request: a reservation taken
+// before the provider call, then USED (a complete reply was delivered) or RELEASED (failed, empty, cancelled,
+// truncated). Metadata only: never a prompt, reply, page text or any customer content.
+enum AiUsageStatus {
+  RESERVED
+  USED
+  RELEASED
+}
+
+model AiUsage {
+  id        String        @id @default(uuid()) @db.Uuid
+  userId    String        @db.Uuid
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // The client's idempotency key for one Send; bound to the account by the unique pair below.
+  requestId String        @db.Uuid
+  // Server-derived bucket: "trial:<CustomerTrial.id>" or "month:YYYY-MM" (UTC). Shared by every tier and interval.
+  period    String
+  status    AiUsageStatus @default(RESERVED)
+  // A RESERVED row counts until this instant (after the request's hard provider deadline); it can only settle before.
+  expiresAt DateTime
+  settledAt DateTime?
+  createdAt DateTime      @default(now())
+
+  @@unique([userId, requestId])
+  @@index([userId, period, status])
+}
+
+// Updated Plans Step 2: the paid product tiers a subscription can map to. The Free Trial is not stored here
+// (CustomerTrial); billing-off and grandfathered accounts are exemptions, never tiers.
+enum PaidTier {
+  PREMIUM
+  COMPLETE
+}
+
 // The Customer's Stripe mapping and last verified subscription state, copied
 // from Stripe's own object (never from a browser). One per account.
 model BillingAccount {
@@ -1450,7 +1485,15 @@ model BillingAccount {
   stripeCustomerId     String    @unique
   livemode             Boolean
   stripeSubscriptionId String?   @unique
+  // The billing INTERVAL ("monthly" | "annual" | "unknown"), despite its name: kept for existing contracts.
   plan                 String?
+  // Updated Plans Step 2: the paid PRODUCT tier, separate from the interval. Set by the webhook sync from the configured
+  // price mapping (Step 6). Null = not mapped; legacy rows are not backfilled without an approved mapping.
+  tier                 PaidTier?
+  // Updated Plans Step 6: the current subscription's price matched no configured price (or several items), and it is
+  // not the unmapped subscription the account already held. Grants no paid access until resolved; the tier is kept as
+  // stored, never invented. False for every row synced before Step 6 (their access is preserved).
+  priceUnresolved      Boolean   @default(false)
   // Stripe's subscription status as received (active, past_due, canceled, ...).
   subscriptionStatus   String?
   cancelAtPeriodEnd    Boolean   @default(false)

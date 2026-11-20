@@ -9,7 +9,10 @@ import { Prisma } from '../generated/prisma/client.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
 import { CreateTrustedContactDto } from './dto/create-trusted-contact.dto.js';
 import type { TrustedContactInvitationsService } from './trusted-contact-invitations.service.js';
+import type { ConfigService } from '@nestjs/config';
+import { TRIAL_CONTACT_LIMIT, TRIAL_LIMIT } from '../billing/billing-access.js';
 import {
+  MAX_REACHED,
   MAX_TRUSTED_CONTACTS,
   TrustedContactsService,
 } from './trusted-contacts.service.js';
@@ -32,7 +35,16 @@ const noMatch = () =>
     clientVersion: 'test',
   });
 
-const setup = () => {
+// Billing on (Trial Step 3): an account created after enforcement; `user` is its billing rows.
+const BILLING_ON = { BILLING_ENABLED: 'true', BILLING_ENFORCE_FROM: '2026-01-01T00:00:00.000Z' };
+const account = (trialEndsAt: Date | null, subscription: object | null = null) => ({
+  createdAt: new Date('2026-06-01T00:00:00.000Z'),
+  trial: trialEndsAt && { startedAt: new Date(trialEndsAt.getTime() - 7 * 86_400_000), endsAt: trialEndsAt },
+  billingAccount: subscription,
+});
+const inTrial = () => account(new Date(Date.now() + 86_400_000));
+
+const setup = (env: Record<string, string> = {}, owner: object = inTrial()) => {
   const trustedContact = {
     create: vi.fn().mockResolvedValue(row),
     findMany: vi.fn().mockResolvedValue([row]),
@@ -41,13 +53,15 @@ const setup = () => {
     count: vi.fn().mockResolvedValue(0),
   };
   const $queryRaw = vi.fn().mockResolvedValue([]);
+  const user = { findUniqueOrThrow: vi.fn().mockResolvedValue(owner) };
   // Recent changes (customer activity): recorded, not asserted here.
   const customerActivity = { create: vi.fn(async () => ({})) };
-  const db = { trustedContact, $queryRaw, customerActivity };
+  const db = { trustedContact, $queryRaw, customerActivity, user };
   const invitations = { send: vi.fn().mockResolvedValue(true) };
   return {
     trustedContact,
     $queryRaw,
+    user,
     invitations,
     service: new TrustedContactsService(
       {
@@ -55,6 +69,7 @@ const setup = () => {
         $transaction: (fn: (tx: typeof db) => unknown) => fn(db),
       } as unknown as PrismaService,
       invitations as unknown as TrustedContactInvitationsService,
+      { get: (key: string) => env[key] } as unknown as ConfigService,
     ),
   };
 };
@@ -125,6 +140,43 @@ describe('TrustedContactsService', () => {
     ).rejects.toThrow(ConflictException);
     expect(trustedContact.create).not.toHaveBeenCalled();
     expect(invitations.send).not.toHaveBeenCalled();
+  });
+
+  describe('trial cap (Step 3): one live contact during an enforced active trial', () => {
+    it('active trial, none yet: allowed; the cap is read after the User row lock', async () => {
+      const { trustedContact, $queryRaw, user, service } = setup(BILLING_ON);
+      await service.create('owner-a', { firstName: 'David', mobile: '+61400000000' });
+      expect($queryRaw.mock.invocationCallOrder[0]).toBeLessThan(user.findUniqueOrThrow.mock.invocationCallOrder[0]);
+      expect(trustedContact.create).toHaveBeenCalled();
+    });
+
+    it('active trial with one live contact (any invitation state): 409 TRIAL_LIMIT before any row or invitation', async () => {
+      const { trustedContact, invitations, service } = setup(BILLING_ON);
+      trustedContact.count.mockResolvedValue(1);
+      const err = await service.create('owner-a', { firstName: 'Second', email: 'b@example.com' }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ConflictException);
+      expect((err as ConflictException).getResponse()).toMatchObject({ code: TRIAL_LIMIT, message: TRIAL_CONTACT_LIMIT });
+      expect(trustedContact.create).not.toHaveBeenCalled();
+      expect(invitations.send).not.toHaveBeenCalled();
+    });
+
+    it('two live contacts from before the trial: the existing two-contact refusal (no plan would help), no TRIAL_LIMIT', async () => {
+      const { trustedContact, service } = setup(BILLING_ON);
+      trustedContact.count.mockResolvedValue(MAX_TRUSTED_CONTACTS);
+      const err = await service.create('owner-a', { firstName: 'Third', mobile: '+61400000000' }).catch((e: unknown) => e);
+      expect((err as ConflictException).getResponse()).toMatchObject({ message: MAX_REACHED });
+    });
+
+    it.each([
+      ['billing off', {}, inTrial()],
+      ['paid (wins over active trial dates)', BILLING_ON, account(new Date(Date.now() + 86_400_000), { plan: 'monthly', subscriptionStatus: 'active', cancelAtPeriodEnd: false, currentPeriodEnd: new Date(Date.now() + 86_400_000) })],
+      ['grandfathered', BILLING_ON, { ...inTrial(), createdAt: new Date('2025-12-01T00:00:00.000Z') }],
+    ])('%s: a second contact is allowed (existing max of two unchanged)', async (_, env, owner) => {
+      const { trustedContact, service } = setup(env, owner);
+      trustedContact.count.mockResolvedValue(1);
+      await service.create('owner-a', { firstName: 'Second', mobile: '+61400000000' });
+      expect(trustedContact.create).toHaveBeenCalled();
+    });
   });
 
   it('create with an email sends the invitation; mobile-only does not (no SMS)', async () => {

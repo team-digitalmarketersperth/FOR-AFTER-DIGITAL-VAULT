@@ -85,7 +85,7 @@ export class AdminUsersController {
 
   @Get()
   async list(@Query() query: AdminUserListQueryDto, @Req() req: Request) {
-    const page = await this.admin.listUsers(query);
+    const page = await this.admin.listUsers(query, { billing: req.user!.role === UserRole.SUPER_ADMIN });
     return { ...page, items: await this.withBilling(req, page.items) };
   }
 

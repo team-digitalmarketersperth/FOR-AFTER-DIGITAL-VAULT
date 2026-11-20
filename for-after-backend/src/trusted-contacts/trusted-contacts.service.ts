@@ -4,6 +4,14 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import {
+  billingPolicy,
+  type BillingPolicy,
+  TRIAL_CONTACT_LIMIT,
+  trialCap,
+  trialLimitError,
+} from '../billing/billing-access.js';
 import {
   Prisma,
   TrustedContactInvitationStatus,
@@ -70,10 +78,15 @@ const toData = (dto: UpdateTrustedContactDto) => ({
 
 @Injectable()
 export class TrustedContactsService {
+  private readonly policy: BillingPolicy;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly invitations: TrustedContactInvitationsService,
-  ) {}
+    config: ConfigService,
+  ) {
+    this.policy = billingPolicy((key) => config.get<string>(key));
+  }
 
   // Every read and write goes through this filter: ownership is part of the
   // query itself, never checked after fetching by id alone.
@@ -101,6 +114,9 @@ export class TrustedContactsService {
       if (active >= MAX_TRUSTED_CONTACTS) {
         throw new ConflictException(MAX_REACHED);
       }
+      // Trial Step 3: every live contact counts, whatever its invitation (not sent, pending, accepted, declined).
+      const cap = this.policy.enabled ? await trialCap(tx, ownerUserId, this.policy, 'trustedContacts') : null;
+      if (cap !== null && active >= cap) throw trialLimitError(TRIAL_CONTACT_LIMIT);
       const created = await tx.trustedContact.create({
         data: { ...toData(dto), firstName: dto.firstName, ownerUserId },
         select: { id: true },

@@ -30,6 +30,10 @@ describe('Assistant (e2e, Groq mocked)', () => {
   beforeAll(async () => {
     process.env.GROQ_API_KEY = 'e2e-fake-key';
     process.env.ASSISTANT_USER_LIMIT_PER_HOUR = '4';
+    // The app-wide limits live in the shared test Redis: other e2e files running in parallel (ai-allowance) also count
+    // there, so this file sets them explicitly high; it tests the per-Customer limit only.
+    process.env.ASSISTANT_GLOBAL_LIMIT_PER_MINUTE = '1000';
+    process.env.ASSISTANT_MAX_CONCURRENT = '50';
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: string, init: RequestInit) => {
@@ -69,6 +73,8 @@ describe('Assistant (e2e, Groq mocked)', () => {
     vi.unstubAllGlobals();
     delete process.env.GROQ_API_KEY;
     delete process.env.ASSISTANT_USER_LIMIT_PER_HOUR;
+    delete process.env.ASSISTANT_GLOBAL_LIMIT_PER_MINUTE;
+    delete process.env.ASSISTANT_MAX_CONCURRENT;
   });
 
   const customer = async () => {

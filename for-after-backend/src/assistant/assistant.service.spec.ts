@@ -2,6 +2,8 @@ import { HttpException, Logger } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import type { RedisService } from '../redis/redis.service.js';
 import type { AssistantMetrics } from './assistant-metrics.js';
+import { ConflictException, ServiceUnavailableException } from '@nestjs/common';
+import { AI_ALLOWANCE_EXHAUSTED, AI_REQUEST_DUPLICATE, AI_USAGE_UNRECORDED, type AiUsageService } from './ai-usage.service.js';
 import { AssistantService, DEFAULT_GROQ_MODEL, LIMITS, readMarkers, type AssistantRequest } from './assistant.service.js';
 
 // Just the Redis commands the assistant uses, in memory (no TTL clock needed here).
@@ -33,6 +35,14 @@ const memoryRedis = () => {
       return chain;
     },
     zRem: vi.fn(async (k: string, v: string) => (z(k).delete(v) ? 1 : 0)),
+    // Updated Plans Step 5: the single-use request id claim.
+    keys: new Set<string>(),
+    set: vi.fn(async (k: string, _v: string, o: { NX?: boolean }) => {
+      if (client.fail) throw new Error('redis down');
+      if (o?.NX && client.keys.has(k)) return null;
+      client.keys.add(k);
+      return 'OK';
+    }),
   };
   return { client, counters, inflight: () => z('for_after:assistant:inflight').size };
 };
@@ -55,17 +65,24 @@ const story: AssistantRequest = {
 const setup = (env?: Record<string, string>) => {
   const redis = memoryRedis();
   const metrics = { request: vi.fn(async () => undefined), attempt: vi.fn(async () => undefined) };
+  // Unmetered unless a test says otherwise (reserve → null).
+  const usage = {
+    reserve: vi.fn(async (): Promise<string | null> => null),
+    settle: vi.fn(async () => undefined),
+    release: vi.fn(async () => undefined),
+  };
   const service = new AssistantService(
     config(env),
     { client: redis.client } as unknown as RedisService,
     metrics as unknown as AssistantMetrics,
+    usage as unknown as AiUsageService,
   );
   const fetch = vi.fn<typeof globalThis.fetch>();
   vi.stubGlobal('fetch', fetch);
   const logs: string[] = [];
   vi.spyOn(Logger.prototype, 'log').mockImplementation((m: unknown) => void logs.push(String(m)));
   vi.spyOn(Logger.prototype, 'warn').mockImplementation((m: unknown) => void logs.push(String(m)));
-  return { redis, service, fetch, logs, metrics };
+  return { redis, service, fetch, logs, metrics, usage };
 };
 const sent = (fetch: ReturnType<typeof vi.fn>) => JSON.parse((fetch.mock.calls[0][1] as RequestInit).body as string);
 const statusOf = (p: Promise<unknown>) =>
@@ -384,5 +401,90 @@ describe('AI Operations recording (metadata only)', () => {
     await service.reply('user-123', story);
     const recorded = JSON.stringify([metrics.request.mock.calls, metrics.attempt.mock.calls]);
     expect(recorded).not.toMatch(/user-123|red bicycle|Private reply|Earlier turn|childhood|test-key/);
+  });
+});
+
+describe('AI allowance lifecycle (Updated Plans Step 5)', () => {
+  const metered = (t: ReturnType<typeof setup>) => t.usage.reserve.mockResolvedValue('res-1');
+  const req = (requestId: string, over: Partial<AssistantRequest> = {}): AssistantRequest => ({ ...ask, requestId, ...over });
+
+  it('a complete reply settles its reservation exactly once and releases nothing', async () => {
+    const t = setup();
+    metered(t);
+    t.fetch.mockResolvedValueOnce(ok());
+    await t.service.reply('u1', req('00000000-0000-4000-8000-000000000001'));
+    expect(t.usage.reserve).toHaveBeenCalledWith('u1', '00000000-0000-4000-8000-000000000001', 55_000);
+    expect(t.usage.settle).toHaveBeenCalledTimes(1);
+    expect(t.usage.release).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['truncated (finish=length): shown, not charged', () => ok('Cut short', 'length'), 200],
+    ['empty (markers only)', () => ok('[DRAFT]'), 502],
+    ['provider failure', () => status(500), 502],
+    ['provider refused the request', () => status(400), 503],
+  ])('%s → released, never settled', async (_, response, code) => {
+    const t = setup();
+    metered(t);
+    t.fetch.mockResolvedValue(response());
+    expect(await statusOf(t.service.reply('u1', req(crypto.randomUUID())))).toBe(code);
+    expect(t.usage.settle).not.toHaveBeenCalled();
+    expect(t.usage.release).toHaveBeenCalledWith('res-1');
+  });
+
+  it('cancelled by the browser → released, never settled', async () => {
+    const t = setup();
+    metered(t);
+    const gone = new AbortController();
+    t.fetch.mockImplementation(async (_u, init) => {
+      gone.abort();
+      throw Object.assign(new Error('aborted'), { name: (init as RequestInit).signal?.aborted ? 'AbortError' : 'AbortError' });
+    });
+    await t.service.reply('u1', req(crypto.randomUUID()), gone.signal).catch(() => undefined);
+    expect(t.usage.settle).not.toHaveBeenCalled();
+    expect(t.usage.release).toHaveBeenCalledWith('res-1');
+  });
+
+  it('provider success then settlement failure: 503 AI_USAGE_UNRECORDED, reply not shown, nothing released, no second call', async () => {
+    const t = setup();
+    metered(t);
+    t.usage.settle.mockRejectedValue(new ServiceUnavailableException({ code: AI_USAGE_UNRECORDED, message: 'x' }));
+    t.fetch.mockImplementation(async () => ok());
+    const err = await t.service.reply('u1', req(crypto.randomUUID())).catch((e: unknown) => e);
+    expect((err as HttpException).getStatus()).toBe(503);
+    expect(((err as HttpException).getResponse() as { code: string }).code).toBe(AI_USAGE_UNRECORDED);
+    expect(t.usage.release).not.toHaveBeenCalled();
+    expect(t.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('allowance exhausted: 409 before any provider call; the in-flight slot is never taken', async () => {
+    const t = setup();
+    t.usage.reserve.mockRejectedValue(new ConflictException({ code: AI_ALLOWANCE_EXHAUSTED, message: 'used' }));
+    const err = await t.service.reply('u1', req(crypto.randomUUID())).catch((e: unknown) => e);
+    expect((err as HttpException).getStatus()).toBe(409);
+    expect(t.fetch).not.toHaveBeenCalled();
+    expect(t.redis.inflight()).toBe(0);
+    expect(t.metrics.request).toHaveBeenCalledWith('dashboard', 'ask', 'allowance_exhausted', expect.any(Number));
+  });
+
+  it('a reused request id is refused (409 AI_REQUEST_DUPLICATE) with no reservation or call, for any account; ids are per account', async () => {
+    const t = setup();
+    t.fetch.mockImplementation(async () => ok());
+    const id = '00000000-0000-4000-8000-000000000009';
+    await t.service.reply('u1', req(id));
+    const err = await t.service.reply('u1', req(id)).catch((e: unknown) => e);
+    expect(((err as HttpException).getResponse() as { code: string }).code).toBe(AI_REQUEST_DUPLICATE);
+    expect(t.usage.reserve).toHaveBeenCalledTimes(1);
+    expect(t.fetch).toHaveBeenCalledTimes(1);
+    await t.service.reply('u2', req(id)); // another account, same id: its own request
+    expect(t.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('the hourly abuse limit is still a separate 429, checked first', async () => {
+    const t = setup({ ASSISTANT_USER_LIMIT_PER_HOUR: '1' });
+    t.fetch.mockImplementation(async () => ok());
+    await t.service.reply('u1', req(crypto.randomUUID()));
+    expect(await statusOf(t.service.reply('u1', req(crypto.randomUUID())))).toBe(429);
+    expect(t.usage.reserve).toHaveBeenCalledTimes(1);
   });
 });

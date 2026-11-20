@@ -1,9 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
+import { PaidFeatures } from '../billing/paid-features.service.js';
 import {
   MediaAssetStatus,
   MediaKind,
+  MessageContentType,
   MessageStatus,
 } from '../generated/prisma/client.js';
 import { MIME_TYPES } from '../media/dto/create-media-upload.dto.js';
@@ -24,7 +26,7 @@ import { recordActivity } from '../activity/customer-activity.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { SupportedContentType } from './dto/create-message.dto.js';
 import { type MessageResponse, MessagesService } from './messages.service.js';
-import { firstVersion } from './message-versions.js';
+import { firstVersion, formatMediaKinds } from './message-versions.js';
 
 /** A READY file of the source (memory, story answer) to copy into the message. */
 export type SnapshotSource = StoredRef & {
@@ -63,6 +65,7 @@ export class MessageSnapshotService {
     private readonly messages: MessagesService,
     private readonly quota: StorageQuota,
     config: ConfigService,
+    private readonly features: PaidFeatures,
   ) {
     this.scanTimeoutMs = mediaSettings(config).scanTimeoutMs;
   }
@@ -72,6 +75,14 @@ export class MessageSnapshotService {
     draft: SnapshotDraft,
   ): Promise<MessageResponse> {
     await this.messages.assertOwnedRecipients(ownerUserId, draft.recipientIds);
+    // Trial Step 4: the one conversion path (memory, story, wish → message). Copying files or a non-text format is
+    // paid-only, so existing media can't be carried into a message during the trial; a text-only copy is allowed.
+    // Updated Plans Step 4: by kind: every copied file's own (server-recorded) kind plus what the format requires.
+    if (draft.media.length || draft.contentType !== MessageContentType.TEXT) {
+      const format = formatMediaKinds(draft.contentType);
+      const kinds = [...new Set([...draft.media.map((m) => m.kind), ...(format === 'any' ? [] : format)])];
+      await this.features.assertMedia(ownerUserId, kinds.length ? kinds : 'any');
+    }
 
     // New rows at the normal message paths, ids only.
     const messageId = randomUUID();

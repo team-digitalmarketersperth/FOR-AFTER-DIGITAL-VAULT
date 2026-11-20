@@ -1,4 +1,11 @@
+import { ServiceUnavailableException } from '@nestjs/common';
 import { MediaStorageProvider } from '../../generated/prisma/client.js';
+
+/**
+ * The provider refused for its rate limit (after the SDK's own retries): the
+ * same generic 503 for clients, but MediaCleanup stops its batch on it.
+ */
+export class MediaStorageThrottled extends ServiceUnavailableException {}
 
 /** What the provider reports about an uploaded file. */
 export type StoredObject = {

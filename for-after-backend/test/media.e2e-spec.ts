@@ -26,6 +26,8 @@ describe('Media (e2e, PostgreSQL, fake provider)', () => {
   let app: NestExpressApplication;
   let prisma: PrismaService;
   let cleanup: MediaCleanup;
+  // Past every test row's settle time (upload token + upload in flight + scan lease).
+  const settled = () => new Date(Date.now() + 90 * 60_000);
   const run = Date.now();
   const emails = ['lisa', 'john', 'admin'].map(
     (name) => `media.${name}.${run}@example.test`,
@@ -283,7 +285,8 @@ describe('Media (e2e, PostgreSQL, fake provider)', () => {
       .expect(400);
     const row = await rowOf(id);
     expect(row.status).toBe('FAILED');
-    expect(row.storageDeletedAt).toBeInstanceOf(Date);
+    // Removed at once; recorded only once the path has settled (no token can re-upload).
+    expect(row.storageDeletedAt).toBeNull();
     expect(storage.files.has(fileId)).toBe(false);
     await lisa
       .post(`${base}/${id}/complete`)
@@ -316,7 +319,8 @@ describe('Media (e2e, PostgreSQL, fake provider)', () => {
       const row = await rowOf(id);
       expect(row.status).toBe('FAILED');
       expect(row.uploadedAt).toBeNull();
-      expect(row.storageDeletedAt).toBeInstanceOf(Date);
+      // Removed at once; recorded only once the path has settled (no token can re-upload).
+      expect(row.storageDeletedAt).toBeNull();
       expect(storage.files.has(fileId)).toBe(false);
       // The same provider file can never be retried into READY.
       await lisa
@@ -425,7 +429,8 @@ describe('Media (e2e, PostgreSQL, fake provider)', () => {
     await lisa.delete(`${base}/${mediaId}`).expect(204);
     const row = await rowOf(mediaId);
     expect(row.deletedAt).toBeInstanceOf(Date);
-    expect(row.storageDeletedAt).toBeInstanceOf(Date);
+    // Removed at once; recorded only once the path has settled (no token can re-upload).
+    expect(row.storageDeletedAt).toBeNull();
     expect(storage.deleteObject).toHaveBeenCalledWith(
       expect.objectContaining({
         storageKey: row.storageKey,
@@ -465,14 +470,14 @@ describe('Media (e2e, PostgreSQL, fake provider)', () => {
     expect(row.storageDeletedAt).toBeNull();
     expect(storage.files.has(fileId)).toBe(true);
 
-    // A later reconcile run (after the upload token's lifetime) retries.
-    await cleanup.reconcile(new Date(Date.now() + 11 * 60_000));
+    // A later reconcile run (after the path has settled) retries.
+    await cleanup.reconcile(settled());
     row = await rowOf(id);
     expect(row.storageDeletedAt).toBeInstanceOf(Date);
     expect(storage.files.has(fileId)).toBe(false);
     // Retrying again is a no-op for this row.
     storage.deleteObject.mockClear();
-    await cleanup.reconcile(new Date(Date.now() + 11 * 60_000));
+    await cleanup.reconcile(settled());
     expect(storage.deleteObject).not.toHaveBeenCalledWith(
       expect.objectContaining({ storageKey: row.storageKey }),
     );
@@ -549,10 +554,9 @@ describe('Media (e2e, PostgreSQL, fake provider)', () => {
       // The pending upload's token may still be in use: its path is checked
       // by the reconciler later, not now.
       expect(rows.find((r) => r.id === pending)!.storageDeletedAt).toBeNull();
+      // The READY files are gone too, but recorded only once their paths settle.
       for (const id of [readyPhoto, readyAudio, readyVideo]) {
-        expect(rows.find((r) => r.id === id)!.storageDeletedAt).toBeInstanceOf(
-          Date,
-        );
+        expect(rows.find((r) => r.id === id)!.storageDeletedAt).toBeNull();
       }
       expect(storage.files.has(otherFile)).toBe(true);
       expect(storage.files.has(johnsFile)).toBe(true);
@@ -577,9 +581,11 @@ describe('Media (e2e, PostgreSQL, fake provider)', () => {
       await lisa.delete(`/api/v1/messages/${msg}`).expect(404);
       expect(storage.deleteObject).not.toHaveBeenCalled();
 
-      // Later, the reconciler clears the pending upload's path too.
-      await cleanup.reconcile(new Date(Date.now() + 11 * 60_000));
-      expect((await rowOf(pending)).storageDeletedAt).toBeInstanceOf(Date);
+      // Later, the reconciler checks every path again and records them all.
+      await cleanup.reconcile(settled());
+      for (const id of live) {
+        expect((await rowOf(id)).storageDeletedAt).toBeInstanceOf(Date);
+      }
     });
 
     it('a provider failure still returns 204, leaks nothing and never restores access', async () => {

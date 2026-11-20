@@ -114,7 +114,7 @@ const safetyNoticeWhere: Record<SafetyNoticeStatus, Prisma.DeathVerificationCase
   provider_accepted: { safetyNoticeSentAt: { not: null } },
   not_sent_case_closed: { safetyNoticeSentAt: null, status: { not: PENDING } },
 };
-const safetyNoticeStatus = (c: {
+export const safetyNoticeStatus = (c: {
   safetyNoticeSentAt: Date | null;
   status: DeathVerificationCaseStatus;
   safetyNoticeAttemptCount: number;

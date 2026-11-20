@@ -699,13 +699,18 @@ describe('My Wishes rich answers + Wish → Message + verified-death release (e2
         await sofia.get(api(path)).expect(401);
     });
 
-    // The delete purged them through MediaCleanup at once. Never call
-    // reconcile() here: it scans every media table in the shared database.
+    // The delete purged them through MediaCleanup at once (recorded later,
+    // once each path has settled). Never call reconcile() here: it scans
+    // every media table in the shared database.
     it('the deleted wish files were removed through the existing cleanup; message copies stay', async () => {
       const sources = await prisma.myWishMediaAsset.findMany({
         where: { id: { in: [ids.photo, ids.audio, ids.video] } },
       });
-      for (const s of sources) expect(s.storageDeletedAt).not.toBeNull();
+      expect(sources).toHaveLength(3);
+      for (const s of sources) {
+        expect(s.deletedAt).not.toBeNull();
+        expect([...storage.files.values()].some((f) => f.key === s.storageKey)).toBe(false);
+      }
       const copies = await prisma.mediaAsset.findMany({
         where: { messageId: ids.onDeath },
       });

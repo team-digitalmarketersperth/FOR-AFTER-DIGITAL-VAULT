@@ -14,7 +14,7 @@ describe('BillingService launch gate', () => {
     expect(billing.policy).toEqual({ enabled: false, enforceFrom: null });
     await expect(billing.hasAccess('u')).resolves.toBe(true);
     await expect(billing.startTrial('u', { type: 'CUSTOMER', userId: 'u' })).rejects.toThrow(NotFoundException);
-    await expect(billing.checkout('u', 'monthly')).rejects.toThrow(ServiceUnavailableException);
+    await expect(billing.checkout('u', 'COMPLETE', 'monthly')).rejects.toThrow(ServiceUnavailableException);
     await expect(billing.portal('u')).rejects.toThrow(ServiceUnavailableException);
     await expect(billing.webhook(Buffer.from('{}'), 't=1,v1=x')).rejects.toThrow(ServiceUnavailableException);
   });

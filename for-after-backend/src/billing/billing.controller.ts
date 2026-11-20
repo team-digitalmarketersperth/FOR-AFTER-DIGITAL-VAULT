@@ -45,7 +45,7 @@ export class BillingController {
   @UseGuards(ThrottlerGuard)
   @Throttle(WRITE_LIMIT)
   checkout(@CurrentUser() user: SafeUser, @Body() dto: CheckoutDto) {
-    return this.billing.checkout(user.id, dto.plan);
+    return this.billing.checkout(user.id, dto.tier, dto.interval);
   }
 
   @Post('portal')

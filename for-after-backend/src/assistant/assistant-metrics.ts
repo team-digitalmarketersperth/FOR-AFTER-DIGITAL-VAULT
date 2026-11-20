@@ -21,6 +21,9 @@ export const REQUEST_OUTCOMES = [
   'provider_failure', // provider 5xx, network error or malformed reply (502)
   'timeout', // the 25 s budget ran out (502)
   'cancelled', // the browser closed the request
+  'allowance_exhausted', // the trial or monthly AI allowance is used (409, Updated Plans Step 5)
+  'duplicate_request', // this request id was already used by the account (409)
+  'usage_unrecorded', // a reply arrived but its use couldn't be recorded, so it wasn't shown (503)
   'unknown', // anything else; never counted as success
 ] as const;
 export type RequestOutcome = (typeof REQUEST_OUTCOMES)[number];

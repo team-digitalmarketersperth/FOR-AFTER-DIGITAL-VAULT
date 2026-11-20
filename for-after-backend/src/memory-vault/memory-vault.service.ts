@@ -1,8 +1,16 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import {
+  billingPolicy,
+  type BillingPolicy,
+  TRIAL_MEMORY_LIMIT,
+  trialCap,
+  trialLimitError,
+} from '../billing/billing-access.js';
 import { paginate } from '../audit/audit-log.service.js';
 import { Prisma } from '../generated/prisma/client.js';
-import { MediaCleanup } from '../media/media-cleanup.service.js';
-import { isNoMatch, storedRefSelect } from '../media/media.service.js';
+import { MediaCleanup, cleanupRefSelect } from '../media/media-cleanup.service.js';
+import { isNoMatch } from '../media/media.service.js';
 import { noteActivity, recordActivity } from '../activity/customer-activity.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import {
@@ -60,10 +68,15 @@ export const MEMORY_NOT_FOUND = 'Memory not found.';
  */
 @Injectable()
 export class MemoryVaultService {
+  private readonly policy: BillingPolicy;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly cleanup: MediaCleanup,
-  ) {}
+    config: ConfigService,
+  ) {
+    this.policy = billingPolicy((key) => config.get<string>(key));
+  }
 
   private owned(ownerUserId: string, id: string) {
     return { id, ownerUserId, deletedAt: null };
@@ -100,11 +113,23 @@ export class MemoryVaultService {
     return tags.map((t) => ({ tagId: t.id }));
   }
 
+  /**
+   * The only path that creates a memory (no copy or restore exists). Trial Step 7: billing on, lock the Customer's
+   * User row, then the trial cap and the live count in the same transaction, so parallel creates cannot pass it.
+   * Live = not soft-deleted, whatever its content, so existing excess blocks new ones. Billing off: no lock.
+   */
   async create(
     ownerUserId: string,
     dto: CreateMemoryVaultItemDto,
   ): Promise<MemoryResponse> {
     const row = await this.prisma.$transaction(async (tx) => {
+      if (this.policy.enabled) {
+        await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${ownerUserId}::uuid FOR UPDATE`;
+        const cap = await trialCap(tx, ownerUserId, this.policy, 'memories');
+        if (cap !== null && (await tx.memoryVaultItem.count({ where: { ownerUserId, deletedAt: null } })) >= cap) {
+          throw trialLimitError(TRIAL_MEMORY_LIMIT);
+        }
+      }
       const created = await tx.memoryVaultItem.create({
         data: {
           ownerUserId,
@@ -244,7 +269,7 @@ export class MemoryVaultService {
         },
         // Read after the write: exactly the media this delete just hid.
         select: {
-          mediaAssets: { where: { deletedAt }, select: storedRefSelect },
+          mediaAssets: { where: { deletedAt }, select: cleanupRefSelect },
         },
       });
     } catch (err) {

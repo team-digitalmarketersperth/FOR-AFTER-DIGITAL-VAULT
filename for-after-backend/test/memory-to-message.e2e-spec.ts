@@ -349,7 +349,8 @@ describe('Memory → Message (e2e, Phase 13B)', () => {
     const row = await prisma.mediaAsset.findUniqueOrThrow({
       where: { id: copy.id },
     });
-    expect(row.storageDeletedAt).toBeInstanceOf(Date);
+    // Removed at once; recorded only once the path has settled (no token can re-upload).
+    expect(row.storageDeletedAt).toBeNull();
     await schedule(lisa, draft.body.id).expect(409);
     // Remove it and continue with text only.
     await lisa

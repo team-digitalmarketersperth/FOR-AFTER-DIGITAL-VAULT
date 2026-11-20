@@ -2,6 +2,7 @@ import ImageKit, {
   APIError,
   BadRequestError,
   NotFoundError,
+  RateLimitError,
 } from '@imagekit/nodejs';
 import {
   Injectable,
@@ -17,6 +18,7 @@ import {
 } from './legacy-b2-media-storage.service.js';
 import {
   MediaStorage,
+  MediaStorageThrottled,
   type StoredObject,
   type StoredRef,
   type UploadTarget,
@@ -251,6 +253,32 @@ export class ImageKitMediaStorage extends MediaStorage {
     }
   }
 
+  /**
+   * One page of the whole library's files, oldest first. Read-only, for the
+   * reconciliation report: path, id and size only (never a URL). `path` is
+   * not used because ImageKit does not search sub-folders with it.
+   */
+  async listFiles(
+    skip: number,
+    limit: number,
+  ): Promise<{ fileId: string; filePath: string; size: number }[]> {
+    try {
+      const files = await this.client.assets.list({
+        type: 'file',
+        sort: 'ASC_CREATED',
+        skip,
+        limit,
+      });
+      return files.map((f) => ({
+        fileId: f.fileId ?? '',
+        filePath: f.filePath ?? '',
+        size: f.size ?? 0,
+      }));
+    } catch (err) {
+      throw this.unavailable('list', err);
+    }
+  }
+
   // The original file as uploaded (orig-true: no optimization, no video
   // processing), signed with an expiry. The private file serves nothing else.
   private signedUrl(key: string, ttlSeconds: number) {
@@ -281,8 +309,9 @@ export class ImageKitMediaStorage extends MediaStorage {
   // only and give the client a generic 503.
   private unavailable(operation: string, err: unknown) {
     this.logger.error(`Media storage ${operation} failed (${errorInfo(err)})`);
-    return new ServiceUnavailableException(
-      'Media storage is temporarily unavailable.',
-    );
+    const message = 'Media storage is temporarily unavailable.';
+    return err instanceof RateLimitError
+      ? new MediaStorageThrottled(message)
+      : new ServiceUnavailableException(message);
   }
 }

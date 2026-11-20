@@ -1,5 +1,6 @@
 import { RequiresPlan } from '../billing/billing-access.js';
-import { Body, Controller, HttpCode, Module, Post, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Module, Post, Res, UseGuards } from '@nestjs/common';
+import { AiUsageService, type AiUsageStatusResponse } from './ai-usage.service.js';
 import { ApiCookieAuth, ApiTags } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
@@ -8,6 +9,7 @@ import {
   IsIn,
   IsOptional,
   IsString,
+  IsUUID,
   Matches,
   MaxLength,
   ValidateNested,
@@ -70,6 +72,11 @@ class AssistantReplyDto {
   @ValidateNested({ each: true })
   @Type(() => HistoryTurnDto)
   history?: HistoryTurnDto[];
+
+  /** Updated Plans Step 5: a fresh id per Send; reusing one is refused (409 AI_REQUEST_DUPLICATE), never re-run. */
+  @IsOptional()
+  @IsUUID()
+  requestId?: string;
 }
 
 /**
@@ -82,7 +89,16 @@ class AssistantReplyDto {
 @UseGuards(SessionAuthGuard, CustomerGuard)
 @RequiresPlan()
 export class AssistantController {
-  constructor(private readonly assistant: AssistantService) {}
+  constructor(
+    private readonly assistant: AssistantService,
+    private readonly usage_: AiUsageService,
+  ) {}
+
+  /** Updated Plans Step 5: this account's AI allowance (a read: never gated). */
+  @Get('usage')
+  usage(@CurrentUser() user: SafeUser): Promise<AiUsageStatusResponse> {
+    return this.usage_.status(user.id);
+  }
 
   @Post('reply')
   @HttpCode(200)
@@ -105,7 +121,7 @@ export class AssistantController {
 @Module({
   imports: [UsersModule],
   controllers: [AssistantController],
-  providers: [AssistantService, AssistantMetrics],
+  providers: [AssistantService, AssistantMetrics, AiUsageService],
   exports: [AssistantService, AssistantMetrics],
 })
 export class AssistantModule {}

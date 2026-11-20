@@ -3,9 +3,18 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import {
+  assertQuestionSlot,
+  billingPolicy,
+  type BillingPolicy,
+  lockAnswerEntitlements,
+  PAID_MEMORY_LINK_MESSAGE,
+  paidFeatureError,
+} from '../billing/billing-access.js';
 import { MediaAssetStatus, Prisma } from '../generated/prisma/client.js';
-import { MediaCleanup } from '../media/media-cleanup.service.js';
-import { isNoMatch, storedRefSelect } from '../media/media.service.js';
+import { MediaCleanup, cleanupRefSelect } from '../media/media-cleanup.service.js';
+import { isNoMatch } from '../media/media.service.js';
 import { recordActivity } from '../activity/customer-activity.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import {
@@ -86,6 +95,7 @@ export const EMPTY_ANSWER =
   'Add some words, a photo, a recording or a memory before saving.';
 // Same message whether a memory is missing, deleted or someone else's.
 export const INVALID_MEMORIES = 'One or more memories are invalid.';
+export const NOT_LINKED = 'One or more memories are not linked to this answer.';
 
 const toResponse = ({
   memoryLinks,
@@ -156,10 +166,15 @@ export async function liveResponseId(
  */
 @Injectable()
 export class MyStoryService {
+  private readonly policy: BillingPolicy;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly cleanup: MediaCleanup,
-  ) {}
+    config: ConfigService,
+  ) {
+    this.policy = billingPolicy((key) => config.get<string>(key));
+  }
 
   private live(ownerUserId: string, promptKey: string) {
     return { ownerUserId, promptKey, deletedAt: null };
@@ -278,6 +293,8 @@ export class MyStoryService {
       ownerUserId_promptKey: { ownerUserId, promptKey: prompt.key },
     };
     return this.prisma.$transaction(async (tx) => {
+      // Trial Step 5: first, so saves in My Story and My Wishes serialise on the Customer before anything is read.
+      const allowed = await lockAnswerEntitlements(tx, ownerUserId, this.policy);
       if (links?.length) {
         const owned = await tx.memoryVaultItem.count({
           where: { id: { in: links }, ownerUserId, deletedAt: null },
@@ -288,8 +305,15 @@ export class MyStoryService {
       }
       const existing = await tx.myStoryResponse.findUnique({
         where: unique,
-        select: { id: true, deletedAt: true },
+        select: { id: true, deletedAt: true, textContent: true, memoryLinks: { select: { memoryVaultItemId: true } } },
       });
+      const live = existing && !existing.deletedAt ? existing : null;
+      // Trial Step 5: no new or replacement links (a set that only keeps or removes current links is fine), before any write.
+      if (!allowed.memoryLinks && links) {
+        const linked = new Set(live?.memoryLinks.map((l) => l.memoryVaultItemId));
+        if (links.some((m) => !linked.has(m.toLowerCase()))) throw paidFeatureError(PAID_MEMORY_LINK_MESSAGE);
+      }
+      await assertQuestionSlot(tx, ownerUserId, allowed.questions, live?.textContent, textContent === undefined ? live?.textContent : textContent);
       let id: string;
       if (existing && !existing.deletedAt) {
         id = existing.id;
@@ -348,6 +372,32 @@ export class MyStoryService {
   }
 
   /**
+   * Trial Step 7 (approved): removing links only, so it is a DELETE and stays open when writing is not (an expired
+   * trial). Every id must be linked to this live answer now (no additions or replacements, ids compared in lower
+   * case); one transaction, so a bad id or an answer that would be left empty changes nothing. Removes link rows
+   * only: the memories, their files and the answer's text are untouched.
+   */
+  async unlinkMemories(ownerUserId: string, prompt: MyStoryPrompt, ids: string[]): Promise<StoryResponse> {
+    const remove = ids.map((id) => id.toLowerCase());
+    return this.prisma.$transaction(async (tx) => {
+      const live = await tx.myStoryResponse.findFirst({
+        where: this.live(ownerUserId, prompt.key),
+        select: { id: true, memoryLinks: { select: { memoryVaultItemId: true } } },
+      });
+      if (!live) throw new NotFoundException(RESPONSE_NOT_FOUND);
+      const linked = new Set(live.memoryLinks.map((l) => l.memoryVaultItemId.toLowerCase()));
+      if (remove.some((id) => !linked.has(id))) throw new BadRequestException(NOT_LINKED);
+      await tx.myStoryMemoryLink.deleteMany({
+        where: { myStoryResponseId: live.id, memoryVaultItemId: { in: remove } },
+      });
+      const saved = toResponse(await tx.myStoryResponse.findUniqueOrThrow({ where: { id: live.id }, select: responseSelect }));
+      if (!hasContent(saved)) throw new BadRequestException(EMPTY_ANSWER);
+      await recordActivity(tx, { userId: ownerUserId, type: 'STORY_RESPONSE_UPDATED', entityId: prompt.key });
+      return saved;
+    });
+  }
+
+  /**
    * Soft delete of the answer and, in the same transaction, its live files
    * (any status) and its memory links, so nothing of it stays reachable. The
    * files are then removed from the provider, best effort (MediaCleanup
@@ -372,7 +422,7 @@ export class MyStoryService {
           select: {
             id: true,
             // Read after the write: exactly the files this delete just hid.
-            mediaAssets: { where: { deletedAt }, select: storedRefSelect },
+            mediaAssets: { where: { deletedAt }, select: cleanupRefSelect },
           },
         });
         await tx.myStoryMemoryLink.deleteMany({

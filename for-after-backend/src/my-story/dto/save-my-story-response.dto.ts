@@ -1,6 +1,7 @@
 import { applyDecorators } from '@nestjs/common';
 import {
   ArrayMaxSize,
+  ArrayMinSize,
   ArrayUnique,
   IsArray,
   IsIn,
@@ -58,6 +59,19 @@ export class SaveMyStoryResponseDto {
   // Owner-only; never shared. Omitted = unchanged, null/blank = cleared.
   @PrivateNote()
   privateNote?: string | null;
+}
+
+// Trial Step 7: DELETE …/response/memories. Only the ids to unlink; any other field (text, a note) is rejected by the
+// global ValidationPipe, so an unlink can never carry an edit.
+export class RemoveMemoryLinksDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(MEMORY_LINKS_MAX)
+  @IsUUID('all', { each: true })
+  @ArrayUnique((id: unknown) => String(id).toLowerCase(), {
+    message: 'memoryVaultItemIds must not contain duplicates',
+  })
+  memoryVaultItemIds!: string[];
 }
 
 // GET /my-story/prompts?category=CHILDHOOD

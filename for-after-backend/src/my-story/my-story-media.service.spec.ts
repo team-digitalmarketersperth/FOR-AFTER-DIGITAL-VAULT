@@ -34,6 +34,7 @@ import {
   INVALID_STORY_MEDIA,
   StoryToMessageService,
 } from './story-to-message.service.js';
+import type { PaidFeatures } from '../billing/paid-features.service.js';
 
 const OWNER = 'owner-a';
 const prompt = getPromptByKey('travel.journey')!;
@@ -78,7 +79,8 @@ const setup = () => {
   const $transaction = vi.fn((fn: (t: typeof tx) => unknown) => fn(tx));
   const quota = { reserve: vi.fn().mockResolvedValue(undefined) };
   const cleanup = {
-    purge: vi.fn().mockResolvedValue({ purged: 1, failed: 0 }),
+    purge: vi.fn().mockResolvedValue({ purged: 1, failed: 0, deferred: 0 }),
+    claimScanOrThrow: vi.fn().mockResolvedValue(undefined),
   };
   const service = new MyStoryMediaService(
     { ...tx, $transaction } as unknown as PrismaService,
@@ -87,6 +89,7 @@ const setup = () => {
     cleanup as unknown as MediaCleanup,
     quota as unknown as StorageQuota,
     { get: () => undefined } as unknown as ConfigService,
+    { mediaAllowed: async () => true, mediaRefusal: async () => null, assertMedia: async () => undefined } as unknown as PaidFeatures,
   );
   // The browser's direct upload of these bytes to the row's path.
   const uploaded = (bytes: Uint8Array, mime = 'image/jpeg', key = KEY) => {

@@ -1,3 +1,4 @@
+import { isUUID } from 'class-validator';
 import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { paginate, writeAuditLog, type AuditActor } from '../audit/audit-log.service.js';
 import {
@@ -197,8 +198,8 @@ export class SupportService {
       if (span < 0) throw new BadRequestException('from must be before to');
       if (span > 366 * DAY) throw new BadRequestException('The time range can be at most 366 days.');
     }
-    const where: Prisma.SupportRequestWhereInput = {
-      status: q.status,
+    // Everything but the status: cards, overview and tabs count this population; the page adds the status.
+    const scope: Prisma.SupportRequestWhereInput = {
       category: q.category,
       id: q.reference,
       ownerUserId: q.accountId,
@@ -206,19 +207,33 @@ export class SupportService {
         q.from || q.to
           ? { ...(q.from && { gte: new Date(q.from) }), ...(q.to && { lte: new Date(q.to) }) }
           : undefined,
+      OR: q.search
+        ? [
+            ...(isUUID(q.search, 'loose') ? [{ id: q.search }] : []),
+            { subject: { contains: q.search, mode: 'insensitive' as const } },
+          ]
+        : undefined,
     };
+    const where: Prisma.SupportRequestWhereInput = q.status ? { AND: [scope, { status: q.status }] } : scope;
     const sort = q.sort ?? 'createdAt';
-    const [items, total] = await this.prisma.$transaction([
-      this.prisma.supportRequest.findMany({
-        where,
-        orderBy: [{ [sort]: 'desc' }, { id: 'desc' }],
-        skip: (q.page - 1) * q.limit,
-        take: q.limit,
-        select: { ...summarySelect, ownerUserId: true },
-      }),
-      this.prisma.supportRequest.count({ where }),
-    ]);
-    return { items, pagination: paginate(q.page, q.limit, total) };
+    const evaluatedAt = new Date();
+    const [items, total, byStatus] = await this.prisma.$transaction(
+      [
+        this.prisma.supportRequest.findMany({
+          where,
+          orderBy: [{ [sort]: 'desc' }, { id: 'desc' }],
+          skip: (q.page - 1) * q.limit,
+          take: q.limit,
+          select: { ...summarySelect, ownerUserId: true },
+        }),
+        this.prisma.supportRequest.count({ where }),
+        this.prisma.supportRequest.groupBy({ by: ['status'], where: scope, orderBy: { status: 'asc' }, _count: { _all: true } }),
+      ],
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+    );
+    const counts = Object.fromEntries(Object.values(SupportStatus).map((s) => [s, 0])) as Record<SupportStatus, number>;
+    for (const g of byStatus) counts[g.status] = (g._count as { _all: number })._all;
+    return { evaluatedAt: evaluatedAt.toISOString(), counts, items, pagination: paginate(q.page, q.limit, total) };
   }
 
   async get(id: string) {

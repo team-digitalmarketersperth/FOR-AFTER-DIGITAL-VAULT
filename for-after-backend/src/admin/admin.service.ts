@@ -21,6 +21,7 @@ import {
   writeAuditLog,
 } from '../audit/audit-log.service.js';
 import { errorCode, PrismaService } from '../prisma/prisma.service.js';
+import { billingRecordWhere } from '../billing/billing-access.js';
 import { AdminQueuesService } from './admin-queues.service.js';
 import { releaseEmailWhere } from './admin-deliveries.service.js';
 import { pastDueWhere } from './admin-releases.service.js';
@@ -37,6 +38,7 @@ const adminUserSelect = {
   lastName: true,
   role: true,
   status: true,
+  emailVerifiedAt: true,
   createdAt: true,
   updatedAt: true,
 } satisfies Prisma.UserSelect;
@@ -179,27 +181,53 @@ export class AdminService {
     };
   }
 
-  async listUsers(q: AdminUserListQueryDto) {
+  /**
+   * One page plus counts over the whole filtered population (never just the page), read in one
+   * REPEATABLE READ snapshot so the cards, tracker and table agree. Billing counts only when the
+   * caller may see billing (SUPER_ADMIN); the predicate is the resolver's (billing-access.ts).
+   */
+  async listUsers(q: AdminUserListQueryDto, { billing = false } = {}) {
     const where: Prisma.UserWhereInput = {
       role: q.role,
       status: q.status,
+      emailVerifiedAt: q.verification === 'verified' ? { not: null } : q.verification === 'unverified' ? null : undefined,
       OR: q.search
         ? (['email', 'firstName', 'lastName'] as const).map((field) => ({
             [field]: { contains: q.search, mode: 'insensitive' as const },
           }))
         : undefined,
     };
-    const [items, total] = await this.prisma.$transaction([
-      this.prisma.user.findMany({
-        where,
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-        skip: (q.page - 1) * q.limit,
-        take: q.limit,
-        select: adminUserSelect,
-      }),
-      this.prisma.user.count({ where }),
-    ]);
-    return { items, pagination: paginate(q.page, q.limit, total) };
+    const customers: Prisma.UserWhereInput = { AND: [where, { role: UserRole.CUSTOMER }] };
+    const generatedAt = new Date();
+    const [items, total, active, emailVerified, customerCount, withRecord] = await this.prisma.$transaction(
+      [
+        this.prisma.user.findMany({
+          where,
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          skip: (q.page - 1) * q.limit,
+          take: q.limit,
+          select: adminUserSelect,
+        }),
+        this.prisma.user.count({ where }),
+        this.prisma.user.count({ where: { AND: [where, { status: UserStatus.ACTIVE }] } }),
+        this.prisma.user.count({ where: { AND: [where, { emailVerifiedAt: { not: null } }] } }),
+        this.prisma.user.count({ where: customers }),
+        ...(billing ? [this.prisma.user.count({ where: { AND: [customers, billingRecordWhere] } })] : []),
+      ],
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+    );
+    return {
+      items,
+      pagination: paginate(q.page, q.limit, total),
+      summary: {
+        generatedAt: generatedAt.toISOString(),
+        total,
+        active,
+        emailVerified,
+        customers: customerCount,
+        ...(billing && { customersWithBillingRecord: withRecord as number }),
+      },
+    };
   }
 
   /** Account metadata + counts. The view itself is audited. */
@@ -208,7 +236,6 @@ export class AdminService {
       where: { id: userId },
       select: {
         ...adminUserSelect,
-        emailVerifiedAt: true,
         twoFactorEnabled: true,
         passedAt: true,
         deletedAt: true,

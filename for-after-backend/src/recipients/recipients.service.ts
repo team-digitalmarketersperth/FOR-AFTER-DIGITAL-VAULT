@@ -1,7 +1,19 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import {
+  billingPolicy,
+  type BillingPolicy,
+  planLimitError,
+  planRecipientLimitMessage,
+  recipientLimit,
+  resolveAccess,
+  TRIAL_RECIPIENT_LIMIT,
+  trialLimitError,
+} from '../billing/billing-access.js';
 import { paginate } from '../audit/audit-log.service.js';
 import { MediaAssetStatus, Prisma } from '../generated/prisma/client.js';
 import { noteActivity } from '../activity/customer-activity.js';
+import { MediaCleanup, cleanupRefSelect } from '../media/media-cleanup.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateRecipientDto } from './dto/create-recipient.dto.js';
 import { UpdateRecipientDto } from './dto/update-recipient.dto.js';
@@ -61,7 +73,15 @@ const toData = (dto: UpdateRecipientDto) => ({
 
 @Injectable()
 export class RecipientsService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly policy: BillingPolicy;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cleanup: MediaCleanup,
+    config: ConfigService,
+  ) {
+    this.policy = billingPolicy((key) => config.get<string>(key));
+  }
 
   // Every read and write goes through this filter: ownership is part of the
   // query itself, never checked after fetching by id alone.
@@ -69,13 +89,28 @@ export class RecipientsService {
     return { id, ownerUserId, deletedAt: null };
   }
 
+  /**
+   * Billing on: lock the Customer's User row, then resolve the limit (the trial's, or since Updated Plans Step 3 the
+   * entitled paid tier's: billing-access recipientLimit) and count live Recipients in the same transaction, so parallel
+   * creates cannot pass it. Excess rows from before are kept; only new ones are refused. Billing off: no cap, no lock.
+   */
   async create(
     ownerUserId: string,
     dto: CreateRecipientDto,
   ): Promise<RecipientResponse> {
-    const row = await this.prisma.recipient.create({
-      data: { ...toData(dto), firstName: dto.firstName, ownerUserId },
-      select: recipientSelect,
+    const row = await this.prisma.$transaction(async (tx) => {
+      if (this.policy.enabled) {
+        await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${ownerUserId}::uuid FOR UPDATE`;
+        // Trial Step 3 / Updated Plans Step 3: the trial's or the entitled paid tier's limit, decided inside the lock.
+        const limit = recipientLimit(await resolveAccess(tx, ownerUserId, this.policy));
+        if (limit && (await tx.recipient.count({ where: { ownerUserId, deletedAt: null } })) >= limit.max) {
+          throw limit.source === 'trial' ? trialLimitError(TRIAL_RECIPIENT_LIMIT) : planLimitError(planRecipientLimitMessage(limit.max));
+        }
+      }
+      return tx.recipient.create({
+        data: { ...toData(dto), firstName: dto.firstName, ownerUserId },
+        select: recipientSelect,
+      });
     });
     await noteActivity(this.prisma, { userId: ownerUserId, type: 'PERSON_ADDED', entityId: row.id });
     return toResponse(row);
@@ -130,10 +165,24 @@ export class RecipientsService {
     return toResponse(row);
   }
 
-  // Soft delete: future messages will reference recipients.
+  // Soft delete (future messages will reference recipients), together with
+  // their photos in one transaction: never a gone Recipient whose photo still
+  // counts, nor the reverse. The Recipient row update is the lock photo
+  // uploads and completions also take. Files are removed after commit, best
+  // effort; MediaCleanup retries any left (the rows stay unmarked).
   async remove(ownerUserId: string, id: string): Promise<void> {
-    await this.updateOwned(ownerUserId, id, { deletedAt: new Date() });
+    const deletedAt = new Date();
+    const photos = await this.prisma.$transaction(async (tx) => {
+      await this.updateOwned(ownerUserId, id, { deletedAt }, tx);
+      // One statement: no photo row can slip between a read and the update.
+      return tx.recipientPhoto.updateManyAndReturn({
+        where: { ownerUserId, recipientId: id, deletedAt: null },
+        data: { deletedAt },
+        select: cleanupRefSelect,
+      });
+    });
     await noteActivity(this.prisma, { userId: ownerUserId, type: 'PERSON_REMOVED', entityId: id });
+    await this.cleanup.purge('recipientPhoto', photos);
   }
 
   // A single conditional UPDATE, so there is no gap between the ownership
@@ -142,9 +191,10 @@ export class RecipientsService {
     ownerUserId: string,
     id: string,
     data: Prisma.RecipientUpdateInput,
+    client: PrismaService | Prisma.TransactionClient = this.prisma,
   ): Promise<RecipientRow> {
     try {
-      return await this.prisma.recipient.update({
+      return await client.recipient.update({
         where: this.owned(ownerUserId, id),
         data,
         select: recipientSelect,

@@ -1,10 +1,13 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { recordActivity } from '../activity/customer-activity.js';
 import { paginate } from '../audit/audit-log.service.js';
+import { PaidFeatures } from '../billing/paid-features.service.js';
 import { MessageVersionReason } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import {
   contentOf,
+  formatMediaKinds,
+  isNewNonTextFormat,
   lockOwnedDraft,
   recordVersion,
   sameContent,
@@ -23,7 +26,10 @@ const summarySelect = { id: true, version: true, reason: true, createdAt: true }
  */
 @Injectable()
 export class MessageVersionsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly features: PaidFeatures,
+  ) {}
 
   private owned(ownerUserId: string, messageId: string) {
     return { messageId, message: { ownerUserId, deletedAt: null } };
@@ -82,6 +88,10 @@ export class MessageVersionsService {
         select: { title: true, contentType: true, textContent: true },
       });
       if (!target) throw new NotFoundException(NOT_FOUND);
+      // Trial Step 4: restoring to a non-text format the message doesn't have now is paid-only, like an edit.
+      // Versions hold title, format and text only (never files), so a restore can't re-attach a removed file; switching
+      // back to a format whose kind the plan lacks (Premium → VIDEO) is refused like an edit.
+      if (isNewNonTextFormat(target.contentType, before.contentType)) await this.features.assertMedia(ownerUserId, formatMediaKinds(target.contentType), tx);
       if (!sameContent(before, target)) {
         await tx.message.update({ where: { id: messageId }, data: contentOf(target) });
         await recordVersion(tx, messageId, before, target, MessageVersionReason.RESTORED);

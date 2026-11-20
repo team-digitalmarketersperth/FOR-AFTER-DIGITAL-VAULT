@@ -1,4 +1,6 @@
-import { type ExecutionContext, NotFoundException } from '@nestjs/common';
+import { ConflictException, type ExecutionContext, NotFoundException } from '@nestjs/common';
+import type { ConfigService } from '@nestjs/config';
+import { TRIAL_LIMIT, TRIAL_MEMORY_LIMIT } from '../billing/billing-access.js';
 import { GUARDS_METADATA } from '@nestjs/common/constants.js';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
@@ -42,7 +44,16 @@ const noMatch = () =>
 const query = (q: object = {}) =>
   plainToInstance(MemoryVaultQueryDto, q) as MemoryVaultQueryDto;
 
-const setup = () => {
+// Billing on (Trial Step 7): an account created after enforcement; `user` is its billing rows.
+const BILLING_ON = { BILLING_ENABLED: 'true', BILLING_ENFORCE_FROM: '2026-01-01T00:00:00.000Z' };
+const account = (trialEndsAt: Date | null, subscription: object | null = null) => ({
+  createdAt: new Date('2026-06-01T00:00:00.000Z'),
+  trial: trialEndsAt && { startedAt: new Date(trialEndsAt.getTime() - 7 * 86_400_000), endsAt: trialEndsAt },
+  billingAccount: subscription,
+});
+const inTrial = () => account(new Date(Date.now() + 86_400_000));
+
+const setup = (env: Record<string, string> = {}, user: object = inTrial()) => {
   const memoryVaultItem = {
     create: vi.fn().mockResolvedValue(row),
     findMany: vi.fn().mockResolvedValue([row]),
@@ -56,7 +67,9 @@ const setup = () => {
   };
   // Recent changes (customer activity): recorded, not asserted here.
   const customerActivity = { create: vi.fn(async () => ({})) };
-  const tx = { memoryVaultItem, memoryVaultTag, customerActivity };
+  const $queryRaw = vi.fn().mockResolvedValue([]);
+  const users = { findUniqueOrThrow: vi.fn().mockResolvedValue(user) };
+  const tx = { memoryVaultItem, memoryVaultTag, customerActivity, $queryRaw, user: users };
   // Array form = the list's count + page; function form = interactive.
   const $transaction = vi.fn((arg: unknown) =>
     Array.isArray(arg)
@@ -70,10 +83,13 @@ const setup = () => {
     memoryVaultItem,
     memoryVaultTag,
     $transaction,
+    $queryRaw,
+    users,
     cleanup,
     service: new MemoryVaultService(
       { ...tx, $transaction } as unknown as PrismaService,
       cleanup as unknown as MediaCleanup,
+      { get: (key: string) => env[key] } as unknown as ConfigService,
     ),
   };
 };
@@ -265,6 +281,54 @@ describe('MemoryVaultService', () => {
     });
     expect(memoryVaultItem.create.mock.calls[0][0].data.tags).toEqual({
       create: [{ tagId: 't1' }, { tagId: 't2' }],
+    });
+  });
+
+  describe('trial cap (Step 7): one live memory during an enforced active trial', () => {
+    it('billing off: no lock, no billing read, no count', async () => {
+      const { memoryVaultItem, $queryRaw, users, service } = setup();
+      memoryVaultItem.count.mockResolvedValue(9);
+      await service.create('owner-a', create as CreateMemoryVaultItemDto);
+      expect($queryRaw).not.toHaveBeenCalled();
+      expect(users.findUniqueOrThrow).not.toHaveBeenCalled();
+      expect(memoryVaultItem.create).toHaveBeenCalled();
+    });
+
+    it('active trial, none yet: locks the User row before reading billing, counts live memories, creates', async () => {
+      const { memoryVaultItem, $queryRaw, users, service } = setup(BILLING_ON);
+      memoryVaultItem.count.mockResolvedValue(0);
+      await service.create('owner-a', create as CreateMemoryVaultItemDto);
+      expect(($queryRaw.mock.calls[0][0] as string[]).join('')).toMatch(/FROM "User" WHERE id = .*FOR UPDATE/);
+      expect($queryRaw.mock.invocationCallOrder[0]).toBeLessThan(users.findUniqueOrThrow.mock.invocationCallOrder[0]);
+      expect(memoryVaultItem.count).toHaveBeenCalledWith({ where: { ownerUserId: 'owner-a', deletedAt: null } });
+      expect(memoryVaultItem.create).toHaveBeenCalled();
+    });
+
+    it.each([1, 4])('active trial with %i live (incl. excess from before): 409 TRIAL_LIMIT, nothing created', async (live) => {
+      const { memoryVaultItem, service } = setup(BILLING_ON);
+      memoryVaultItem.count.mockResolvedValue(live);
+      const err = await service.create('owner-a', create as CreateMemoryVaultItemDto).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ConflictException);
+      expect((err as ConflictException).getResponse()).toMatchObject({ statusCode: 409, code: TRIAL_LIMIT, message: TRIAL_MEMORY_LIMIT });
+      expect(memoryVaultItem.create).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['paid (wins over active trial dates)', account(new Date(Date.now() + 86_400_000), { plan: 'monthly', subscriptionStatus: 'active', cancelAtPeriodEnd: false, currentPeriodEnd: new Date(Date.now() + 86_400_000) })],
+      ['grandfathered (created before enforcement)', { ...inTrial(), createdAt: new Date('2025-12-01T00:00:00.000Z') }],
+    ])('%s: no trial cap', async (_, user) => {
+      const { memoryVaultItem, service } = setup(BILLING_ON, user);
+      memoryVaultItem.count.mockResolvedValue(7);
+      await service.create('owner-a', create as CreateMemoryVaultItemDto);
+      expect(memoryVaultItem.create).toHaveBeenCalled();
+    });
+
+    it('editing an existing memory takes no lock and no slot (excess stays editable)', async () => {
+      const { $queryRaw, memoryVaultItem, service } = setup(BILLING_ON);
+      memoryVaultItem.count.mockResolvedValue(4);
+      await service.update('owner-a', 'v1', { textContent: 'Edited.' } as never);
+      expect($queryRaw).not.toHaveBeenCalled();
+      expect(memoryVaultItem.update).toHaveBeenCalled();
     });
   });
 

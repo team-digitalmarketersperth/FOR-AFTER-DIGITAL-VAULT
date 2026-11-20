@@ -98,7 +98,7 @@ const setup = () => {
         return { id: 'a' };
       },
     },
-    $transaction: async (arg: unknown) =>
+    $transaction: async (arg: unknown, _options?: unknown) =>
       typeof arg === 'function' ? arg(db) : Promise.all(arg as unknown[]),
   };
   const queues = {
@@ -166,6 +166,7 @@ describe('AdminService', () => {
       expect(Object.keys(args.select).sort()).toEqual([
         'createdAt',
         'email',
+        'emailVerifiedAt',
         'firstName',
         'id',
         'lastName',
@@ -190,8 +191,45 @@ describe('AdminService', () => {
       expect(args.where).toEqual({
         role: undefined,
         status: undefined,
+        emailVerifiedAt: undefined,
         OR: undefined,
       });
+    });
+
+    it('summary counts the whole filtered population in one snapshot; billing only when allowed', async () => {
+      const { service, db } = setup();
+      const tx = vi.spyOn(db, '$transaction');
+      const count = db.user.count;
+      count.mockImplementation(async () => 60);
+      const plain = await service.listUsers({ page: 3, limit: 25, role: 'CUSTOMER', verification: 'unverified' });
+      expect(tx.mock.calls[0]![1]).toEqual({ isolationLevel: 'RepeatableRead' });
+      // total, active, verified, customers: each over the same filters, never the page.
+      const wheres = count.mock.calls.map((c) => (c as unknown as [{ where: unknown }])[0].where);
+      const base = { role: 'CUSTOMER', status: undefined, emailVerifiedAt: null, OR: undefined };
+      expect(wheres).toEqual([
+        base,
+        { AND: [base, { status: 'ACTIVE' }] },
+        { AND: [base, { emailVerifiedAt: { not: null } }] },
+        { AND: [base, { role: 'CUSTOMER' }] },
+      ]);
+      expect(plain.summary).toEqual({
+        generatedAt: expect.any(String),
+        total: 60,
+        active: 60,
+        emailVerified: 60,
+        customers: 60,
+      });
+      expect(plain.summary).not.toHaveProperty('customersWithBillingRecord');
+
+      count.mockClear();
+      count.mockImplementationOnce(async () => 9).mockImplementationOnce(async () => 7)
+        .mockImplementationOnce(async () => 5).mockImplementationOnce(async () => 6).mockImplementationOnce(async () => 2);
+      const su = await service.listUsers({ page: 1, limit: 25, verification: 'verified' }, { billing: true });
+      const last = (count.mock.calls[4] as unknown as [{ where: { AND: unknown[] } }])[0].where;
+      expect(last.AND[1]).toEqual({
+        OR: [{ trial: { isNot: null } }, { billingAccount: { is: { subscriptionStatus: { not: null } } } }],
+      });
+      expect(su.summary).toMatchObject({ total: 9, active: 7, emailVerified: 5, customers: 6, customersWithBillingRecord: 2 });
     });
   });
 

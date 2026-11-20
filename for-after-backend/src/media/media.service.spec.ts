@@ -1,3 +1,4 @@
+import { PAID_FEATURE, paidFeatureError } from '../billing/billing-access.js';
 import type { StorageQuota } from './storage-quota.service.js';
 import {
   BadRequestException,
@@ -33,6 +34,7 @@ import {
 } from './media.service.js';
 import type { MalwareScanner } from './scanner/malware-scanner.service.js';
 import type { MediaStorage } from './storage/media-storage.service.js';
+import type { PaidFeatures } from '../billing/paid-features.service.js';
 
 const MB = 1024 * 1024;
 const KEY = '/for-after/users/owner-a/messages/m1/photo/a1.jpg';
@@ -104,10 +106,17 @@ const setup = () => {
     createAccessUrl: vi.fn().mockResolvedValue('https://media.test/signed'),
     deleteObject: vi.fn().mockResolvedValue(undefined),
   };
+  // Trial Step 4: media allowed unless a test turns it off (then assertMedia refuses like the real one).
+  const features = {
+    mediaAllowed: vi.fn(async () => true),
+    mediaRefusal: vi.fn(async (): Promise<ConflictException | null> => null),
+    assertMedia: vi.fn(async () => undefined),
+  };
   // Phase 12C: within quota unless a test says otherwise.
   const quota = { reserve: vi.fn().mockResolvedValue(undefined) };
   const cleanup = {
-    purge: vi.fn().mockResolvedValue({ purged: 1, failed: 0 }),
+    purge: vi.fn().mockResolvedValue({ purged: 1, failed: 0, deferred: 0 }),
+    claimScanOrThrow: vi.fn().mockResolvedValue(undefined),
   };
   const scanner = new FakeMalwareScanner();
   const config = { get: (key: string) => env[key] } as ConfigService;
@@ -122,6 +131,7 @@ const setup = () => {
     quota,
     upload,
     $transaction,
+    features,
     service: new MediaService(
       { ...tx, $transaction } as unknown as PrismaService,
       storage as unknown as MediaStorage,
@@ -129,6 +139,7 @@ const setup = () => {
       cleanup as unknown as MediaCleanup,
       quota as unknown as StorageQuota,
       config,
+      features as unknown as PaidFeatures,
     ),
   };
 };
@@ -376,6 +387,60 @@ describe('MediaService.createUploadUrl quota (Phase 12C)', () => {
     t.mediaAsset.findFirst.mockResolvedValue({ ...ref, status: 'READY' });
     await t.service.createAccessUrl('owner-a', 'm1', 'a1');
     expect(t.quota.reserve).not.toHaveBeenCalled();
+  });
+});
+
+describe('MediaService paid-only media (Trial Step 4)', () => {
+  const refuse = (t: ReturnType<typeof setup>) => {
+    t.features.mediaAllowed.mockResolvedValue(false);
+    t.features.mediaRefusal.mockResolvedValue(paidFeatureError());
+    t.features.assertMedia.mockRejectedValue(paidFeatureError());
+  };
+  const removedRow = { id: 'a1', storageKey: KEY, storageProvider: 'IMAGEKIT', providerFileId: null, createdAt: new Date(), status: 'PENDING_UPLOAD', deletedAt: new Date() };
+
+  it('upload refused under the draft lock before the quota, the row and the signature', async () => {
+    const t = setup();
+    refuse(t);
+    const err = await t.service
+      .createUploadUrl('owner-a', 'm1', { kind: 'PHOTO', originalFileName: 'a.jpg', mimeType: 'image/jpeg', sizeBytes: 1 })
+      .catch((e: unknown) => e);
+    expect((err as ConflictException).getResponse()).toMatchObject({ code: PAID_FEATURE });
+    expect(t.features.assertMedia).toHaveBeenCalledWith('owner-a', ['PHOTO'], expect.objectContaining({ mediaAsset: t.mediaAsset }));
+    expect(t.quota.reserve).not.toHaveBeenCalled();
+    expect(t.mediaAsset.create).not.toHaveBeenCalled();
+    expect(t.storage.createUpload).not.toHaveBeenCalled();
+  });
+
+  it('completing an upload signed before access ended: removed (soft delete + purge), never scanned or READY', async () => {
+    const t = setup();
+    refuse(t);
+    t.mediaAsset.update.mockResolvedValue(removedRow);
+    const err = await t.service.complete('owner-a', 'm1', 'a1', 'file1').catch((e: unknown) => e);
+    expect((err as ConflictException).getResponse()).toMatchObject({ code: PAID_FEATURE });
+    expect(t.mediaAsset.update.mock.calls[0][0]).toMatchObject({ where: ownedAsset, data: { deletedAt: expect.any(Date) } });
+    expect(t.cleanup.purge).toHaveBeenCalledWith('mediaAsset', [expect.objectContaining({ id: 'a1' })]);
+    expect(t.cleanup.claimScanOrThrow).not.toHaveBeenCalled();
+    expect(t.storage.verifyUpload).not.toHaveBeenCalled();
+  });
+
+  it('existing media stays viewable and deletable whatever the trial says (no check on access or delete)', async () => {
+    const t = setup();
+    refuse(t);
+    t.mediaAsset.findFirst.mockResolvedValue({ ...pendingRow, status: 'READY', providerFileId: 'file1', storageProvider: 'IMAGEKIT' });
+    await t.service.createAccessUrl('owner-a', 'm1', 'a1');
+    t.mediaAsset.update.mockResolvedValue({ ...removedRow, status: 'READY', providerFileId: 'file1' });
+    await t.service.remove('owner-a', 'm1', 'a1');
+    expect(t.features.mediaAllowed).not.toHaveBeenCalled();
+    expect(t.features.mediaRefusal).not.toHaveBeenCalled();
+    expect(t.features.assertMedia).not.toHaveBeenCalled();
+  });
+
+  it('a READY asset is returned as is on a repeat complete (no recheck, nothing removed)', async () => {
+    const t = setup();
+    refuse(t);
+    t.mediaAsset.findFirst.mockResolvedValue({ ...pendingRow, status: 'READY' });
+    await t.service.complete('owner-a', 'm1', 'a1', 'file1');
+    expect(t.mediaAsset.update).not.toHaveBeenCalled();
   });
 });
 
@@ -900,6 +965,7 @@ describe('MediaService config', () => {
           {} as MediaCleanup,
           {} as StorageQuota,
           { get: () => 'abc' } as unknown as ConfigService,
+          { mediaAllowed: async () => true, mediaRefusal: async () => null, assertMedia: async () => undefined } as unknown as PaidFeatures,
         ),
     ).toThrow('must be a positive whole number');
   });

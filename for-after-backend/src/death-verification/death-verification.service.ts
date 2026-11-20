@@ -1,3 +1,4 @@
+import { isUUID } from 'class-validator';
 import {
   ConflictException,
   Injectable,
@@ -27,6 +28,7 @@ import { MAX_TRUSTED_CONTACTS } from '../trusted-contacts/trusted-contacts.servi
 import { PrismaService } from '../prisma/prisma.service.js';
 import { DeathVerificationQueue } from './death-verification-queue.service.js';
 import { audit, OPEN_STATUSES } from './death-verification-workflow.service.js';
+import { safetyNoticeStatus } from '../admin/admin-deliveries.service.js';
 import type { CreateDeathReportDto } from './dto/create-death-report.dto.js';
 import type {
   RejectDeathCaseDto,
@@ -181,6 +183,18 @@ const WRONG_STATE: Partial<Record<Status, string>> = {
   VERIFIED: 'This case is already verified.',
   REJECTED: 'This case was rejected.',
   CANCELLED: 'This case was cancelled by the account holder.',
+};
+
+
+/** Ready cases whose distinct reporters do not meet their requirement (confirmationState, per case). */
+const awaitingConfirmations = (
+  cases: { id: string; requiredConfirmations: number | null }[],
+  reporters: (ReporterSnapshot & { deathVerificationCaseId: string })[],
+) => {
+  const byCase = new Map<string, ReporterSnapshot[]>();
+  for (const r of reporters) byCase.set(r.deathVerificationCaseId, [...(byCase.get(r.deathVerificationCaseId) ?? []), r]);
+  return cases.filter((c) => !confirmationState(c.requiredConfirmations, byCase.get(c.id) ?? []).confirmationRequirementMet)
+    .length;
 };
 
 const displayName = (u: {
@@ -398,42 +412,109 @@ export class DeathVerificationService {
 
   // ─── Admin (Step 15; paging + generic audit in Step 16) ───────────────────
 
-  async listForAdmin(
-    status: DeathVerificationCaseStatus | undefined,
-    page: number,
-    limit: number,
-  ) {
-    const where = status ? { status } : {};
-    const [rows, total] = await this.prisma.$transaction([
-      this.prisma.deathVerificationCase.findMany({
-        where,
-        orderBy: [{ openedAt: 'desc' }, { id: 'desc' }],
-        skip: (page - 1) * limit,
-        take: limit,
-        select: {
-          id: true,
-          status: true,
-          openedAt: true,
-          safeguardEndsAt: true,
-          _count: { select: { reports: true } },
-          owner: {
-            select: { id: true, email: true, firstName: true, lastName: true },
+  /**
+   * The review queue. `counts` covers every case the search matches, whatever
+   * the status filter (so the tabs stay useful); the page also follows the
+   * status. Counts, the ready-case confirmation check and the page are read in
+   * one REPEATABLE READ snapshot, with the server's own time. Read-only.
+   */
+  async listForAdmin(q: {
+    status?: DeathVerificationCaseStatus;
+    search?: string;
+    page: number;
+    limit: number;
+  }) {
+    const scope: Prisma.DeathVerificationCaseWhereInput = q.search
+      ? {
+          OR: [
+            ...(isUUID(q.search, 'loose') ? [{ id: q.search }] : []),
+            ...(['email', 'firstName', 'lastName'] as const).map((field) => ({
+              owner: { [field]: { contains: q.search, mode: 'insensitive' as const } },
+            })),
+          ],
+        }
+      : {};
+    const where = q.status ? { AND: [scope, { status: q.status }] } : scope;
+    const reporterSnapshot = {
+      select: { reporterEmailNormalized: true, reporterMobileNormalized: true },
+    } as const;
+    const evaluatedAt = new Date();
+    const readyInScope = { AND: [scope, { status: Status.READY_FOR_REVIEW }] };
+    const [rows, total, byStatus, ready, reporters] = await this.prisma.$transaction(
+      [
+        this.prisma.deathVerificationCase.findMany({
+          where,
+          orderBy: [{ openedAt: 'desc' }, { id: 'desc' }],
+          skip: (q.page - 1) * q.limit,
+          take: q.limit,
+          select: {
+            id: true,
+            status: true,
+            openedAt: true,
+            safetyNoticeSentAt: true,
+            safetyNoticeAttemptCount: true,
+            safeguardStartedAt: true,
+            safeguardEndsAt: true,
+            requiredConfirmations: true,
+            reports: reporterSnapshot,
+            owner: {
+              select: { id: true, email: true, firstName: true, lastName: true },
+            },
           },
-        },
-      }),
-      this.prisma.deathVerificationCase.count({ where }),
-    ]);
-    const items = rows.map(({ id, _count, owner, ...rest }) => ({
-      caseId: id,
-      ...rest,
-      reportCount: _count.reports,
-      accountHolder: {
-        userId: owner.id,
-        email: owner.email,
-        displayName: displayName(owner),
+        }),
+        this.prisma.deathVerificationCase.count({ where }),
+        this.prisma.deathVerificationCase.groupBy({
+          by: ['status'],
+          where: scope,
+          orderBy: { status: 'asc' },
+          _count: { _all: true },
+        }),
+        // Which ready cases still lack confirmations, by the one rule (confirmationState): every ready case
+        // (id + requirement only) and its distinct reporter snapshots, de-duplicated in the database.
+        this.prisma.deathVerificationCase.findMany({
+          where: readyInScope,
+          select: { id: true, requiredConfirmations: true },
+        }),
+        this.prisma.deathReport.groupBy({
+          by: ['deathVerificationCaseId', 'reporterEmailNormalized', 'reporterMobileNormalized'],
+          where: { deathVerificationCase: readyInScope },
+          orderBy: { deathVerificationCaseId: 'asc' },
+        }),
+      ],
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+    );
+    const counts = Object.fromEntries(
+      Object.values(Status).map((s) => [s, 0]),
+    ) as Record<DeathVerificationCaseStatus, number>;
+    for (const g of byStatus) {
+      counts[g.status] = (g._count as { _all: number })._all;
+    }
+    const items = rows.map(
+      ({ id, owner, reports, requiredConfirmations, safetyNoticeSentAt, safetyNoticeAttemptCount, ...rest }) => {
+        const c = confirmationState(requiredConfirmations, reports);
+        return {
+          caseId: id,
+          ...rest,
+          safetyNotice: safetyNoticeStatus({ status: rest.status, safetyNoticeSentAt, safetyNoticeAttemptCount }),
+          reportCount: reports.length,
+          receivedConfirmations: c.receivedConfirmations,
+          requiredConfirmations: c.requiredConfirmations,
+          confirmationRequirementMet: c.confirmationRequirementMet,
+          accountHolder: {
+            userId: owner.id,
+            email: owner.email,
+            displayName: displayName(owner),
+          },
+        };
       },
-    }));
-    return { items, pagination: paginate(page, limit, total) };
+    );
+    return {
+      evaluatedAt: evaluatedAt.toISOString(),
+      counts,
+      readyAwaitingConfirmations: awaitingConfirmations(ready, reporters),
+      items,
+      pagination: paginate(q.page, q.limit, total),
+    };
   }
 
   /** GET detail: the same view, and the read itself is audited. */

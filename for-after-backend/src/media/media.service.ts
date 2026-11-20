@@ -14,13 +14,14 @@ import {
   MessageStatus,
   Prisma,
 } from '../generated/prisma/client.js';
+import { PaidFeatures } from '../billing/paid-features.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import {
   CreateMediaUploadDto,
   MIME_TYPES,
   type UploadKind,
 } from './dto/create-media-upload.dto.js';
-import { MediaCleanup } from './media-cleanup.service.js';
+import { MediaCleanup, cleanupRefSelect, NOT_READY } from './media-cleanup.service.js';
 import { MalwareScanner } from './scanner/malware-scanner.service.js';
 import { StorageQuota } from './storage-quota.service.js';
 import {
@@ -76,7 +77,8 @@ export const UPLOAD_MISMATCH =
   'The uploaded file does not match the upload request. Request a new upload URL.';
 export const UPLOAD_FAILED =
   'This upload failed verification. Request a new upload URL.';
-export const NOT_READY = 'Media is not ready.';
+// One text for every media table (MediaCleanup.claimScanOrThrow uses it too).
+export { NOT_READY };
 // Malware scan outcomes: generic on purpose (no scanner names or output).
 export const UPLOAD_REJECTED =
   'This file could not be accepted. Please choose a different file.';
@@ -321,6 +323,7 @@ export class MediaService {
     private readonly cleanup: MediaCleanup,
     private readonly quota: StorageQuota,
     config: ConfigService,
+    private readonly features: PaidFeatures,
   ) {
     ({
       uploadTtl: this.uploadTtl,
@@ -362,6 +365,9 @@ export class MediaService {
       extension,
     );
     const upload = await this.inDraft(ownerUserId, messageId, async (tx) => {
+      // Trial Step 4: paid-only, refused before any reservation, row or signed upload.
+      // Updated Plans Step 4: by the declared kind (verified against the file's signature on completion).
+      await this.features.assertMedia(ownerUserId, [dto.kind], tx);
       // Phase 12C: quota is checked before the row exists or anything is signed.
       await this.quota.reserve(tx, ownerUserId, dto.sizeBytes);
       await tx.mediaAsset.create({
@@ -415,7 +421,20 @@ export class MediaService {
     if (asset.status === MediaAssetStatus.FAILED) {
       throw new ConflictException(UPLOAD_FAILED);
     }
+    // Trial Step 4: an upload signed before media access ended is removed (row soft-deleted, reservation freed,
+    // provider file purged by the normal cleanup), never scanned or made READY.
+    // Updated Plans Step 4: re-checked for this file's kind at the moment it would become available (a video started
+    // under Complete and finished under Premium is removed the same way). remove() soft-deletes only this pending row,
+    // which frees its reservation once; a repeat call finds no live row (404) and changes nothing.
+    const refusal = await this.features.mediaRefusal(ownerUserId, [asset.kind]);
+    if (refusal) {
+      await this.remove(ownerUserId, messageId, id);
+      throw refusal;
+    }
 
+    // Holds the row for this scan (MediaCleanup never retires it meanwhile);
+    // an upload completed, deleted, retired or expired since the read is never scanned.
+    await this.cleanup.claimScanOrThrow('mediaAsset', id, asset.createdAt);
     const check = await checkUpload(
       this.storage,
       this.scanner,
@@ -501,14 +520,14 @@ export class MediaService {
   // A provider failure never restores access; the cleanup reconciler retries.
   async remove(ownerUserId: string, messageId: string, id: string) {
     let deleted: Prisma.MediaAssetGetPayload<{
-      select: typeof storedRefSelect;
+      select: typeof cleanupRefSelect;
     }> | null;
     try {
       deleted = await this.inDraft(ownerUserId, messageId, (tx) =>
         tx.mediaAsset.update({
           where: this.ownedAsset(ownerUserId, messageId, id),
           data: { deletedAt: new Date() },
-          select: storedRefSelect,
+          select: cleanupRefSelect,
         }),
       );
     } catch (err) {

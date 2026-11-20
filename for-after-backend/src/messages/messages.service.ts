@@ -5,20 +5,22 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { paginate } from '../audit/audit-log.service.js';
+import { PaidFeatures } from '../billing/paid-features.service.js';
 import {
   MessageContentType,
   MessageStatus,
   MessageVersionReason,
   Prisma,
 } from '../generated/prisma/client.js';
-import { MediaCleanup } from '../media/media-cleanup.service.js';
-import { storedRefSelect } from '../media/media.service.js';
+import { MediaCleanup, cleanupRefSelect } from '../media/media-cleanup.service.js';
 import { noteActivity } from '../activity/customer-activity.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateMessageDto } from './dto/create-message.dto.js';
 import { UpdateMessageDto } from './dto/update-message.dto.js';
 import {
   firstVersion,
+  formatMediaKinds,
+  isNewNonTextFormat,
   lockOwnedDraft,
   NOT_DRAFT,
   recordVersion,
@@ -121,6 +123,7 @@ export class MessagesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly cleanup: MediaCleanup,
+    private readonly features: PaidFeatures,
   ) {}
 
   // Every read and write goes through this filter: ownership is part of the
@@ -141,6 +144,8 @@ export class MessagesService {
       textContent: dto.textContent ?? null,
       contentType: dto.contentType ?? MessageContentType.TEXT,
     };
+    // Trial Step 4: written text is always allowed; other formats are paid-only.
+    if (content.contentType !== MessageContentType.TEXT) await this.features.assertMedia(ownerUserId, formatMediaKinds(content.contentType));
     // The message, its first version and (when given) the cleared new-message
     // autosave commit together.
     const [row] = await this.prisma.$transaction([
@@ -224,6 +229,10 @@ export class MessagesService {
     }
     const row = await this.prisma.$transaction(async (tx) => {
       const before = await lockOwnedDraft(tx, ownerUserId, id);
+      // Trial Step 4: only a change to a non-text format is paid-only; keeping a message's current format (e.g. text
+      // edits to a photo message from before) never is, and nothing attached is touched.
+      // Updated Plans Step 4: by the new format's kind (VIDEO needs video; MIXED needs some media, never video itself).
+      if (isNewNonTextFormat(dto.contentType, before.contentType)) await this.features.assertMedia(ownerUserId, formatMediaKinds(dto.contentType!), tx);
       const saved = await tx.message.update({
         where: { id },
         data: {
@@ -272,7 +281,7 @@ export class MessagesService {
         },
       },
       // Read after the write: exactly the assets this delete just hid.
-      { mediaAssets: { where: { deletedAt }, select: storedRefSelect } },
+      { mediaAssets: { where: { deletedAt }, select: cleanupRefSelect } },
     );
     // Its unsaved autosave goes with it (versions cascade only on a hard delete;
     // a deleted message's history is unreachable through every route).

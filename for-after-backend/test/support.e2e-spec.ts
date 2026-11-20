@@ -190,7 +190,7 @@ describe('Support requests (e2e, PostgreSQL)', () => {
     ]);
     expect((await admin.get(inbox).query({ reference: requestId, category: 'TECHNICAL' }).expect(200)).body.items).toEqual([]);
     await admin.get(inbox).query({ status: 'DONE' }).expect(400);
-    await admin.get(inbox).query({ search: 'photo' }).expect(400);
+    await admin.get(inbox).query({ search: 'x'.repeat(151) }).expect(400);
     await admin.get(inbox).query({ from: '2024-01-01T00:00:00Z', to: '2026-01-01T00:00:00Z' }).expect(400);
     const detail = (await admin.get(`${inbox}/${requestId}`).expect(200)).body;
     expect(detail.internalNotes.map((n: { body: string }) => n.body)).toEqual([NOTE]);
@@ -200,6 +200,83 @@ describe('Support requests (e2e, PostgreSQL)', () => {
     const id = randomUUID();
     await admin.post(`${inbox}/${requestId}/notes`).send({ clientRequestId: id, body: 'a' }).expect(201);
     await admin.post(`${inbox}/${other}/notes`).send({ clientRequestId: id, body: 'b' }).expect(409);
+  });
+
+  it('inbox counts: every status across the filtered population (not the page or status tab), one snapshot; search by subject or full reference; read-only', async () => {
+    const tag = `Queue ${run}`;
+    const base = Date.UTC(2026, 0, 15, 12);
+    const fixtures = [
+      ['OPEN', 'TECHNICAL', 0],
+      ['OPEN', 'TECHNICAL', 1],
+      ['IN_PROGRESS', 'OTHER', 2],
+      ['WAITING_FOR_CUSTOMER', 'TECHNICAL', 3],
+      ['RESOLVED', 'TECHNICAL', 4],
+    ] as const;
+    const ids: string[] = [];
+    for (const [st, category, day] of fixtures) {
+      const at = new Date(base + day * 86_400_000);
+      ids.push(
+        (
+          await prisma.supportRequest.create({
+            data: {
+              ownerUserId: lisaId,
+              subject: `${tag} <b>${st}</b>`,
+              category,
+              description: `Fictional ${run}`,
+              status: st,
+              clientRequestId: randomUUID(),
+              createdAt: at,
+              lastPublicActivityAt: at,
+            },
+          })
+        ).id,
+      );
+    }
+    // An internal note on the open one: never moves its public time.
+    await admin.post(`${inbox}/${ids[0]}/notes`).send({ clientRequestId: randomUUID(), body: NOTE }).expect(201);
+    const auditBefore = await prisma.auditLog.count();
+    const rowsBefore = await prisma.supportRequest.findMany({ where: { id: { in: ids } }, select: { id: true, status: true, updatedAt: true } });
+
+    const all = await admin.get(inbox).query({ search: tag.toUpperCase(), limit: 2 }).expect(200);
+    expect(all.headers['cache-control']).toBe('no-store');
+    expect(all.body.items).toHaveLength(2);
+    expect(all.body.counts).toEqual({ OPEN: 2, IN_PROGRESS: 1, WAITING_FOR_CUSTOMER: 1, RESOLVED: 1 });
+    expect(all.body.pagination.total).toBe(5);
+    expect(Date.parse(all.body.evaluatedAt)).not.toBeNaN();
+    // Newest first, id tie-break.
+    expect(all.body.items.map((i: { id: string }) => i.id)).toEqual([ids[4], ids[3]]);
+
+    const open = (await admin.get(inbox).query({ search: tag, status: 'OPEN' }).expect(200)).body;
+    expect(open.pagination.total).toBe(2);
+    expect(open.counts).toEqual(all.body.counts);
+    const noted = open.items.find((i: { id: string }) => i.id === ids[0]);
+    expect(noted.lastPublicActivityAt).toBe(new Date(base).toISOString());
+
+    const tech = (await admin.get(inbox).query({ search: tag, category: 'TECHNICAL' }).expect(200)).body;
+    expect(tech.counts).toEqual({ OPEN: 2, IN_PROGRESS: 0, WAITING_FOR_CUSTOMER: 1, RESOLVED: 1 });
+
+    // Created-from/to are inclusive instants: day 1 00:00 to day 2 23:59:59.999 UTC.
+    const ranged = (
+      await admin.get(inbox).query({ search: tag, from: new Date(base + 86_400_000 - 12 * 3_600_000).toISOString(), to: new Date(base + 2 * 86_400_000 + 12 * 3_600_000 - 1).toISOString() }).expect(200)
+    ).body;
+    expect(ranged.items.map((i: { id: string }) => i.id).sort()).toEqual([ids[1], ids[2]].sort());
+
+    const byRef = (await admin.get(inbox).query({ search: ids[2] }).expect(200)).body;
+    expect(byRef.items.map((i: { id: string }) => i.id)).toEqual([ids[2]]);
+    expect(byRef.counts).toMatchObject({ IN_PROGRESS: 1, OPEN: 0 });
+
+    const text = JSON.stringify([all.body, open, tech, ranged, byRef]);
+    expect(text).not.toMatch(new RegExp(`scanner logs|internalNotes|Fictional ${run}|description|email|passwordHash`));
+    // Subjects come back as the stored text; rendering is the client's job (as text, never HTML).
+    expect(open.items[0].subject).toContain('<b>OPEN</b>');
+
+    await lisa.get(inbox).query({ search: tag }).expect(401);
+    await request(app.getHttpServer()).get(inbox).expect(401);
+    expect(await prisma.auditLog.count()).toBe(auditBefore);
+    expect(await prisma.supportRequest.findMany({ where: { id: { in: ids } }, select: { id: true, status: true, updatedAt: true } })).toEqual(
+      expect.arrayContaining(rowsBefore),
+    );
+    await prisma.supportRequest.deleteMany({ where: { id: { in: ids } } });
   });
 
   it('audit: every mutation recorded with references and statuses only, never subjects or text', async () => {

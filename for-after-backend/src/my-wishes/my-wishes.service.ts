@@ -3,9 +3,11 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { assertQuestionSlot, billingPolicy, type BillingPolicy, lockAnswerEntitlements } from '../billing/billing-access.js';
 import { MediaAssetStatus, Prisma } from '../generated/prisma/client.js';
-import { MediaCleanup } from '../media/media-cleanup.service.js';
-import { isNoMatch, storedRefSelect } from '../media/media.service.js';
+import { MediaCleanup, cleanupRefSelect } from '../media/media-cleanup.service.js';
+import { isNoMatch } from '../media/media.service.js';
 import { noteActivity, recordActivity } from '../activity/customer-activity.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import {
@@ -113,10 +115,15 @@ export async function liveWishId(
  */
 @Injectable()
 export class MyWishesService {
+  private readonly policy: BillingPolicy;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly cleanup: MediaCleanup,
-  ) {}
+    config: ConfigService,
+  ) {
+    this.policy = billingPolicy((key) => config.get<string>(key));
+  }
 
   async listPrompts(
     ownerUserId: string,
@@ -172,9 +179,15 @@ export class MyWishesService {
       promptVersion: prompt.version,
     };
     return this.prisma.$transaction(async (tx) => {
-      const existed = await tx.myWishResponse.count({
-        where: { ownerUserId, promptKey: prompt.key, deletedAt: null },
+      // Trial Step 5: lock first, so saves in My Story and My Wishes serialise on the Customer.
+      const cap = (await lockAnswerEntitlements(tx, ownerUserId, this.policy)).questions;
+      const row = await tx.myWishResponse.findUnique({
+        where: { ownerUserId_promptKey: { ownerUserId, promptKey: prompt.key } },
+        select: { textContent: true, deletedAt: true },
       });
+      const live = row && !row.deletedAt ? row : null;
+      const existed = !!live;
+      await assertQuestionSlot(tx, ownerUserId, cap, live?.textContent, textContent === undefined ? live?.textContent : textContent);
       const saved = toResponse(
         await tx.myWishResponse.upsert({
           where: {
@@ -235,7 +248,7 @@ export class MyWishesService {
         },
         select: {
           // Read after the write: exactly the files this delete just hid.
-          mediaAssets: { where: { deletedAt }, select: storedRefSelect },
+          mediaAssets: { where: { deletedAt }, select: cleanupRefSelect },
         },
       }));
     } catch (err) {

@@ -8,7 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
 import { MediaAssetStatus, MediaKind } from '../generated/prisma/client.js';
 import { CreateMediaUploadDto } from '../media/dto/create-media-upload.dto.js';
-import { MediaCleanup } from '../media/media-cleanup.service.js';
+import { MediaCleanup, cleanupRefSelect } from '../media/media-cleanup.service.js';
 import {
   type AccessUrlResponse,
   checkUpload,
@@ -104,9 +104,13 @@ export class RecipientPhotoService {
     );
     // Signing inside the transaction: no PENDING row survives a signing failure.
     const upload = await this.prisma.$transaction(async (tx) => {
-      const found = await tx.recipient.count({
-        where: this.ownedRecipient(ownerUserId, recipientId),
-      });
+      // Locked like complete(): a concurrent Recipient delete either waits and
+      // then soft-deletes this new row too, or wins and this sees no Recipient.
+      const [found] = await tx.$queryRaw<{ id: string }[]>`
+        SELECT id FROM "Recipient"
+        WHERE id = ${recipientId}::uuid AND "ownerUserId" = ${ownerUserId}::uuid
+          AND "deletedAt" IS NULL
+        FOR UPDATE`;
       if (!found) return null;
       // Phase 12C: quota is checked before the row exists or anything is signed.
       await this.quota.reserve(tx, ownerUserId, dto.sizeBytes);
@@ -162,6 +166,9 @@ export class RecipientPhotoService {
       throw new ConflictException(UPLOAD_FAILED);
     }
 
+    // Holds the row for this scan (MediaCleanup never retires it meanwhile);
+    // an upload completed, deleted, retired or expired since the read is never scanned.
+    await this.cleanup.claimScanOrThrow('recipientPhoto', id, photo.createdAt);
     const check = await checkUpload(
       this.storage,
       this.scanner,
@@ -259,29 +266,12 @@ export class RecipientPhotoService {
       deleted = await this.prisma.recipientPhoto.update({
         where: this.ownedPhoto(ownerUserId, recipientId, id),
         data: { deletedAt: new Date() },
-        select: storedRefSelect,
+        select: cleanupRefSelect,
       });
     } catch (err) {
       if (isNoMatch(err)) throw new NotFoundException(PHOTO_NOT_FOUND);
       throw err;
     }
     await this.cleanup.purge('recipientPhoto', [deleted]);
-  }
-
-  /**
-   * After a Recipient is soft-deleted: its photos go too (routes already
-   * refuse a deleted Recipient; this also clears the files, best effort).
-   */
-  async removeAllForRecipient(ownerUserId: string, recipientId: string) {
-    const photos = await this.prisma.recipientPhoto.findMany({
-      where: { ownerUserId, recipientId, deletedAt: null },
-      select: storedRefSelect,
-    });
-    if (!photos.length) return;
-    await this.prisma.recipientPhoto.updateMany({
-      where: { id: { in: photos.map((p) => p.id) } },
-      data: { deletedAt: new Date() },
-    });
-    await this.cleanup.purge('recipientPhoto', photos);
   }
 }

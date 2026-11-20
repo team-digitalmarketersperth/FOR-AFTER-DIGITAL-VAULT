@@ -1,3 +1,5 @@
+import { isNewNonTextFormat } from './message-versions.js';
+import { PAID_FEATURE, paidFeatureError } from '../billing/billing-access.js';
 import {
   BadRequestException,
   ConflictException,
@@ -15,6 +17,7 @@ import {
   TEXT_PREVIEW_MAX,
   textPreview,
 } from './messages.service.js';
+import type { PaidFeatures } from '../billing/paid-features.service.js';
 
 const sofia = {
   id: 'r1',
@@ -69,6 +72,12 @@ const setup = (owned = 1) => {
   const draftRecovery = { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) };
   // The row lock: an owned DRAFT unless a test says otherwise.
   const $queryRaw = vi.fn().mockResolvedValue([locked]);
+  // Trial Step 4: media allowed unless a test turns it off (then assertMedia refuses like the real one).
+  const features = {
+    mediaAllowed: vi.fn(async () => true),
+    mediaRefusal: vi.fn(async (): Promise<ConflictException | null> => null),
+    assertMedia: vi.fn(async () => undefined),
+  };
   // The media cleanup (file purge); named storage for the assertions below.
   const storage = {
     purge: vi.fn().mockResolvedValue({ purged: 0, failed: 0 }),
@@ -91,9 +100,11 @@ const setup = (owned = 1) => {
     draftRecovery,
     $queryRaw,
     storage,
+    features,
     service: new MessagesService(
       prisma as unknown as PrismaService,
       storage as unknown as MediaCleanup,
+      features as unknown as PaidFeatures,
     ),
   };
 };
@@ -510,6 +521,51 @@ describe('MessagesService', () => {
     message.create.mockRejectedValue(new Error('boom'));
     await expect(service.create('owner-a', create)).rejects.toThrow('boom');
     expect(message.count).not.toHaveBeenCalled();
+  });
+});
+
+describe('MessagesService formats (Trial Step 4)', () => {
+  const create = (contentType?: 'TEXT' | 'PHOTO' | 'AUDIO' | 'VIDEO' | 'MIXED') => ({ title: 'T', textContent: 'x', recipientIds: ['r1'], contentType });
+
+  it.each([undefined, 'TEXT'] as const)('create %s: text needs no paid access', async (contentType) => {
+    const t = setup();
+    await t.service.create('owner-a', create(contentType));
+    expect(t.features.assertMedia).not.toHaveBeenCalled();
+  });
+
+  it.each(['PHOTO', 'AUDIO', 'VIDEO', 'MIXED'] as const)('create %s: refused (PAID_FEATURE) before anything is written', async (contentType) => {
+    const t = setup();
+    t.features.assertMedia.mockRejectedValue(paidFeatureError());
+    const err = await t.service.create('owner-a', create(contentType)).catch((e: unknown) => e);
+    expect((err as ConflictException).getResponse()).toMatchObject({ code: PAID_FEATURE });
+    expect(t.message.create).not.toHaveBeenCalled();
+  });
+
+  it('update: text-only edits and keeping the current (non-text) format are never checked; nothing attached changes', async () => {
+    const t = setup();
+    t.$queryRaw.mockResolvedValue([{ ...locked, contentType: 'PHOTO' }]);
+    await t.service.update('owner-a', 'm1', { textContent: 'New words' });
+    await t.service.update('owner-a', 'm1', { contentType: 'PHOTO', title: 'Renamed' });
+    await t.service.update('owner-a', 'm1', { contentType: 'TEXT' });
+    expect(t.features.assertMedia).not.toHaveBeenCalled();
+    for (const [{ data }] of t.message.update.mock.calls) expect(data).not.toHaveProperty('mediaAssets');
+  });
+
+  it('update to a different non-text format is checked under the row lock; refused writes nothing', async () => {
+    const t = setup();
+    t.features.assertMedia.mockRejectedValue(paidFeatureError());
+    await expect(t.service.update('owner-a', 'm1', { contentType: 'AUDIO' })).rejects.toThrow(ConflictException);
+    expect(t.features.assertMedia).toHaveBeenCalledWith('owner-a', ['AUDIO'], expect.anything());
+    expect(t.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(t.features.assertMedia.mock.invocationCallOrder[0]);
+    expect(t.message.update).not.toHaveBeenCalled();
+  });
+
+  it('isNewNonTextFormat: only a switch to a non-text format the message does not have', () => {
+    expect(isNewNonTextFormat(undefined, 'TEXT')).toBe(false);
+    expect(isNewNonTextFormat('TEXT', 'PHOTO')).toBe(false);
+    expect(isNewNonTextFormat('PHOTO', 'PHOTO')).toBe(false);
+    expect(isNewNonTextFormat('PHOTO', 'TEXT')).toBe(true);
+    expect(isNewNonTextFormat('MIXED', 'PHOTO')).toBe(true);
   });
 });
 

@@ -45,6 +45,7 @@ import {
 import { DELETION_STATES, MEDIA_KINDS, STORAGE_SOURCES, UPLOAD_STATES } from '../admin-storage.service.js';
 
 export const REASON_MAX = 1000;
+export const EMAIL_VERIFICATION = ['verified', 'unverified'] as const;
 
 const enumMessage = (name: string, values: object) =>
   `${name} must be one of: ${Object.values(values).join(', ')}`;
@@ -81,6 +82,11 @@ export class AdminUserListQueryDto extends PageQueryDto {
   @IsOptional()
   @IsEnum(UserRole, { message: enumMessage('role', UserRole) })
   role?: UserRole;
+
+  // The stored emailVerifiedAt of the current address (an email change sets it only when confirmed).
+  @IsOptional()
+  @IsIn(EMAIL_VERIFICATION, { message: `verification must be one of: ${EMAIL_VERIFICATION.join(', ')}` })
+  verification?: (typeof EMAIL_VERIFICATION)[number];
 }
 
 // Plain text, trimmed; stored only in the audit row, never logged.

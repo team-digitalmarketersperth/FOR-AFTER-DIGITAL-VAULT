@@ -1,5 +1,11 @@
 import { ConflictException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import {
+  billingPolicy,
+  type BillingPolicy,
+  entitlements,
+  resolveAccess,
+} from '../billing/billing-access.js';
 import { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 
@@ -75,7 +81,9 @@ type Client = PrismaService | Prisma.TransactionClient;
 /**
  * Phase 12C storage quota, owned by the application (never read from the
  * provider). Approved policy (2026-10-08): one limit per Customer,
- * STORAGE_LIMIT_BYTES (default 5 GiB) until plans exist (Phase 21). Counted:
+ * STORAGE_LIMIT_BYTES (default 5 GiB); since 2026-11-12 an enforced active
+ * trial gets TRIAL_STORAGE_BYTES instead (billing-access entitlements()),
+ * resolved from the account's own billing rows, never the request. Counted:
  * Message media, Memory Vault media, Recipient photos, My Story media
  * (Phase 14B) and My Wishes media (Phase 15B) that are READY, plus
  * uploads in progress (PENDING_UPLOAD reserves its declared size). FAILED and
@@ -84,7 +92,10 @@ type Client = PrismaService | Prisma.TransactionClient;
  */
 @Injectable()
 export class StorageQuota {
+  /** The configured limit; an account's own allowance comes from allowance(). */
   readonly limitBytes: number;
+  // Same billingPolicy() as BillingService, read here so MediaModule needs no BillingModule and reserve() can resolve the allowance through its own transaction.
+  private readonly policy: BillingPolicy;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -96,6 +107,17 @@ export class StorageQuota {
       throw new Error('STORAGE_LIMIT_BYTES must be a positive whole number.');
     }
     this.limitBytes = limit;
+    this.policy = billingPolicy((key) => config.get<string>(key));
+  }
+
+  /** The account's storage allowance from its billing state, read through `client` (inside reserve's lock). */
+  async allowance(
+    client: Client,
+    ownerUserId: string,
+    now = new Date(),
+  ): Promise<number> {
+    const access = await resolveAccess(client, ownerUserId, this.policy, now);
+    return entitlements(access, this.limitBytes).storageBytes;
   }
 
   // One owner-scoped SUM over the five media tables, per status and source.
@@ -123,19 +145,19 @@ export class StorageQuota {
   }
 
   async usage(ownerUserId: string): Promise<StorageUsage> {
-    const { ready, pending, breakdown } = await this.totals(
-      this.prisma,
-      ownerUserId,
-    );
+    const [{ ready, pending, breakdown }, limit] = await Promise.all([
+      this.totals(this.prisma, ownerUserId),
+      this.allowance(this.prisma, ownerUserId),
+    ]);
     const counted = ready + pending;
     return {
       breakdown,
       usedBytes: ready,
       reservedBytes: pending,
-      limitBytes: this.limitBytes,
-      remainingBytes: Math.max(0, this.limitBytes - counted),
-      percentage: Math.min(100, Math.floor((counted * 100) / this.limitBytes)),
-      level: storageLevel(counted, this.limitBytes),
+      limitBytes: limit,
+      remainingBytes: Math.max(0, limit - counted),
+      percentage: Math.min(100, Math.floor((counted * 100) / limit)),
+      level: storageLevel(counted, limit),
     };
   }
 
@@ -151,10 +173,11 @@ export class StorageQuota {
     bytes: number,
   ): Promise<void> {
     await tx.$queryRaw`SELECT 1 FROM "User" WHERE id = ${ownerUserId}::uuid FOR UPDATE`;
+    const limit = await this.allowance(tx, ownerUserId);
     const { ready, pending } = await this.totals(tx, ownerUserId);
     const counted = ready + pending;
-    if (counted >= this.limitBytes) throw new ConflictException(STORAGE_FULL);
-    if (counted + bytes > this.limitBytes) {
+    if (counted >= limit) throw new ConflictException(STORAGE_FULL);
+    if (counted + bytes > limit) {
       throw new ConflictException(NOT_ENOUGH_STORAGE);
     }
   }

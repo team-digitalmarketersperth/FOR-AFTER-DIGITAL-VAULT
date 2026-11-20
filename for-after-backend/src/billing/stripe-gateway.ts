@@ -54,6 +54,11 @@ export class StripeGateway {
     );
   }
 
+  /** Updated Plans Step 6: Checkout only (never on an entitlement read). */
+  retrievePrice(id: string) {
+    return this.client().prices.retrieve(id);
+  }
+
   createPortal(customer: string, returnUrl: string) {
     return this.client().billingPortal.sessions.create({ customer, return_url: returnUrl });
   }

@@ -8,7 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
 import { MediaAssetStatus, MediaKind } from '../generated/prisma/client.js';
 import { CreateMediaUploadDto } from '../media/dto/create-media-upload.dto.js';
-import { MediaCleanup } from '../media/media-cleanup.service.js';
+import { MediaCleanup, cleanupRefSelect } from '../media/media-cleanup.service.js';
 import {
   type AccessUrlResponse,
   checkUpload,
@@ -28,6 +28,7 @@ import {
 } from '../media/media.service.js';
 import { MalwareScanner } from '../media/scanner/malware-scanner.service.js';
 import { StorageQuota } from '../media/storage-quota.service.js';
+import { PaidFeatures } from '../billing/paid-features.service.js';
 import { MediaStorage } from '../media/storage/media-storage.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { MEMORY_NOT_FOUND } from './memory-vault.service.js';
@@ -51,6 +52,7 @@ export class MemoryVaultMediaService {
     private readonly cleanup: MediaCleanup,
     private readonly quota: StorageQuota,
     config: ConfigService,
+    private readonly features: PaidFeatures,
   ) {
     this.settings = mediaSettings(config);
   }
@@ -95,6 +97,9 @@ export class MemoryVaultMediaService {
       });
       if (!found) return null;
       // Phase 12C: quota is checked before the row exists or anything is signed.
+      // Trial Step 4: paid-only, refused before any reservation, row or signed upload.
+      // Updated Plans Step 4: by the declared kind (verified against the file's signature on completion).
+      await this.features.assertMedia(ownerUserId, [dto.kind], tx);
       await this.quota.reserve(tx, ownerUserId, dto.sizeBytes);
       await tx.memoryVaultMediaAsset.create({
         data: {
@@ -144,6 +149,20 @@ export class MemoryVaultMediaService {
       throw new ConflictException(UPLOAD_FAILED);
     }
 
+    // Trial Step 4: an upload signed before media access ended is removed (row soft-deleted, reservation freed,
+    // provider file purged by the normal cleanup), never scanned or made READY.
+    // Updated Plans Step 4: re-checked for this file's kind at the moment it would become available (a video started
+    // under Complete and finished under Premium is removed the same way). remove() soft-deletes only this pending row,
+    // which frees its reservation once; a repeat call finds no live row (404) and changes nothing.
+    const refusal = await this.features.mediaRefusal(ownerUserId, [asset.kind]);
+    if (refusal) {
+      await this.remove(ownerUserId, itemId, id);
+      throw refusal;
+    }
+
+    // Holds the row for this scan (MediaCleanup never retires it meanwhile);
+    // an upload completed, deleted, retired or expired since the read is never scanned.
+    await this.cleanup.claimScanOrThrow('memoryVaultMediaAsset', id, asset.createdAt);
     const check = await checkUpload(
       this.storage,
       this.scanner,
@@ -228,7 +247,7 @@ export class MemoryVaultMediaService {
       deleted = await this.prisma.memoryVaultMediaAsset.update({
         where: this.ownedAsset(ownerUserId, itemId, id),
         data: { deletedAt: new Date() },
-        select: storedRefSelect,
+        select: cleanupRefSelect,
       });
     } catch (err) {
       if (isNoMatch(err)) throw new NotFoundException(MEDIA_NOT_FOUND);

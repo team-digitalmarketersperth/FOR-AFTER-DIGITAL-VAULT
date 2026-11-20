@@ -200,6 +200,7 @@ export class DeathVerificationEvidenceService {
       select: {
         ...reporterSelect,
         storageKey: true,
+        createdAt: true,
         deathVerificationCaseId: true,
         deathVerificationCase: { select: { status: true } },
       },
@@ -215,6 +216,9 @@ export class DeathVerificationEvidenceService {
       throw new ConflictException(EVIDENCE_CASE_CLOSED);
     }
 
+    // Holds the row for this scan (MediaCleanup never retires it meanwhile);
+    // an upload completed, deleted, retired or expired since the read is never scanned.
+    await this.cleanup.claimScanOrThrow('deathVerificationEvidence', id, row.createdAt);
     const check = await checkUpload(
       this.storage,
       this.scanner,

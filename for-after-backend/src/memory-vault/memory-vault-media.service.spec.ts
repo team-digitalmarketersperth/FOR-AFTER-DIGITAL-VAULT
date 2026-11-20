@@ -25,6 +25,7 @@ import type { MediaCleanup } from '../media/media-cleanup.service.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
 import { MemoryVaultMediaService } from './memory-vault-media.service.js';
 import { MEMORY_NOT_FOUND } from './memory-vault.service.js';
+import type { PaidFeatures } from '../billing/paid-features.service.js';
 
 // DTO validation (VIDEO, SVG, size 0, storageKey/ownerUserId injection) is
 // shared with message media and covered in media.service.spec.ts; the e2e
@@ -106,7 +107,8 @@ const setup = () => {
   // Phase 12C: within quota unless a test says otherwise.
   const quota = { reserve: vi.fn().mockResolvedValue(undefined) };
   const cleanup = {
-    purge: vi.fn().mockResolvedValue({ purged: 1, failed: 0 }),
+    purge: vi.fn().mockResolvedValue({ purged: 1, failed: 0, deferred: 0 }),
+    claimScanOrThrow: vi.fn().mockResolvedValue(undefined),
   };
   const scanner = new FakeMalwareScanner();
   const tx = { memoryVaultItem, memoryVaultMediaAsset };
@@ -126,6 +128,7 @@ const setup = () => {
       cleanup as unknown as MediaCleanup,
       quota as unknown as StorageQuota,
       { get: (key: string) => env[key] } as ConfigService,
+      { mediaAllowed: async () => true, mediaRefusal: async () => null, assertMedia: async () => undefined } as unknown as PaidFeatures,
     ),
   };
 };

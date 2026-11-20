@@ -339,7 +339,8 @@ describe('Memory Vault (e2e, PostgreSQL, mocked storage)', () => {
       where: { id },
     });
     expect(row.status).toBe('FAILED');
-    expect(row.storageDeletedAt).toBeInstanceOf(Date);
+    // Removed at once; recorded only once the path has settled (no token can re-upload).
+    expect(row.storageDeletedAt).toBeNull();
     await lisa.get(`${media}/${id}/access-url`).expect(409);
     await lisa.delete(`${media}/${id}`).expect(204);
   });
@@ -373,7 +374,8 @@ describe('Memory Vault (e2e, PostgreSQL, mocked storage)', () => {
         where: { id },
       });
       expect(row.status).toBe('FAILED');
-      expect(row.storageDeletedAt).toBeInstanceOf(Date);
+      // Removed at once; recorded only once the path has settled (no token can re-upload).
+      expect(row.storageDeletedAt).toBeNull();
       expect(storage.files.has(fileId)).toBe(false);
       await lisa
         .post(`${media}/${id}/complete`)
@@ -414,7 +416,8 @@ describe('Memory Vault (e2e, PostgreSQL, mocked storage)', () => {
       where: { id: mediaId },
     });
     expect(row.deletedAt).toBeInstanceOf(Date);
-    expect(row.storageDeletedAt).toBeInstanceOf(Date);
+    // Removed at once; recorded only once the path has settled (no token can re-upload).
+    expect(row.storageDeletedAt).toBeNull();
     expect(storage.deleteObject).toHaveBeenCalledWith(
       expect.objectContaining({ storageKey: row.storageKey }),
     );
@@ -444,7 +447,8 @@ describe('Memory Vault (e2e, PostgreSQL, mocked storage)', () => {
       where: { id },
     });
     expect(asset.deletedAt).toBeInstanceOf(Date);
-    expect(asset.storageDeletedAt).toBeInstanceOf(Date);
+    // Removed at once; recorded only once the path has settled (no token can re-upload).
+    expect(asset.storageDeletedAt).toBeNull();
     expect(storage.deleteObject).toHaveBeenCalledTimes(1);
     await lisa.get(item).expect(404);
     await lisa.patch(item).send({ title: 'x' }).expect(404);

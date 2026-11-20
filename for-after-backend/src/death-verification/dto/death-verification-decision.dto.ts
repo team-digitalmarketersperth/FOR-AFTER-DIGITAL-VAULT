@@ -13,6 +13,7 @@ import {
 import { PageQueryDto } from '../../admin/dto/admin.dto.js';
 import { DeathVerificationCaseStatus } from '../../generated/prisma/client.js';
 import { ISO_DATE_TIME_WITH_OFFSET } from '../../message-schedules/dto/create-message-schedule.dto.js';
+import { trim } from '../../auth/dto/register.dto.js';
 import { trimToNull } from '../../messages/dto/create-message.dto.js';
 
 export const DECISION_NOTE_MAX = 2000;
@@ -78,4 +79,11 @@ export class DeathVerificationListQueryDto extends PageQueryDto {
     message: `status must be one of: ${Object.values(DeathVerificationCaseStatus).join(', ')}`,
   })
   status?: DeathVerificationCaseStatus;
+
+  // Account holder email, first or last name, or a full case id. Never logged.
+  @IsOptional()
+  @Transform(trim)
+  @IsString()
+  @MaxLength(254)
+  search?: string;
 }

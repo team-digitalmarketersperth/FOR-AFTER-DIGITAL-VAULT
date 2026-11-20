@@ -1,3 +1,4 @@
+import type { ConfigService } from '@nestjs/config';
 import {
   BadRequestException,
   type ExecutionContext,
@@ -62,8 +63,8 @@ const setup = () => {
     findFirst: vi.fn().mockResolvedValue(row),
     upsert: vi.fn().mockResolvedValue(row),
     update: vi.fn().mockResolvedValue({ mediaAssets: [] }),
-    // Added vs updated, for the Customer's Recent changes.
-    count: vi.fn().mockResolvedValue(0),
+    // Added vs updated (and, in a trial, whether it already has words): none by default.
+    findUnique: vi.fn().mockResolvedValue(null),
   };
   // Recent changes (customer activity): recorded, not asserted here.
   const customerActivity = { create: vi.fn(async () => ({})) };
@@ -90,6 +91,8 @@ const setup = () => {
     service: new MyWishesService(
       prisma as unknown as PrismaService,
       cleanup as unknown as MediaCleanup,
+      // Billing off: no trial question cap, no lock.
+      { get: () => undefined } as unknown as ConfigService,
     ),
   };
 };
@@ -364,7 +367,7 @@ describe('MyWishesService', () => {
       mediaCount: 2,
     });
     // Omitted text = unchanged on update of a live wish...
-    myWishResponse.count.mockResolvedValueOnce(1);
+    myWishResponse.findUnique.mockResolvedValueOnce({ textContent: 'x', deletedAt: null });
     await service.save('lisa', prompt, { textContent: undefined });
     expect(myWishResponse.upsert.mock.calls[1][0].update.textContent).toBe(
       undefined,

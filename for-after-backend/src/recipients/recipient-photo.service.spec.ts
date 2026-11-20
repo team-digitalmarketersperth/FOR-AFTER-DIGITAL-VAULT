@@ -88,7 +88,8 @@ const setup = () => {
   // Phase 12C: within quota unless a test says otherwise.
   const quota = { reserve: vi.fn().mockResolvedValue(undefined) };
   const cleanup = {
-    purge: vi.fn().mockResolvedValue({ purged: 1, failed: 0 }),
+    purge: vi.fn().mockResolvedValue({ purged: 1, failed: 0, deferred: 0 }),
+    claimScanOrThrow: vi.fn().mockResolvedValue(undefined),
   };
   const scanner = new FakeMalwareScanner();
   const config = { get: () => undefined } as unknown as ConfigService;
@@ -161,13 +162,14 @@ describe('RecipientPhotoService (Phase 09)', () => {
 
   it('a foreign or deleted Recipient is 404 and nothing is signed', async () => {
     const { service, tx, storage } = setup();
-    tx.recipient.count.mockResolvedValue(0);
+    tx.$queryRaw.mockResolvedValueOnce([]);
     await expect(
       service.createUploadUrl(OWNER, RECIPIENT, upload()),
     ).rejects.toThrow('Recipient not found.');
-    expect(tx.recipient.count).toHaveBeenCalledWith({
-      where: { id: RECIPIENT, ownerUserId: OWNER, deletedAt: null },
-    });
+    // The live, owned Recipient row is locked (a concurrent delete serialises with it).
+    const [sql, ...params] = tx.$queryRaw.mock.calls[0];
+    expect(sql.join('?')).toMatch(/"deletedAt" IS NULL\s+FOR UPDATE/);
+    expect(params).toEqual([RECIPIENT, OWNER]);
     expect(storage.createUpload).not.toHaveBeenCalled();
   });
 

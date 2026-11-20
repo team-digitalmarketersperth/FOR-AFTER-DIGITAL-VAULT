@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   BadGatewayException,
   BadRequestException,
+  ConflictException,
   HttpException,
   HttpStatus,
   Injectable,
@@ -15,6 +16,7 @@ import {
   PROMPT_NOT_FOUND,
 } from '../my-story/my-story.prompts.js';
 import { RedisService } from '../redis/redis.service.js';
+import { AI_ALLOWANCE_EXHAUSTED, AI_REQUEST_DUPLICATE, AiUsageService, DUPLICATE_MESSAGE } from './ai-usage.service.js';
 import { AssistantMetrics, type AttemptResult, type RequestOutcome, type Usage } from './assistant-metrics.js';
 
 export const ASSISTANT_PAGES = [
@@ -84,7 +86,7 @@ const GUIDE: Record<AssistantPage, [title: string, facts: string]> = {
   ],
   account: [
     'Account settings',
-    'Account settings (in the account menu) has your details, "Change email" and "Change password". Storage shows how much space files use and lets you remove ones you no longer need. Activity shows recent account activity. There are no plans, payments or billing in the app yet.',
+    'Account settings (in the account menu) has your details, "Change email" and "Change password". Storage shows how much space files use and lets you remove ones you no longer need. Activity shows recent account activity. Account settings also has a Plan section: "View your plan" opens Your plan, which shows the free trial or subscription and, when they are offered, how to start the trial or choose a plan. During a free trial or on a paid plan the AI companion shows how many of its replies are left; when they run out you can keep writing on your own, and ask the companion again after the next reset shown there.',
   ],
 };
 
@@ -145,6 +147,8 @@ export type AssistantRequest = {
   source?: string;
   promptKey?: string;
   history?: HistoryTurn[];
+  /** Updated Plans Step 5: the client's id for this one Send (single-use per account); optional for older clients. */
+  requestId?: string;
 };
 /** `draft`: the reply is text meant for their editor; `open`: an approved section to offer as a link. */
 export type AssistantReply = {
@@ -197,6 +201,10 @@ const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
 export const DEFAULT_GROQ_MODEL = 'llama-3.3-70b-versatile';
 // Whole request budget, retries included.
 const BUDGET_MS = 25_000;
+// Updated Plans Step 5: a reservation outlives the provider deadline by this much, so the request can always settle
+// (or release) before its slot stops counting, and a crashed request's slot frees itself afterwards.
+export const SETTLE_GRACE_MS = 30_000;
+export const RESERVATION_MS = BUDGET_MS + SETTLE_GRACE_MS;
 
 export const UNAVAILABLE = 'The assistant isn’t available right now.';
 export const BUSY = 'The assistant is busy. Please try again in a minute.';
@@ -216,6 +224,8 @@ type Attempt =
 // The AI Operations outcome of a thrown error, set where it is thrown (HTTP unchanged).
 const outcomes = new WeakMap<object, RequestOutcome>();
 const tag = <E extends object>(error: E, outcome: RequestOutcome) => (outcomes.set(error, outcome), error);
+// The structured `code` of an HttpException body, if any.
+const codeOf = (err: unknown) => ((err as HttpException)?.getResponse?.() as { code?: string } | undefined)?.code;
 const num = (v: unknown) => (typeof v === 'number' ? v : undefined);
 
 /**
@@ -237,6 +247,7 @@ export class AssistantService {
     config: ConfigService,
     private readonly redis: RedisService,
     private readonly metrics: AssistantMetrics,
+    private readonly usage: AiUsageService,
   ) {
     this.key = config.get<string>('GROQ_API_KEY')?.trim() ?? '';
     this.model = config.get<string>('GROQ_MODEL')?.trim() || DEFAULT_GROQ_MODEL;
@@ -275,6 +286,9 @@ export class AssistantService {
     let outcome: RequestOutcome = 'unknown';
     let tokens: number | undefined;
     let reserved = false;
+    // Updated Plans Step 5: the allowance reservation (null = not metered), and whether it must be left alone.
+    let allowance: string | null = null;
+    let keepReservation = false;
     try {
       if (!this.key)
         throw tag(new ServiceUnavailableException(UNAVAILABLE), 'not_configured');
@@ -284,6 +298,13 @@ export class AssistantService {
         3_600_000,
         'user_limit',
       );
+      // One provider call per request id per account (every account, metered or not): a resent or doubled request
+      // is refused here, before any slot, charge or call. Ids from the client; a missing one is a fresh id.
+      const requestId = req.requestId ?? id;
+      await this.claimRequest(userId, requestId);
+      allowance = await this.usage.reserve(userId, requestId, RESERVATION_MS).catch((err: unknown) => {
+        throw tag(err as Error, codeOf(err) === AI_REQUEST_DUPLICATE ? 'duplicate_request' : codeOf(err) === AI_ALLOWANCE_EXHAUSTED ? 'allowance_exhausted' : 'unknown');
+      });
       await this.reserve(id);
       reserved = true;
       const result = await this.call(messages, started, req, signal);
@@ -292,12 +313,26 @@ export class AssistantService {
       const out = readMarkers(result.content, req, truncated);
       // Nothing but markers came back: nothing to show.
       if (!out.reply) throw tag(new BadGatewayException(FAILED), 'empty_reply');
+      // Only a complete reply counts; a truncated one is shown without using the allowance (released in finally).
+      if (allowance && !truncated) {
+        try {
+          await this.usage.settle(allowance);
+        } catch (err) {
+          // Provider succeeded, recording didn't: the reply isn't shown and nothing is released or retried. The slot
+          // stays held until its reservation expires, then frees itself (no charge for an undelivered reply).
+          keepReservation = true;
+          throw tag(err as Error, 'usage_unrecorded');
+        }
+        allowance = null;
+      }
       outcome = truncated ? 'reply_truncated' : 'reply';
       return out;
     } catch (error) {
       outcome = (error instanceof Object && outcomes.get(error)) || 'unknown';
       throw error;
     } finally {
+      // Failed, empty, cancelled or truncated: no charge.
+      if (allowance && !keepReservation) await this.usage.release(allowance);
       if (reserved) await this.release(id);
       const ms = performance.now() - t0;
       // Exactly one record per request; it never throws or delays the reply.
@@ -499,6 +534,19 @@ export class AssistantService {
         total: num(body?.usage?.total_tokens),
       },
     };
+  }
+
+  /** A request id is single-use per account for an hour (shared Redis; fails closed like the limits). */
+  private async claimRequest(userId: string, requestId: string) {
+    let fresh: string | null;
+    try {
+      fresh = await this.redis.client.set(`for_after:assistant:request:${userId}:${requestId}`, '1', { NX: true, PX: 3_600_000 });
+    } catch {
+      throw tag(new ServiceUnavailableException(UNAVAILABLE), 'limits_unavailable');
+    }
+    if (fresh !== 'OK') {
+      throw tag(new ConflictException({ statusCode: 409, error: 'Conflict', code: AI_REQUEST_DUPLICATE, message: DUPLICATE_MESSAGE }), 'duplicate_request');
+    }
   }
 
   /** Fixed-window counter in the shared Redis (every API instance); fails closed. */

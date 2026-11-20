@@ -89,8 +89,8 @@ export class RecipientsController {
     @CurrentUser() user: SafeUser,
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<void> {
+    // The Recipient and its photos, in one transaction (RecipientsService.remove).
     await this.recipients.remove(user.id, id);
-    await this.photos.removeAllForRecipient(user.id, id);
   }
 
   // ─── Phase 09: the Recipient's private photo (same lifecycle as media) ───

@@ -8,7 +8,7 @@ import request from 'supertest';
 import { adminSignIn } from './admin-sign-in.js';
 import { AdminModule } from '../src/admin/admin.module.js';
 import { AuthModule } from '../src/auth/auth.module.js';
-import { accessState, accessStateWhere, ADMIN_BILLING_FILTERS } from '../src/billing/billing-access.js';
+import { accessState, accessStateWhere, ADMIN_BILLING_FILTERS, billingRecordWhere } from '../src/billing/billing-access.js';
 import { BillingModule } from '../src/billing/billing.module.js';
 import { BillingService } from '../src/billing/billing.service.js';
 import { StripeGateway } from '../src/billing/stripe-gateway.js';
@@ -37,6 +37,10 @@ describe('Billing (e2e, PostgreSQL, Stripe mocked)', () => {
     createCustomer: vi.fn(async (userId: string) => ({ id: `cus_${userId.slice(0, 8)}${run}`, livemode: false }) as Stripe.Customer),
     createCheckout: vi.fn(async (input: unknown) => input && ({ url: 'https://checkout.stripe.example/c/test_session' }) as Stripe.Checkout.Session),
     createPortal: vi.fn(async () => ({ url: 'https://billing.stripe.example/p/test' }) as Stripe.BillingPortal.Session),
+    retrievePrice: vi.fn(
+      async (id: string) =>
+        ({ id, active: true, livemode: false, type: 'recurring', recurring: { interval: id.endsWith('annual_test') ? 'year' : 'month', interval_count: 1, usage_type: 'licensed' } }) as Stripe.Price,
+    ),
     retrieveSubscription: vi.fn(async (id: string) => {
       const s = subs.get(id);
       if (!s) throw new Error('No such subscription (fake)');
@@ -85,6 +89,8 @@ describe('Billing (e2e, PostgreSQL, Stripe mocked)', () => {
       STRIPE_WEBHOOK_SECRET: WHSEC,
       STRIPE_PRICE_MONTHLY: 'price_monthly_test',
       STRIPE_PRICE_ANNUAL: 'price_annual_test',
+      STRIPE_PRICE_COMPLETE_MONTHLY: 'price_complete_monthly_test',
+      STRIPE_PRICE_COMPLETE_ANNUAL: 'price_complete_annual_test',
       THROTTLE_KEY_PREFIX: `for_after:test_billing_throttle:${run}:`,
     });
     const moduleRef = await Test.createTestingModule({
@@ -117,7 +123,7 @@ describe('Billing (e2e, PostgreSQL, Stripe mocked)', () => {
   });
 
   afterAll(async () => {
-    for (const k of ['BILLING_ENABLED', 'BILLING_ENFORCE_FROM', 'STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET', 'STRIPE_PRICE_MONTHLY', 'STRIPE_PRICE_ANNUAL', 'THROTTLE_KEY_PREFIX'])
+    for (const k of ['BILLING_ENABLED', 'BILLING_ENFORCE_FROM', 'STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET', 'STRIPE_PRICE_MONTHLY', 'STRIPE_PRICE_ANNUAL', 'STRIPE_PRICE_COMPLETE_MONTHLY', 'STRIPE_PRICE_COMPLETE_ANNUAL', 'THROTTLE_KEY_PREFIX'])
       delete process.env[k];
     await prisma?.user.deleteMany({ where: { email: { in: Object.values(emails) } } });
     await prisma?.user.deleteMany({ where: { email: { startsWith: `billing.fx.${run}.` } } });
@@ -128,6 +134,8 @@ describe('Billing (e2e, PostgreSQL, Stripe mocked)', () => {
     const res = await agents.ana.get(api('/billing')).expect(200);
     expect(res.headers['cache-control']).toBe('no-store');
     expect(res.body).toMatchObject({ enabled: true, state: 'trial_available', hasAccess: false, trialEligible: true, trial: null, subscription: null, plans: ['monthly', 'annual'] });
+    // Step 6: only configured tier prices are offered (Premium is unpriced here); legacy prices are never sold.
+    expect(res.body.checkoutOptions).toEqual([{ tier: 'COMPLETE', interval: 'monthly' }, { tier: 'COMPLETE', interval: 'annual' }]);
     expect(JSON.stringify(res.body)).not.toMatch(/sk_test|whsec|cus_|price_/);
     await write(agents.ana).expect(402);
     await agents.ana.get(api('/recipients')).expect(200);
@@ -174,17 +182,21 @@ describe('Billing (e2e, PostgreSQL, Stripe mocked)', () => {
     await agents.old.post(api('/billing/trial')).expect(409);
   });
 
-  it('checkout: allowlisted plan → configured price and fixed return URLs; one Stripe customer per account; the success URL grants nothing', async () => {
-    await agents.ana.post(api('/billing/checkout')).send({ plan: 'weekly' }).expect(400);
-    await agents.ana.post(api('/billing/checkout')).send({ plan: 'monthly', price: 'price_free', amount: 0 }).expect(400);
-    const res = await agents.ana.post(api('/billing/checkout')).send({ plan: 'monthly' }).expect(200);
+  it('checkout: allowlisted tier + interval → configured price and fixed return URLs; one Stripe customer per account; the success URL grants nothing', async () => {
+    await agents.ana.post(api('/billing/checkout')).send({ tier: 'COMPLETE', interval: 'weekly' }).expect(400);
+    await agents.ana.post(api('/billing/checkout')).send({ tier: 'GOLD', interval: 'monthly' }).expect(400);
+    await agents.ana.post(api('/billing/checkout')).send({ plan: 'monthly' }).expect(400); // the old body: no tier
+    await agents.ana.post(api('/billing/checkout')).send({ tier: 'COMPLETE', interval: 'monthly', price: 'price_free', amount: 0 }).expect(400);
+    await agents.ana.post(api('/billing/checkout')).send({ tier: 'PREMIUM', interval: 'monthly' }).expect(400); // not priced
+    expect(fake.createCheckout).not.toHaveBeenCalled();
+    const res = await agents.ana.post(api('/billing/checkout')).send({ tier: 'COMPLETE', interval: 'monthly' }).expect(200);
     expect(res.body).toEqual({ url: 'https://checkout.stripe.example/c/test_session' });
-    await agents.ana.post(api('/billing/checkout')).send({ plan: 'annual' }).expect(200);
+    await agents.ana.post(api('/billing/checkout')).send({ tier: 'COMPLETE', interval: 'annual' }).expect(200);
     expect(fake.createCustomer).toHaveBeenCalledTimes(1);
     const args = fake.createCheckout.mock.calls.map((c) => c[0] as { price: string; successUrl: string; cancelUrl: string; idempotencyKey: string });
-    expect(args.map((a) => a.price)).toEqual(['price_monthly_test', 'price_annual_test']);
+    expect(args.map((a) => a.price)).toEqual(['price_complete_monthly_test', 'price_complete_annual_test']);
     expect(args[0]!.successUrl).toMatch(/\/settings\/plan\?checkout=success$/);
-    expect(args[0]!.idempotencyKey).toMatch(new RegExp(`^checkout-${ids.ana}-monthly-\\d+$`));
+    expect(args[0]!.idempotencyKey).toMatch(new RegExp(`^checkout-${ids.ana}-COMPLETE-monthly-\\d+$`));
     // Returning to the success URL is just a page: still no access until a verified webhook.
     expect(await status(agents.ana)).toMatchObject({ state: 'trial_expired', hasAccess: false });
   });
@@ -434,12 +446,17 @@ describe('Billing (e2e, PostgreSQL, Stripe mocked)', () => {
     const earlier = new Date(now.getTime() - 86_400_000);
     const trials = [null, { startedAt: earlier, endsAt: later }, { startedAt: earlier, endsAt: earlier }];
     const statuses = ['active', 'trialing', 'past_due', 'incomplete', 'incomplete_expired', 'canceled', 'unpaid', 'paused', 'something_new'];
-    type Acct = { subscriptionStatus: string | null; currentPeriodEnd: Date | null; cancelAtPeriodEnd: boolean } | null;
+    type Acct = { subscriptionStatus: string | null; currentPeriodEnd: Date | null; cancelAtPeriodEnd: boolean; priceUnresolved?: boolean } | null;
     const accts: Acct[] = [null, { subscriptionStatus: null, currentPeriodEnd: null, cancelAtPeriodEnd: false }];
     for (const subscriptionStatus of statuses)
       for (const currentPeriodEnd of [later, earlier, null]) for (const cancelAtPeriodEnd of [false, true]) accts.push({ subscriptionStatus, currentPeriodEnd, cancelAtPeriodEnd });
+    // Step 6: an unresolved price, in and out of a paid period.
+    for (const subscriptionStatus of ['active', 'past_due', 'incomplete', 'canceled'])
+      for (const currentPeriodEnd of [later, earlier]) accts.push({ subscriptionStatus, currentPeriodEnd, cancelAtPeriodEnd: false, priceUnresolved: true });
 
     const expected = new Map<string, string>();
+    const inScope = new Set<string>(); // listed accounts: a trial or a billing account
+    const createdFrom = new Date();
     const policy = { enabled: true, enforceFrom: new Date(run - 60_000) };
     let i = 0;
     for (const trial of trials)
@@ -451,11 +468,12 @@ describe('Billing (e2e, PostgreSQL, Stripe mocked)', () => {
             passwordHash: 'x',
             role: 'CUSTOMER',
             ...(trial && { trial: { create: trial } }),
-            ...(acct && { billingAccount: { create: { ...acct, stripeCustomerId: `cus_state${i}${run}`, livemode: false } } }),
+            ...(acct && { billingAccount: { create: { ...acct, stripeCustomerId: `cus_state${i}${run}`, livemode: false, syncedAt: acct.subscriptionStatus ? new Date() : null } } }),
           },
           select: { id: true, createdAt: true },
         });
         expected.set(id, accessState({ userCreatedAt: createdAt, trial, account: acct && { ...acct, plan: null } }, policy, now).state);
+        if (trial || acct) inScope.add(id);
       }
 
     const seen = new Map<string, string[]>();
@@ -467,6 +485,38 @@ describe('Billing (e2e, PostgreSQL, Stripe mocked)', () => {
       const want = (ADMIN_BILLING_FILTERS as readonly string[]).includes(state) ? [state] : [];
       expect([state, seen.get(id) ?? []]).toEqual([state, want]);
     }
+    // Admin billing summary: over every non-state filter (here the fixtures' created range), each account once, and the
+    // per-state counts are exactly the resolver's states; the page and the state filter never change them.
+    const range = { from: createdFrom.toISOString(), to: new Date().toISOString() };
+    const stripeCalls = () => Object.values(fake).reduce((n, f) => n + f.mock.calls.length, 0);
+    const callsBefore = stripeCalls();
+    // Scoped to this test's reader and accounts: other e2e files run in parallel on the same database and write their own
+    // audit rows (a global count was flaky in the Step 6 combined run).
+    const ours = { OR: [{ actorUserId: { in: [ids.root!, ids.admin!] } }, { subjectId: { in: [...expected.keys()] } }] };
+    const auditBefore = await prisma.auditLog.count({ where: ours });
+    const want: Record<string, number> = {};
+    for (const id of inScope) want[expected.get(id)!] = (want[expected.get(id)!] ?? 0) + 1;
+    const sum = (await agents.root.get(api('/admin/billing/accounts')).query({ ...range, limit: 5 }).expect(200)).body;
+    expect(sum.items).toHaveLength(5);
+    expect(sum.pagination.total).toBe(inScope.size);
+    expect(sum.summary.accounts).toBe(inScope.size);
+    expect(Object.fromEntries(Object.entries(sum.summary.states as Record<string, number>).filter(([, n]) => n > 0))).toEqual(want);
+    expect(Object.values(sum.summary.states as Record<string, number>).reduce((a, b) => a + b, 0)).toBe(inScope.size);
+    const syncedInScope = inScope.size - (await prisma.user.count({ where: { id: { in: [...inScope] }, OR: [{ billingAccount: { is: null } }, { billingAccount: { is: { syncedAt: null } } }] } }));
+    expect(sum.summary.verified).toBe(syncedInScope);
+    const narrowed = (await agents.root.get(api('/admin/billing/accounts')).query({ ...range, state: 'payment_issue', limit: 100 }).expect(200)).body;
+    expect(narrowed.summary).toEqual(sum.summary);
+    expect(narrowed.items.every((i: { state: string }) => i.state === 'payment_issue')).toBe(true);
+    expect(narrowed.pagination.total).toBe(want.payment_issue);
+    // Reading never calls Stripe, writes audit rows, or changes records.
+    expect(stripeCalls()).toBe(callsBefore);
+    expect(await prisma.auditLog.count({ where: ours })).toBe(auditBefore);
+    await agents.admin.get(api('/admin/billing/accounts')).query(range).expect(403);
+
+    // Admin → Users "billing record" count: exactly the accounts outside the two no-record states.
+    const recorded = await prisma.user.findMany({ where: { AND: [{ id: { in: [...expected.keys()] } }, billingRecordWhere] }, select: { id: true } });
+    const noRecord = ['no_billing_record', 'trial_available'];
+    expect(new Set(recorded.map((r) => r.id))).toEqual(new Set([...expected].filter(([, s]) => !noRecord.includes(s)).map(([id]) => id)));
     // Every filter is exercised, and the API serves the same answer, paginated on the server.
     expect(new Set(expected.values())).toEqual(new Set([...ADMIN_BILLING_FILTERS, 'trial_available']));
     const scheduled = [...expected].find(([, s]) => s === 'cancellation_scheduled')![0];

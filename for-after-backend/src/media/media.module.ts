@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { PaidFeatures } from '../billing/paid-features.service.js';
 import { UsersModule } from '../users/users.module.js';
 import { MediaCleanup } from './media-cleanup.service.js';
 import { MediaController } from './media.controller.js';
@@ -23,11 +24,13 @@ import { MediaStorage } from './storage/media-storage.service.js';
     MediaCleanup,
     StorageQuota,
     StorageItemsService,
+    // Trial Step 4: the paid-only media check, for every module that uploads or writes messages.
+    PaidFeatures,
     { provide: MediaStorage, useClass: ImageKitMediaStorage },
     { provide: MalwareScanner, useClass: ClamAvMalwareScanner },
   ],
   // One storage client and one cleanup app-wide: Memory Vault media,
   // Recipient photos, message deletion and the Recipient portal reuse them.
-  exports: [MediaStorage, MalwareScanner, MediaCleanup, StorageQuota],
+  exports: [MediaStorage, MalwareScanner, MediaCleanup, StorageQuota, PaidFeatures],
 })
 export class MediaModule {}

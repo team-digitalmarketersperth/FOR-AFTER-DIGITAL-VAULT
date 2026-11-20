@@ -1,6 +1,9 @@
-import { NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
+import type { ConfigService } from '@nestjs/config';
+import { PLAN_LIMIT, planRecipientLimitMessage, TRIAL_LIMIT, TRIAL_RECIPIENT_LIMIT } from '../billing/billing-access.js';
 import { Prisma } from '../generated/prisma/client.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
+import type { MediaCleanup } from '../media/media-cleanup.service.js';
 import { RecipientsService } from './recipients.service.js';
 
 const row = {
@@ -23,7 +26,16 @@ const notFound = () =>
     clientVersion: 'test',
   });
 
-const setup = () => {
+// Billing on (Trial Step 3): an account created after enforcement; `user` is its billing rows.
+const BILLING_ON = { BILLING_ENABLED: 'true', BILLING_ENFORCE_FROM: '2026-01-01T00:00:00.000Z' };
+const account = (trialEndsAt: Date | null, subscription: object | null = null) => ({
+  createdAt: new Date('2026-06-01T00:00:00.000Z'),
+  trial: trialEndsAt && { startedAt: new Date(trialEndsAt.getTime() - 7 * 86_400_000), endsAt: trialEndsAt },
+  billingAccount: subscription,
+});
+const inTrial = () => account(new Date(Date.now() + 86_400_000));
+
+const setup = (env: Record<string, string> = {}, user: object = inTrial()) => {
   const recipient = {
     create: vi.fn().mockResolvedValue(row),
     findMany: vi.fn().mockResolvedValue([row]),
@@ -31,14 +43,30 @@ const setup = () => {
     update: vi.fn().mockResolvedValue(row),
     count: vi.fn().mockResolvedValue(1),
   };
-  // The list reads count + page in one array transaction.
-  const $transaction = (ops: Promise<unknown>[]) => Promise.all(ops);
+  const photo = { id: 'p1', storageKey: 'k', storageProvider: 'IMAGEKIT', providerFileId: 'f1', createdAt: new Date() };
+  const recipientPhoto = {
+    updateManyAndReturn: vi.fn().mockResolvedValue([photo]),
+  };
+  const $queryRaw = vi.fn().mockResolvedValue([]);
+  const users = { findUniqueOrThrow: vi.fn().mockResolvedValue(user) };
+  const customerActivity = { create: vi.fn(async () => ({})) };
+  const cleanup = { purge: vi.fn().mockResolvedValue({ purged: 1, failed: 0, deferred: 0 }) };
+  // The list reads count + page in one array transaction; create and remove use an
+  // interactive one (the callback gets the same delegates).
+  const $transaction = (ops: Promise<unknown>[] | ((tx: object) => Promise<unknown>)) =>
+    typeof ops === 'function' ? ops({ recipient, recipientPhoto, $queryRaw, user: users }) : Promise.all(ops);
   return {
     recipient,
-    service: new RecipientsService({
-      recipient,
-      $transaction,
-    } as unknown as PrismaService),
+    recipientPhoto,
+    $queryRaw,
+    users,
+    cleanup,
+    photo,
+    service: new RecipientsService(
+      { recipient, recipientPhoto, $transaction, customerActivity } as unknown as PrismaService,
+      cleanup as unknown as MediaCleanup,
+      { get: (key: string) => env[key] } as unknown as ConfigService,
+    ),
   };
 };
 
@@ -63,6 +91,84 @@ describe('RecipientsService', () => {
     expect(select).not.toHaveProperty('ownerUserId');
     expect(select).not.toHaveProperty('deletedAt');
     expect(res.birthday).toBe('2001-03-15');
+  });
+
+  describe('trial cap (Step 3): one live Recipient during an enforced active trial', () => {
+    it('billing off: no lock, no billing read, no count; the create goes ahead', async () => {
+      const { recipient, $queryRaw, users, service } = setup();
+      recipient.count.mockResolvedValue(5);
+      await service.create('owner-a', { firstName: 'Sofia' });
+      expect($queryRaw).not.toHaveBeenCalled();
+      expect(users.findUniqueOrThrow).not.toHaveBeenCalled();
+      expect(recipient.create).toHaveBeenCalled();
+    });
+
+    it('active trial, none yet: locks the User row, then reads billing and counts live rows in the same transaction', async () => {
+      const { recipient, $queryRaw, users, service } = setup(BILLING_ON);
+      recipient.count.mockResolvedValue(0);
+      await service.create('owner-a', { firstName: 'Sofia' });
+      expect(String(($queryRaw.mock.calls[0][0] as string[]).join(''))).toMatch(/FROM "User" WHERE id = .*FOR UPDATE/);
+      expect($queryRaw.mock.invocationCallOrder[0]).toBeLessThan(users.findUniqueOrThrow.mock.invocationCallOrder[0]);
+      expect(recipient.count).toHaveBeenCalledWith({ where: { ownerUserId: 'owner-a', deletedAt: null } });
+      expect(recipient.create).toHaveBeenCalled();
+    });
+
+    it.each([1, 3])('active trial with %i live (incl. excess from before): 409 TRIAL_LIMIT, nothing created', async (live) => {
+      const { recipient, service } = setup(BILLING_ON);
+      recipient.count.mockResolvedValue(live);
+      const err = await service.create('owner-a', { firstName: 'Second' }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ConflictException);
+      expect((err as ConflictException).getResponse()).toMatchObject({ statusCode: 409, code: TRIAL_LIMIT, message: TRIAL_RECIPIENT_LIMIT });
+      expect(recipient.create).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['paid (wins over active trial dates)', account(new Date(Date.now() + 86_400_000), { plan: 'monthly', subscriptionStatus: 'active', cancelAtPeriodEnd: false, currentPeriodEnd: new Date(Date.now() + 86_400_000) })],
+      ['grandfathered (created before enforcement)', { ...inTrial(), createdAt: new Date('2025-12-01T00:00:00.000Z') }],
+    ])('%s: no trial cap', async (_, user) => {
+      const { recipient, service } = setup(BILLING_ON, user);
+      recipient.count.mockResolvedValue(7);
+      await service.create('owner-a', { firstName: 'Eighth' });
+      expect(recipient.create).toHaveBeenCalled();
+    });
+  });
+
+  describe('paid plan cap (Updated Plans Step 3): an entitled, mapped tier', () => {
+    const paidUntil = new Date(Date.now() + 30 * 86_400_000);
+    const paid = (tier: 'PREMIUM' | 'COMPLETE' | null, status = 'active') =>
+      account(null, { plan: 'monthly', tier, subscriptionStatus: status, cancelAtPeriodEnd: false, currentPeriodEnd: paidUntil });
+
+    it.each([
+      ['PREMIUM', 10],
+      ['COMPLETE', 50],
+    ] as const)('%s: below %i creates; at or above it is 409 PLAN_LIMIT (not TRIAL_LIMIT), nothing created', async (tier, max) => {
+      const ok = setup(BILLING_ON, paid(tier));
+      ok.recipient.count.mockResolvedValue(max - 1);
+      await ok.service.create('owner-a', { firstName: 'Last one' });
+      expect(ok.recipient.create).toHaveBeenCalled();
+      for (const live of [max, max + 3]) {
+        const full = setup(BILLING_ON, paid(tier));
+        full.recipient.count.mockResolvedValue(live);
+        const err = await full.service.create('owner-a', { firstName: 'One more' }).catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(ConflictException);
+        expect((err as ConflictException).getResponse()).toEqual({ statusCode: 409, error: 'Conflict', code: PLAN_LIMIT, message: planRecipientLimitMessage(max) });
+        expect(full.recipient.create).not.toHaveBeenCalled();
+      }
+    });
+
+    it('unmapped paid (no stored tier): no cap, as before', async () => {
+      const { recipient, service } = setup(BILLING_ON, paid(null));
+      recipient.count.mockResolvedValue(500);
+      await service.create('owner-a', { firstName: 'Many' });
+      expect(recipient.create).toHaveBeenCalled();
+    });
+
+    it('a stored tier whose paid access has ended gives no plan cap (the gate decides writes, 402)', async () => {
+      const { recipient, service } = setup(BILLING_ON, paid('PREMIUM', 'canceled'));
+      recipient.count.mockResolvedValue(30);
+      await service.create('owner-a', { firstName: 'Reached only past the gate' });
+      expect(recipient.create).toHaveBeenCalled();
+    });
   });
 
   it('lists one page of the owner’s live recipients, newest first with an id tiebreak', async () => {
@@ -140,6 +246,31 @@ describe('RecipientsService', () => {
     const { where, data } = recipient.update.mock.calls[0][0];
     expect(where).toEqual(ownedBy('owner-a', 'r1'));
     expect(data.deletedAt).toBeInstanceOf(Date);
+  });
+
+  it('remove soft-deletes the Recipient and every live photo in one transaction, then purges the files', async () => {
+    const { recipient, recipientPhoto, cleanup, photo, service } = setup();
+    await service.remove('owner-a', 'r1');
+    const deletedAt = recipient.update.mock.calls[0][0].data.deletedAt;
+    expect(recipientPhoto.updateManyAndReturn).toHaveBeenCalledWith({
+      where: { ownerUserId: 'owner-a', recipientId: 'r1', deletedAt: null },
+      data: { deletedAt },
+      select: expect.objectContaining({ storageKey: true, providerFileId: true }),
+    });
+    expect(cleanup.purge).toHaveBeenCalledWith('recipientPhoto', [photo]);
+    expect(recipientPhoto.updateManyAndReturn.mock.invocationCallOrder[0]).toBeLessThan(
+      cleanup.purge.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('remove: a failed transaction (someone else’s Recipient, or a photo update error) purges nothing', async () => {
+    const { recipient, recipientPhoto, cleanup, service } = setup();
+    recipient.update.mockRejectedValueOnce(notFound());
+    await expect(service.remove('owner-b', 'r1')).rejects.toThrow(NotFoundException);
+    expect(recipientPhoto.updateManyAndReturn).not.toHaveBeenCalled();
+    recipientPhoto.updateManyAndReturn.mockRejectedValueOnce(new Error('photo update failed'));
+    await expect(service.remove('owner-a', 'r1')).rejects.toThrow('photo update failed');
+    expect(cleanup.purge).not.toHaveBeenCalled();
   });
 
   it('does not swallow unexpected database errors', async () => {

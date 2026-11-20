@@ -93,7 +93,7 @@ export class AdminDeathVerificationController {
 
   @Get()
   list(@Query() query: DeathVerificationListQueryDto) {
-    return this.cases.listForAdmin(query.status, query.page, query.limit);
+    return this.cases.listForAdmin(query);
   }
 
   @Get(':caseId')

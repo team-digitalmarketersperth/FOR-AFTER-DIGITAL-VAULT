@@ -137,6 +137,80 @@ describe('StorageQuota', () => {
     expect(owned.values).toEqual(Array(5).fill('owner-a'));
   });
 
+  describe('billing on: the allowance comes from the account’s own billing rows', () => {
+    const TRIAL = 100_000_000;
+    const now = Date.now();
+    const env: Record<string, string> = {
+      BILLING_ENABLED: 'true',
+      BILLING_ENFORCE_FROM: new Date(now - 86_400_000).toISOString(),
+    };
+    const trialUser = (endsAt: number, account: object | null = null) => ({
+      createdAt: new Date(now - 3_600_000),
+      trial: { startedAt: new Date(now - 3_600_000), endsAt: new Date(endsAt) },
+      billingAccount: account,
+    });
+    const billed = (ready: number, pending: number, user: object) => {
+      const $queryRaw = vi.fn(async (sql: TemplateStringsArray) =>
+        sql.join('').includes('FOR UPDATE')
+          ? []
+          : [
+              { status: 'READY', source: 'MESSAGE', bytes: BigInt(ready) },
+              { status: 'PENDING_UPLOAD', source: 'MESSAGE', bytes: BigInt(pending) },
+            ],
+      );
+      const findUniqueOrThrow = vi.fn(async () => user);
+      const prisma = { $queryRaw, user: { findUniqueOrThrow } };
+      const quota = new StorageQuota(
+        prisma as unknown as PrismaService,
+        { get: (key: string) => env[key] } as unknown as ConfigService,
+      );
+      const tx = prisma as unknown as Parameters<StorageQuota['reserve']>[0];
+      return { quota, tx, $queryRaw, findUniqueOrThrow };
+    };
+
+    it('active trial: usage and reserve both use exactly 100,000,000 bytes', async () => {
+      const s = billed(60_000_000, 0, trialUser(now + 3_600_000));
+      expect(await s.quota.usage('owner-a')).toMatchObject({
+        limitBytes: TRIAL,
+        remainingBytes: 40_000_000,
+        percentage: 60,
+      });
+      await expect(s.quota.reserve(s.tx, 'owner-a', 40_000_000)).resolves.toBeUndefined();
+      await expect(s.quota.reserve(s.tx, 'owner-a', 40_000_001)).rejects.toThrow(NOT_ENOUGH_STORAGE);
+    });
+
+    it('reserve resolves the allowance after the row lock, through the transaction', async () => {
+      const s = billed(0, 0, trialUser(now + 3_600_000));
+      await s.quota.reserve(s.tx, 'owner-a', 1);
+      expect(s.findUniqueOrThrow).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'owner-a' } }),
+      );
+      const lockOrder = s.$queryRaw.mock.invocationCallOrder[0];
+      expect(lockOrder).toBeLessThan(s.findUniqueOrThrow.mock.invocationCallOrder[0]);
+    });
+
+    it('over the trial allowance (e.g. files from before): existing files count, nothing more fits', async () => {
+      const s = billed(150_000_000, 0, trialUser(now + 3_600_000));
+      expect(await s.quota.usage('owner-a')).toMatchObject({ remainingBytes: 0, level: 'FULL', usedBytes: 150_000_000 });
+      await expect(s.quota.reserve(s.tx, 'owner-a', 1)).rejects.toThrow(STORAGE_FULL);
+    });
+
+    it('paid access wins over trial dates; an expired trial keeps the configured limit', async () => {
+      const paid = { plan: 'monthly', subscriptionStatus: 'active', cancelAtPeriodEnd: false, currentPeriodEnd: new Date(now + 86_400_000) };
+      for (const user of [trialUser(now + 3_600_000, paid), trialUser(now - 1)]) {
+        const s = billed(150_000_000, 0, user);
+        expect((await s.quota.usage('owner-a')).limitBytes).toBe(5 * GIB);
+        await expect(s.quota.reserve(s.tx, 'owner-a', 1)).resolves.toBeUndefined();
+      }
+    });
+
+    it('billing off never reads billing rows (the mock has no user model, so a read would throw)', async () => {
+      const s = setup(0, 0, LIMIT);
+      expect((await s.quota.usage('owner-a')).limitBytes).toBe(LIMIT);
+      await expect(s.quota.reserve(s.prisma as never, 'owner-a', 1)).resolves.toBeUndefined();
+    });
+  });
+
   describe('reserve', () => {
     const tx = (s: ReturnType<typeof setup>) =>
       s.prisma as unknown as Parameters<StorageQuota['reserve']>[0];
