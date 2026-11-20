@@ -37,6 +37,24 @@ Snapshot of the working tree on **2026-11-03**: last commit `345ad28` (2026-11-0
 | 2026-11-03 | Admin account settings: top-right menu, Profile · Security · Sessions (own account)           | Phase 22 · this file                    |
 | 2026-11-03 | Notification centre 7: consent, unsubscribe, suppression, pilot audience (mocked)            | `notification-centre.md`               |
 | 2026-11-09 | Security activity redesign (cards, graph, IP controls) + temporary IP blocks, **unavailable until attribution verified** | Phase 22 · `admin.md` §20–20a |
+| 2026-11-09 | Admin Users redesign: summary cards, account tracker, Needs review, verification filter (metadata only) | Phase 22 · this file |
+| 2026-11-09 | Death verification list redesign: status counts, case overview, review priorities, search | Phase 22 · this file |
+| 2026-11-09 | Support list redesign: status counts, request overview, Needs attention, subject search | Phase 22 · this file |
+| 2026-11-09 | Subscriptions & payments redesign: billing-mode notice, summary, access states, read-only | Phase 22 · `billing.md` §6 |
+| 2026-11-12 | Trial restrictions 2–3: 100 MB trial storage; one Recipient + one Trusted Contact (billing off by default) | Phase 21 · `billing.md` §8 |
+| 2026-11-13 | Trial restrictions 4: text-only messages, paid-only media (409 `PAID_FEATURE`), Pro controls | Phase 21 · `billing.md` §8 |
+| 2026-11-14 | Trial restrictions 5: four text questions across My Story + My Wishes (409 `TRIAL_LIMIT`); Memory Vault allowance pending | Phase 21 · `billing.md` §8 |
+| 2026-11-14 | Trial restrictions 6: expired trial read-only (402 + reason code), banner, plan dialog, read-only answers | Phase 21 · `billing.md` §8 · `trial-step-6-report.md` |
+| 2026-11-16 | Trial restrictions 7: five policy refinements approved (one trial memory, unlink-only DELETE, unschedule, resends blocked, tab-local unsaved copy); shared create gate and counters | Phase 21 · `billing.md` §8 · `trial-step-7-report.md` |
+| 2026-11-16 | Updated plans 2: tier/interval/exemption foundation, `PLAN_DEFINITIONS` (Free Trial, Premium, Complete), nullable `BillingAccount.tier` (no backfill), additive `GET /billing` `productTier`; no enforcement change | Phase 21 · `billing.md` §9 |
+| 2026-11-16 | Updated plans 3: storage (2 GB / 5 GB) and live-recipient (10 / 50) limits for entitled mapped Premium/Complete (409 `PLAN_LIMIT`); Step 2 close-out (`admin.e2e` pins billing off). Needs `prisma migrate deploy` locally | Phase 21 · `billing.md` §9 |
+| 2026-11-16 | Updated plans 4: media by kind (Premium photo/audio, no new video: 409 `TIER_REQUIRED` → Complete; Complete all) across uploads, completion, formats, restores, conversions; "Complete" video controls; `features.mediaKinds` | Phase 21 · `billing.md` §9 · `updated-plans-step-4-report.md` |
+| 2026-11-17 | Updated plans 5: durable AI allowances (trial 5; Premium 50 / Complete 200 per UTC month), `AiUsage` reservations with settle/release/expiry, single-use request ids, `GET /assistant/usage`, companion usage line and exhaustion message, GUIDE billing facts updated | Phase 21 · `billing.md` §9 · `assistant.md` · `updated-plans-step-5-report.md` |
+| 2026-11-17 | Updated plans 6: explicit tier/interval Stripe price settings (duplicates fail start-up; legacy prices interval-only, never sold), Checkout by `{ tier, interval }` with a Stripe price check, webhook sync stores tier from the mapping, unknown/ambiguous prices → `plan_unresolved` (fail closed; held unmapped subscriptions keep access), migration `add_billing_price_unresolved`. Close-out: retained tier can't bypass `PLAN_UNRESOLVED`, transient Stripe errors never stored as unknown, recovery verified, support-only wording; e2e 15 files 181/181, unit 1651/1651, FE 440/440, build 62/62, browser 10/10 (fake Stripe). Prisma CLI restored from an undocumented `^8.0.0-rc.34` to the declared `^7.10.0` (lockfile = HEAD, client unchanged): `tsc` exit 0, unit 1651/1651, combined e2e 181/181. Sandbox Checkout blocked (no sandbox prices, no keys, CLI not logged in); unresolved-price rule is interim | Phase 21 · `billing.md` §9 · `updated-plans-step-6-report.md` |
+| 2026-11-17 | Updated plans 7: customer plan and usage experience. Additive `GET /billing` `people` (live counts + enforced limits) and `planDefinitions`; Settings → Plan rebuilt (summary, usage meters, three plan cards + comparison, tier/interval Checkout only when configured, no prices: no pricing contract); lock badges "Premium"/"Complete", Complete's 50 and the two-contact maximum offer no plan; companion "Compare plans" on trial/Premium exhaustion. Local only (fake Stripe): e2e 183/183, unit 1651/1651, FE 53 files pass, build 62/62, browser 12/12; sandbox payments still blocked | Phase 21 · `billing.md` §9 · `updated-plans-step-7-report.md` |
+| 2026-11-19 | Updated plans 7 refinement: Settings → Plan without sales cards or comparison (marketing site owns pricing); "Choose a plan" keeps the only authenticated Checkout (configured tiers, no subscription held); one "Compare plans" link only via `NEXT_PUBLIC_PLANS_URL` (https), **unset: no verified pricing URL**; companion link → "View plans". The 2026-11-19 10:53 `plan.tsx` save was byte-identical to Step 7 (no content change). Fresh: FE 53 files 746/746, tsc/eslint clean, build 62/62, browser 9/9 (1280 + 390); backend unchanged | Phase 21 · `billing.md` §9 · `updated-plans-step-7-report.md` |
+| 2026-11-19 | Updated plans 8: final integration verification (local, fake Stripe; **not payment verification**). Settings → Plan = status, usage, Start free trial, Manage billing, one "Choose a plan" button; purchase controls moved to the new authenticated `/settings/plan/choose` (subscribers and unresolved refused there). **Fixed:** Checkout no longer allowed while a first payment is pending (double-charge risk; 409); usage meters re-read storage/AI after a plan change (stale limits after trial start). Fresh: backend unit 1651/1651 (78 files; 2 rerun alone after resource failures), e2e 342/342 (27 files, one run), FE 918/918 (64 files), tsc/lint clean, builds (63/63 pages), browser journeys 17/17 at 1280/820/390/200%. Repo Playwright suite not run (real ImageKit). Sandbox payments still blocked | Phase 21 · `billing.md` §9 · `updated-plans-step-8-report.md` |
+| 2026-11-20 | Updated plans 7 refinement 2: Settings → Plan as an account page. Concise dates once each with UTC offset ("Trial ends"/"Renews"/"Paid until"/"Access ends", no ranges or long zone names); "View plans" in the read-only notice; Choose a plan + optional external "Compare plans" (buy-eligible only, plain `NEXT_PUBLIC_PLANS_URL`, **unset: no verified URL**) inside the summary; usage grid 1/2/3 columns. Frontend only. Fresh: 53 files 750/750 (6 rerun alone after worker-start failures), tsc/eslint clean, build 63/63, browser 16/16 (1280 + 390 + keyboard). Gaps: no post-sign-in return to `/settings/plan/choose`; marketing link unwired; grandfathered accounts still offered Choose a plan (open policy) | Phase 21 · `billing.md` §9 · `updated-plans-step-7-report.md` |
 
 ### 🟡 In progress
 
@@ -44,6 +62,8 @@ Snapshot of the working tree on **2026-11-03**: last commit `345ad28` (2026-11-0
 - [~] **Customer announcement email** — policy implemented (consent, unsubscribe, suppression, death-report rule) and a
       pilot audience (Step 7, 2026-11-03, mocked); gate off; first pilot send awaits content + owner approval
 - [~] **Billing** — built and disabled; needs Stripe products/prices, keys, live webhook and the §50 replay test
+      (Updated Plans Steps 2–8 verified locally with fake Stripe on 2026-11-19; open: sandbox payment test, marketing
+      pricing URL, Premium/live prices, legacy-tier migration, grandfathered policy, tier switching, unresolved-price approval)
 - [~] **Email (Microsoft Graph)** — live-verified locally 2026-10-22; production credential + SPF/DKIM/DMARC open
 - [~] **Media** — production ImageKit keys and retiring the legacy B2 bucket open
 - [~] **Staging** — Railway demo live; worker service, CI, separate secrets and QA open
@@ -177,7 +197,7 @@ Each phase lists **Done** items first, then **To do**. "Backend ready" means the
 |  18   | Recipient portal           | ✅ Backend (Step 13) + UI (Step 19) + email sign-in codes and release emails (Step 24) + SMS sign-in via Twilio Verify (real SMS verified 2026-10-16) + sender display-name snapshot (2026-10-17); grant revocation and read receipts post-MVP                                                                                                                                                                                                                                                                                          |       7 / 7        |
 |  19   | Death verification         | ✅ Workflow (Steps 14–15) + Trusted Contact portal, Customer safety UI (Step 19), admin review UI (Step 20), supporting evidence (Phase 19A) and second-contact confirmation (Phase 19B)                                                                                                                                                                                                                                                                                                                                                |      15 / 15       |
 |  20   | Notifications              | 🟡 Email via Microsoft Graph (live-verified locally 2026-10-22); announcements to customers built but blocked (gate off + policy decisions, 2026-11-03); production credential + SPF/DKIM/DMARC open | 3 (+1 partly) / 5  |
-|  21   | Stripe billing             | 🟡 Free trial + Stripe billing built locally, **disabled by default** (2026-10-31); Stripe products, keys, live webhook open |       0 / 6        |
+|  21   | Stripe billing             | 🟡 Free trial + Stripe billing built locally, **disabled by default** (2026-10-31); trial restrictions Steps 2–7 built locally (2026-11-12 to 11-16); updated plans Steps 2–5 (tier foundation; paid storage, recipient, media-kind and AI-allowance limits for mapped tiers) 2026-11-16/17; Stripe products, keys, live webhook open |       0 / 6        |
 |  22   | Admin portal               | 🟡 Admin backend + UI; operations Steps 1–9 (2026-10-30–31); Create admin/invitations; Notification centre (2026-11-03); admin write actions need step-up re-auth | 6 (+1 partly) / 7  |
 |  23   | Audit + security           | 🟡 `AuditLog` + admin events (Step 16) + `PASSWORD_CHANGED` (Step 22); full app audit (Step 23); other customer events, export, deletion open                                                                                                                                                                                                                                                                                                                                                                                           | 2 (+1 partly) / 7  |
 |  24   | Testing                    | ✅ Local: unit 1,280 + e2e 563 on dedicated test DB/Redis; §50 matrix (Stripe replay waits for phase 21); worker load harness, 7 profiles pass (2026-10-21). Staging/production not tested                                                                                                                                                                                                                                                                                                                                              |       7 / 7        |
@@ -1362,6 +1382,91 @@ Frontend testing (component + Playwright E2E) is tracked in phase 24 and applies
 > `no-store`); admin e2e 32/32; frontend plan, shell, billing and affected tests 207/207, typecheck, eslint.
 > **Not done:** any real Stripe (test-mode) run, launch decisions in `billing.md` §1, `next build`, Playwright.
 
+> **Trial restrictions Step 2 (2026-11-12, `billing.md` §8, `media-storage.md` §5): entitlements + 100 MB trial
+> storage.** Pure `entitlements()` beside `accessState()` (unchanged): an enforced active trial holds exactly
+> 100,000,000 bytes; paid (wins over trial dates), billing off, pre-enforcement and no-access states keep
+> `STORAGE_LIMIT_BYTES`. `billingPolicy()` shared by `BillingService` and `StorageQuota`; `reserve()` resolves the
+> allowance after the `User` row lock in the same transaction; `GET /users/me/storage` `limitBytes` carries it; storage
+> card/manager show decimal MB for a decimal limit. **Verified:** backend unit 1553/1554 (the one failure,
+> `app.setup.spec.ts`, is a 5 s Nest start-up timeout under load in a bare-module test, unrelated), `tsc`, oxlint; e2e
+> on the isolated `for_after_p24` DB/Redis :6390 (fake storage and scanner, email disabled, Stripe unconfigured):
+> new `trial-storage` 7/7 (exact boundary, one byte over, concurrency, over-limit read/delete, paid precedence,
+> grandfathered, expired and `trial_available` → 402, trial start unchanged) plus `storage-quota`, `storage-manager`,
+> `billing` all passing; frontend `format`, storage usage/manager 32/32. **Not built:** recipient/contact caps,
+> text-only messages, media restrictions, question limits, Pro UI; open decisions in `billing.md` §8.
+> **Close-out (2026-11-12):** `app.setup.spec.ts` timeout is pre-existing (a clean `HEAD` worktree also fails cold at
+> 5.4 s and passes warm; the working tree passes 3/3 warm); frontend isolated typecheck (excluding the dev server's
+> `.next`) and an isolated `next build` pass; Nest boot check 14/14: only the API reads the billing policy (worker
+> unaffected), missing/blank/invalid `BILLING_ENFORCE_FROM` with `BILLING_ENABLED=true` stops startup with a clear message.
+
+> **Trial restrictions Step 3 (2026-11-12, `billing.md` §8): one Recipient and one Trusted Contact in an enforced
+> active trial.** `creationCaps()` in the central policy (part of `entitlements()`); `trialCap()`/`resolveAccess()` read
+> the billing rows inside the create transaction after the `User` row lock (recipients gained the lock when billing is
+> on; contacts already had it). Every live contact counts whatever its invitation; the two-contact maximum is checked
+> first. Refusal: 409 `code: TRIAL_LIMIT` before any row or invitation. Paid, billing-off, pre-enforcement unchanged;
+> expired/not-started stay 402. `GET /billing` `trialCaps`; frontend Pro badge + dialog (View plans / Close) on the
+> People and Trusted Contacts add controls, explanations on the two `/new` pages, `TRIAL_LIMIT` form errors keep input.
+> No death-verification conflict (a one-contact case needs one confirmation, as today). **Verified:** backend unit
+> 1567/1567, `tsc`, oxlint; e2e (isolated DB/Redis, fake email/SMS, Stripe unconfigured) new `trial-people` 9/9 and
+> regression recipients, trusted-contacts, trusted-contact-invitations, billing, trial-storage, storage-quota (7 files,
+> 101/101 with `trial-people`); frontend 16 files 254/254, isolated `tsc`, eslint. **Not built:** text-only messages,
+> media restrictions, question limits, final expired-trial UI.
+
+> **Trial restrictions Step 4 (2026-11-13, `billing.md` §8): text-only messages, paid-only media.** `featureAccess()`
+> + `PaidFeatures` gate non-text message formats (create, format change, version restore), every content upload URL
+> (before any reservation/row/signature), and file-carrying conversions with 409 `code: PAID_FEATURE`; an upload that
+> completes after media access lapsed is removed, never READY; existing files stay viewable/deletable. `GET /billing`
+> `features`; frontend Pro controls + dialog. **Verified:** backend unit 780/780, `tsc`, oxlint; e2e (isolated) new
+> `trial-media` 11/11 + 8 regression files, 114/114; frontend 224/224, `tsc`, eslint. **Not built:** question limits,
+> final expired-trial UI; recipient photos ungated (open decision 4). Not run: `next build`, Playwright.
+
+> **Trial restrictions Step 5 (2026-11-14, `billing.md` §8): four text questions, My Story + My Wishes combined.**
+> `creationCaps().questions` (4, enforced active trial only); `answeredQuestions()` counts live answers with
+> non-whitespace text across both tables; `lockAnswerEntitlements()` (User row lock → access → question cap + memory links) + `assertQuestionSlot()` in
+> both save transactions, so parallel cross-section saves serialise. Editing, re-saving and notes never take a slot;
+> clearing words or deleting frees it (files/links kept, memories untouched); accounts above four keep editing. New
+> or replacement memory links are refused in the trial (409 `PAID_FEATURE`, corrected in the close-out); unchanged
+> links, unlinking, reads and deletes stay open.
+> `GET /billing` `questionsAnswered`; frontend counter "X of 4 trial questions answered" in both sections, Pro cards /
+> locked editor + shared dialog, stale saves keep their text, saves/deletes re-read the count. **Memory Vault text-entry
+> allowance: pending product decision** (not counted, no limit invented). **Verified:** see the Step 5 close-out below.
+> **Not built:** final expired-trial UI. Not run: `next build`, Playwright.
+>
+> **Step 5 close-out (2026-11-14):** memory links corrected (no new or replacement links in the trial, 409
+> `PAID_FEATURE`; unchanged links, unlinking, reads and deletes open); a workspace save regression found in the browser
+> and fixed; separate fix to the `app.setup.spec.ts` boot-test timing. Fresh runs: backend `tsc` and oxlint exit 0, unit
+> 1597/1597 (76 files), isolated e2e 11 files 108/108; frontend 833/833 (58 files), isolated source typecheck exit 0
+> (the normal `tsc` is blocked by the dev server's generated `.next/dev/types`), eslint; isolated production
+> `next build` exit 0 with generated-route types valid; isolated browser run 14/14. Open: Memory Vault trial text
+> allowance (pending decision), `trial-media` first-test timeout under heavy parallel load (contention). Full report and
+> evidence: `docs/trial-step-5-closeout.md`.
+
+> **Trial restrictions Step 6 (2026-11-14, `billing.md` §8, report `docs/trial-step-6-report.md`): expired trial,
+> read-only access and the upgrade experience.** No new server rule: the existing gate refuses every gated write at
+> request time (server time, trial ends exactly at `endsAt`); its 402 now carries a reason `code` (`TRIAL_EXPIRED`,
+> `TRIAL_NOT_STARTED`, `PAYMENT_PENDING`, `PLAN_ENDED`). Audited every customer write controller; reads, downloads,
+> deletes, account, support, preferences, billing and sign-out stay open. Frontend: compact "Your free trial has ended"
+> notice, shared plan dialog on create/edit controls and links, read-only answers, a once-per-visit message prompt,
+> refused saves keep the text and say it wasn't saved, plan re-read at trial end/focus/refusal, honest copy when
+> checkout is unavailable; the shell no longer remounts pages when the plan loads. **Verified (fresh):** backend `tsc`,
+> oxlint (5 pre-existing warnings); unit 1599/1599 (76 files; one earlier combined run had 1 timeout in
+> `auth.controller.spec.ts`, see the report); isolated e2e 17 files 199/199 incl. new `trial-expired` 8; frontend
+> 853/853 (59 files), isolated source typecheck, eslint; isolated production `next build` + route types; isolated
+> browser 14/14 (desktop and phone). Pending decisions: draft autosave and memory unlinking after expiry, unscheduling,
+> Memory Vault trial text allowance.
+
+> **Trial restrictions Step 7 (2026-11-16, `billing.md` §8, report `docs/trial-step-7-report.md`): approved policy
+> refinements.** All five decisions **approved**: (1) refused autosave keeps a temporary tab-only copy labelled "Not saved
+> to your account." (server autosave stays gated); (2) unlinking memories via a new removal-only
+> `DELETE /my-story/prompts/:key/response/memories` (subset of current links, atomic; PUT stays gated); (3) unscheduling
+> stays open, (re)scheduling gated; (4) invitation resends stay gated; (5) one live Memory Vault memory in an active trial
+> (`TRIAL_MEMORIES`, User-row lock, 409 `TRIAL_LIMIT`, `GET /billing` `memoriesSaved`). Frontend: "X of 1 trial memory
+> used", shared Pro dialog on Save a memory, shared `useCreateGate` on `/memory-vault/new`, `/people/new`,
+> `/trusted-contacts/new` (loading/retry, never unrestricted), single "Check plan again" inside the shell, "Unschedule"
+> without "to edit" when locked. **Verified (fresh):** backend `tsc`, oxlint; unit 1606/1606; isolated e2e 19 files (new
+> `trial-step7` 12); frontend suite, eslint, source typecheck; isolated `next build`; isolated browser 12/12 (desktop and
+> phone). See the report for exact numbers and what was not run.
+
 > **SUPER_ADMIN bootstrap, Create admin and billing access (2026-10-31, `docs/admin.md` §22a).** Migration
 > `20261031150000_add_admin_invitations` (additive enum values: `AuthTokenPurpose.ADMIN_INVITATION`, audit
 > `ADMIN_CREATED`, `ADMIN_INVITATION_SENT`, `ADMIN_INVITATION_ACCEPTED`, `SUPER_ADMIN_BOOTSTRAPPED`) applied to the
@@ -2448,6 +2553,151 @@ Local only; provider, Stripe and database failures simulated in tests. No live e
 - [ ] **Owner decision:** subscriptions after a verified death and during suspension (`docs/billing.md` §7). Nothing is built
 - [ ] Real Stripe test-mode run (checkout, replacement, cancellation, payment failure) has not happened: Stripe is mocked
 
+### 💳 Subscriptions & payments redesign — ✅ built locally 2026-11-09 (uncommitted)
+
+Reference `Subscriptions & payments off-state dashboard.png` (repo root) inspected; built for billing off/on with or
+without records (the reference's off-and-empty state is not hardcoded). Still SUPER_ADMIN only, read-only, `no-store`;
+no Stripe call, no schema change, no migration.
+
+- [x] API `GET /admin/billing/accounts` adds `summary` (`accounts`, `verified`, `states`) over every filter except
+      `state`, one REPEATABLE READ snapshot with the page (`billing.md` §6). States come from `accessStateWhere` (already
+      proven equal to `accessState()`) plus `billingRecordWhere` and the enforcement rule for the two no-record states,
+      so each account is counted once and the states add up to `accounts`
+- [x] Page: Read-only badge, Refresh (re-reads stored data; GET only), "Page data read" time with timezone; mode notice
+      from the response (`enabled`, `enforceFrom`): off = no restrictions, trials and checkout unavailable, plus "may
+      continue independently" only when stored Stripe states exist; on = enforcement date, "doesn’t confirm the Stripe
+      connection"; on a failed load the page shows the error, never "off" or zeros
+- [x] Cards: Accounts with records (accounts, not subscriptions); Paid, in current period (paid_active +
+      cancellation_scheduled + payment_issue, the resolver's paid-access states); Active trials (trial_active); Payment
+      issues (payment_issue). Cards may overlap (stated). Access overview: SegmentedBar of non-zero states, titled
+      "Recorded access states" when billing is off; compact text when there are no records. Data & access: mode, records
+      in scope, "N of M accounts" with a stored Stripe verification (no single global freshness time), "No billing record
+      does not mean unpaid."
+- [x] Records: Access/Plan/Account ID primary, Subscription ID and account-created dates in a "More filters" `<details>`,
+      one Apply step with the existing validation; filter chips + Clear; table: account (name, email, short id), plan
+      (+ `sub_…`), access badge + stored Stripe status, current period (trial vs paid period, "ended" judged by the
+      server's read time), Last verified (`syncedAt`, "Never verified", or "Not applicable (trial only)"), View account →
+      existing `/admin/users/:id`
+- [x] **Verified (2026-11-09):** backend `tsc --noEmit` clean, build config compiled to a scratch dir, oxlint exit 0,
+      unit `src/billing` 23/23; e2e on isolated DB/Redis `billing` 15/15 (billing on: summary over the created-range
+      scope equals the resolver's states for every trial/status/period/cancel combination, reconciles with the total,
+      unchanged by page size and the state filter, `verified` = synced accounts, no Stripe fake calls and no audit rows
+      from reads, ADMIN 403) and `admin-onboarding` 7/7 (billing off: a stored active subscription still counts as
+      paid_active, an opened-checkout account reads no_billing_record, no `cus_`/secrets in responses); frontend `tsc`
+      clean, eslint clean on touched files, `billing.test.tsx` 10/10, `users.test.tsx` 13/13, `next build` passed.
+      Rendered off-and-empty and on-with-records at 1440/820/390 px (stubbed fictional data, any non-GET fails): no
+      page-wide overflow, keyboard focus ring visible
+- [ ] Not run: full suites, full e2e suite, Playwright e2e, real-API browser check (admin sign-in needs TOTP)
+- [ ] **Separate defect (not fixed, sync policy):** `billing.md` §2 says billing off means "no webhooks (503)", but
+      `BillingService.webhook()` checks only that Stripe is configured, so verified webhooks still sync records with
+      billing off. Decide whether the code or the doc is right
+- [ ] Gap: an account with a Stripe customer but no trial or subscription status is listed, but no Access filter
+      selects it (its state, trial_available / no_billing_record, is not a filter option); the overview counts it
+
+### 🎧 Support list redesign — ✅ built locally 2026-11-09 (uncommitted)
+
+Reference `For After support inbox dashboard.png` (repo root) inspected; built with live data. Sample tickets,
+SUP-style references, emails and the "Design preview · Sample requests" badge are not used. Detail page (replies,
+internal notes, status changes) unchanged; no schema change, no migration.
+
+- [x] API `GET /admin/support/requests` (same route and guards): new `search` = subject (contains, any case, ≤150) or a
+      full request id, never descriptions, messages or notes, never logged; response adds `evaluatedAt` and `counts` for
+      all four statuses over every filter except the status, in one REPEATABLE READ batch with the page
+- [x] Statuses as stored: Open, In progress, Waiting for customer, Resolved. Five cards (Total + each status, so they
+      reconcile), segmented bar with every status, status tabs with counts. "Needs attention" = status Open only, with
+      "View open requests" → `?status=OPEN#support-inbox`; nothing inferred (no unread, overdue or SLA)
+- [x] Inbox: debounced search; existing category/reference/account/created-from/to keep their Apply step inside an
+      accessible "More filters" `<details>` (open when any is active); active filter chips + Clear; scope label names
+      the applied filters and date range; table: subject as text + short reference with full value and Copy (the
+      detail page's `Reference`), category, status, account id (links to that account's filter; no email added),
+      created, real `lastPublicActivityAt`, View request → existing detail route
+- [x] Shared: the segmented bar moved to `admin-ui.tsx` (`SegmentedBar`, also used by Death verification);
+      `DataTable`'s scroll box is now `relative`, because absolutely positioned sr-only text in the last column escaped
+      it and widened the page (95 px at 820 px)
+- [x] **Verified (2026-11-09):** backend `tsc --noEmit` clean, build config compiled to a scratch dir, oxlint exit 0,
+      unit `src/support` 2/2; e2e `support` on isolated DB/Redis 10/10 (new: counts across all statuses beyond the page
+      and status tab, category scope, inclusive created range, subject and full-reference search, an internal note
+      leaves `lastPublicActivityAt` unchanged, no notes/descriptions/emails in responses, subject returned as stored,
+      Customer and anonymous 401, list reads add no audit row and change no request); frontend `tsc` clean, eslint
+      clean on touched files, `support-list.test.tsx` 13/13 + `support.test.tsx` 6/6 + death list 16/16, `next build`
+      passed. Rendered Support, Death verification and Users at 1440/820/390 px with the API stubbed from fictional
+      data (any non-GET would fail): no page-wide overflow on any, View/Review links reachable by Tab with a ring
+- [ ] Not run: full backend/frontend suites, full e2e suite, Playwright e2e, real-API browser check (admin sign-in
+      needs TOTP); vitest needed `--pool=threads --maxWorkers=1` (memory was 0.3 GB free)
+- [ ] Open: search matches the subject or a full reference, not a partial reference; Category sits in More filters
+      (Apply step) rather than the toolbar, to keep instant and submitted filters apart
+
+### ⚖️ Death verification list redesign — ✅ built locally 2026-11-09 (uncommitted)
+
+Reference `Death verification case review dashboard.png` (repo root) inspected; built with live data. Sample cases,
+counts, the date-range dropdown and the "Design preview · Sample cases" badge are not used. Detail page, decisions,
+safeguard rules, notices and release behaviour unchanged; no schema change, no migration.
+
+- [x] API `GET /admin/death-verifications` (same route and guards): new `search` (account email, first or last name, or a
+      full case id; ≤254, never logged); response adds `evaluatedAt` (server time), `counts` per status over the search
+      scope (all statuses, all time; the page also follows `status`), `readyAwaitingConfirmations` (ready cases short of
+      the required distinct confirmations, by the existing `confirmationState()`; null past 500 ready cases), all in one
+      REPEATABLE READ batch. Rows add `safetyNotice` (the Deliveries mapping `safetyNoticeStatus()`, now exported:
+      queued / attempted / provider_accepted / not_sent_case_closed), `safeguardStartedAt`, received/required
+      confirmations and `confirmationRequirementMet`; reporter snapshots and notes are read for counting only, never returned
+- [x] Categories = the persisted case status (exactly one per case), so they never overlap and sum to the total.
+      "Failed" and "outcome unknown" are not recorded separately; both show as "Attempted, not accepted yet"
+- [x] Page: header, read-only Refresh with server time and timezone, policy banner, 4 cards, segmented distribution
+      bar with legend and text equivalent, Review priorities (links filter the queue; "No case is approved
+      automatically."), search, status tabs with counts + More statuses select, filter chips/Clear, table (holder,
+      opened date + short ref, status + confirmations for short Ready cases, notice, safeguard from server time,
+      reports, Review/View case → existing detail route), empty/error/refresh-error states, workflow guide. No date
+      filter added: default stays all time
+- [x] **Verified (2026-11-09, one check at a time after a low-memory stop):** backend `tsc --noEmit` clean, build
+      config compiled to a scratch dir (dist untouched), oxlint exit 0; unit `src/death-verification` +
+      `admin-deliveries.service.spec` 118/118; e2e on isolated DB/Redis `admin` 37/37 (4 new: counts across the search
+      scope and status tab reconcile with the total, recorded notice states, distinct-person confirmations, two-year-old
+      open case still listed, search by name/email/full id, no notes or reporter details returned, list reads change no
+      case, audit row or case event, Customer/anonymous 401, verify still refused for a Ready case short of
+      confirmations and for a cancelled case), `death-verification` 26/26, `death-confirmations` 17/17; frontend `tsc`
+      clean, eslint clean on touched files, `death-verification-list.test.tsx` 16 + `admin.test.tsx` 55 = 71/71,
+      `next build` passed. Rendered at 1440/820/390 px with the API stubbed from fictional data (any non-GET would have
+      failed the run): no page-wide overflow, Review case reachable by Tab with a visible ring
+- [ ] Not run: full backend/frontend suites, full e2e suite, Playwright e2e, real-API browser check (admin sign-in
+      needs TOTP)
+- [ ] Open: search matches a full case id only, not the 8-character reference shown; no date filter (all time);
+      "failed" and "outcome unknown" notices are not recorded apart from "attempted"
+
+### 👥 Admin Users redesign + account tracker — ✅ built locally 2026-11-09 (uncommitted)
+
+Reference `For after admin users dashboard.png` (repo root) inspected; built as working components with live data. Its
+sample names, counts and the "Design preview · Sample data" badge are not used. Admin shell, sidebar, account menu and
+sign-out unchanged; no schema change, no migration.
+
+- [x] API `GET /admin/users` (same route, same guards): new `verification=verified|unverified` filter; items gain
+      `emailVerifiedAt` (stored state of the current address); new `summary` = `generatedAt, total, active,
+      emailVerified, customers` counted in PostgreSQL over every matching account (not the page), in the same
+      REPEATABLE READ batch as the page; `customersWithBillingRecord` only for SUPER_ADMIN (omitted for ADMIN, never 0)
+- [x] "Billing record" = a trial or a subscription status on file (`billingRecordWhere` in `billing-access.ts`),
+      exactly the accounts `accessState()` puts outside `no_billing_record`/`trial_available`; Plan badges still come
+      from the existing resolver (`BillingService.summaries`, one query per page)
+- [x] Page: header + compact privacy line, read-only Refresh with last-updated time and timezone, refresh-error notice
+      keeping the last results; 4 cards (billing card only for SUPER_ADMIN and customer scope; labels follow the role
+      filter); tracker with 3 independent progress bars (numeric text, no division by zero); Needs review ("emails
+      unverified" filters the table; "without billing records" is text only, with "does not mean unpaid"); table with
+      initials, name/email, role badge in mixed-role lists, verification, status, Plan (Unavailable ≠ No billing
+      record; admins "Not applicable"), Created, View account → existing detail route; filter chips + Clear filters;
+      empty states (no users yet / no matches / past last page); URL-held filters, debounced search, server paging
+- [x] `SummaryCard` moved to `admin-ui.tsx` (shared with notification results); focus rings on `linkClass`,
+      `SelectField` and `Pager` links now `outline-solid` (they computed `outline-style: none` under Tailwind 4)
+- [x] **Verified (2026-11-09):** backend `tsc --noEmit` clean, build config compiled to a scratch dir (dist untouched),
+      oxlint exit 0; unit `admin.service.spec` + `admin-access.service.spec` 18/18; e2e on isolated DB/Redis
+      `admin` 33/33 + `billing` 15/15 (incl. summary beyond the page, role/verification scopes, SUPER_ADMIN-only billing
+      count, no sensitive fields, predicate agrees with the resolver on every trial/status/period/cancel combination);
+      frontend `tsc` clean, eslint clean on touched files, `users.test.tsx` 13 + admin/announcement/security 84 = 97/97,
+      `next build` passed. Rendered a production build at 1440/820/390 px with the API stubbed from fictional data:
+      no page-wide horizontal overflow, View account reachable by Tab with a visible ring
+- [ ] Not run: full backend/frontend suites, full e2e suite, Playwright e2e, real-API browser check (admin sign-in
+      needs TOTP)
+- [ ] Open: no billing-record table filter (the Needs review item is not a link); fixed sort (newest first, id
+      tie-break); per-row Plan badges are read just after the counts, so they can differ under concurrent billing
+      writes; search is `ILIKE` without a trigram index (fine at current size)
+
 ### 🛡️ Security activity redesign + temporary IP blocks — ✅ built locally 2026-11-09 (uncommitted; blocking unavailable everywhere)
 
 Reference `Security activity and IP controls.png` (repo root) inspected; built as working components, no illustrative
@@ -2484,6 +2734,91 @@ incident row in `incident-response.md` §6a.
 - [ ] Not run: full backend/frontend suites, full e2e suite, real-API browser check (admin sign-in needs TOTP)
 - [ ] Open: retention period for `IpBlock` rows; the Block IP dialog shows the address as typed (the stored,
       normalised form appears in the success message and list)
+
+### 💞 People I Love form: mobile country + relationship choices — ✅ built locally 2026-11-10 (uncommitted; frontend only)
+
+Recipient Add (`/people/new`) and Edit (`/people/[id]/edit`) forms; the mobile field also on Trusted Contact
+Add/Edit (below). The Recipient portal's SMS sign-in country list is unchanged. No backend, schema or migration change: `Recipient.mobile` stays
+E.164 (API `IsE164Mobile` unchanged) and `Recipient.relationship` stays free text (max 50).
+
+- [x] New frontend dependency `libphonenumber-js` ^1.13.13 (the version the backend already gets through
+      class-validator). `src/lib/phone.ts`: country list from the library (245) with English names from
+      `Intl.DisplayNames`; `toE164(country, number)` is country-aware (AU `0491 570 006` → `+61491570006`, the
+      trunk 0 is not concatenated), a typed `+code` wins, extensions and non-phone characters are refused
+- [x] `CountrySelect` (`components/shared/country-select.tsx`, Radix Popover): button shows "Australia (+61)";
+      search by name, ISO code or "+61"; countries sharing a code (+1 US/Canada, …) listed separately;
+      ↑/↓/Home/End/PageUp/PageDown, Enter picks, Esc closes and focus returns to the button
+- [x] Country default: a saved valid number opens on its own country (for +1, the area code's: +1 613… → Canada,
+      +1 212… → United States); otherwise the region the browser states explicitly (`en-AU` → Australia); otherwise
+      none ("Choose country"), and a number without `+` then asks for a country. No account country exists to use
+- [x] A saved number the library can't read is shown exactly as saved with a note, and saved unchanged unless
+      edited; once edited it must be valid. The format check is labelled as a format check only; no SMS, no
+      verification added. Mobile stays optional (blank → `null`)
+- [x] Relationship: native select (Not set, Partner, Parent, Child, Sibling, Grandparent, Grandchild, Friend,
+      Relative, Other) with hint "Their relationship to you."; Other reveals "Please specify the relationship"
+      (required non-blank, max 50). A choice is saved as its label, Other as its text; a saved value that isn't a
+      choice (e.g. "Daughter") reopens as Other with its text. Text typed for Other survives switching options but
+      only the selected option is sent. Rendered as React text (no HTML). Labels affect nothing else
+- [x] **Verified (2026-11-10):** frontend `npm run typecheck` clean; eslint clean on touched files; `people.test.tsx`
+      51/51 (10 new, 2 updated: domestic/international/shared-code/blank/no-region phones, keyboard picker, saved
+      US vs Canada, unreadable saved number, predefined/Other/legacy relationships, Add/Edit round trips); full
+      frontend suite 789/789 on a solo run (an earlier run alongside the typecheck had 1 failure, not identified);
+      backend `src/recipients` unit specs 20/20 (owner scoping unchanged). Rendered the Edit form on the local dev
+      server with the API stubbed from fictional data at 1440/820/390/320 px: no horizontal overflow, keyboard
+      pick works, PATCH sent `+61491570006`
+- [x] **Trusted Contact Add/Edit (2026-11-10):** same mobile field (country picker, defaults, E.164, unreadable saved
+      number kept), via shared `MobileField` (`components/shared/mobile-field.tsx`) and `mobileIssue`/`mobileForApi`
+      in `lib/phone.ts`; "email or mobile" rule unchanged; mobile label not marked optional (as before). Relationship
+      stays free text there. Verified: `npm run typecheck` clean, eslint clean, `people.test.tsx` 52/52 (2 Trusted
+      Contact tests updated to E.164, 1 new: saved India number opens on India and saves unchanged, unreadable
+      `+6140000` kept), full frontend suite 790/790; Edit form rendered at 1440/390 px on the local dev server with a stubbed API: no overflow,
+      keyboard pick works, PATCH sent `+61491570006`
+- [ ] Not run: backend e2e (`recipients.e2e-spec.ts`, `trusted-contacts`), Playwright e2e, real-API browser check
+- [ ] Open: the Recipient portal SMS sign-in still uses its own 5-country list and strips a leading 0 before adding
+      the code
+
+### 🗄️ Storage lifecycle fixes — ✅ built locally 2026-11-10 (uncommitted; backend only; fake provider)
+
+From the 2026-11-10 storage quota audit. No schema change, no migration, no change to allowances, billing/access
+rules, scanning or recipient permissions. Details: `media-storage.md` §2d.
+
+- [x] Re-upload window closed: `MediaCleanup.purge` deletes the known file at once but records `storageDeletedAt`
+      only after the path has settled (upload token TTL + 60 min in flight), then also deletes whatever is at the
+      path; any failure leaves the row for the next run (`PurgeResult.deferred`)
+- [x] Abandoned uploads retired after ≈ 82 min (was 24 h), never mid-scan: `complete` claims the row first
+      (`claimScan`, conditional `updatedAt` touch) in messages, Memory Vault, My Story, My Wishes, Recipient photos and
+      death evidence; a retired/completed/deleted row is never scanned
+- [x] Recipient delete: Recipient + photos soft-deleted in one transaction (`updateManyAndReturn`), files purged after
+      commit; photo upload now locks the live Recipient row (`FOR UPDATE`), like completion
+- [x] Read-only report: `npm run storage:reconcile-report` (live / pending / cleanup / unmatched; ids, paths, sizes;
+      never URLs; deletes nothing). **Not run against the real ImageKit account**
+- [x] **Verified (2026-11-10):** backend `tsc --noEmit` clean; oxlint clean on touched files; unit suite 1541/1542 (the
+      1 failure, `src/config/app.setup.spec.ts` "starts without Nest Observe", timed out at 5.35 s under full-suite
+      load and passes alone; untouched code); new/updated unit specs: cleanup 10/10, reconciliation report 4/4,
+      recipients 22/22; e2e on the isolated DB `for_after_p24` + Redis :6390 with the fake provider/scanner: new
+      `storage-lifecycle.e2e-spec.ts` 7/7 (concurrent reservations: 8×1000 B vs 5000 B → exactly 5 signed; signing
+      failure rolls back; token reuse after FAILED; path-check retry; scan lease vs retirement both orders; recipient
+      delete rollback + success; upload racing delete ×6), plus media, Memory Vault, memory→message, My Wishes rich,
+      My Story rich, recipients, storage manager, death evidence and admin: 10 files, 175/175. Existing e2e
+      assertions changed from "`storageDeletedAt` set at once" to "file removed at once, recorded once settled"
+- [ ] Not run: full e2e suite, real ImageKit (list API pagination, path lookup), manual ImageKit dashboard checks
+- [ ] Open (decisions): plan storage sizes, trial/disabled allowances, over-limit after downgrade, retention after
+      death/account deletion, double-counting of copies; deleting what the report finds needs a separate approval
+
+### 🔁 Review follow-up — ✅ built locally 2026-11-12 (uncommitted)
+
+- [x] Upload lifecycle: retirement moved from ≈ 82 min to a 24 h completion window + scan lease (a paused tab's
+      confirmation no longer loses the upload); `complete` past the window → `410` UPLOAD_EXPIRED; browser aborts an
+      upload after 60 min (`xhr.timeout`, matches `UPLOAD_IN_FLIGHT_MS`) and deletes its pending asset when the upload
+      itself fails (reservation released at once)
+- [x] Cleanup: no path lookup for a `READY` row deleted after settling (`cleanupRefSelect`); a provider rate limit
+      stops the batch (`MediaStorageThrottled`); shared `media-tables.ts`
+- [x] Admin billing summary: one SQL scan (`accessStateSql`, checked by the billing e2e) instead of 11 counts in an
+      interactive transaction (50k customers: ≈ 1.0 s → ≈ 0.3 s); death-verification "awaiting confirmations" exact
+      for every ready case (no 500 cap); Billing page relabelled "Accounts listed" / "With a billing record" (Users'
+      definition)
+- [x] People forms: unchanged phone fields keep the saved E.164; a country change that would turn a saved number
+      into another is refused until the number is typed on purpose; browser region applied after mount only
 
 ## 🧹 Housekeeping
 

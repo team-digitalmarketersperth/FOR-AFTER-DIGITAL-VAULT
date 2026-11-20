@@ -1,0 +1,6 @@
+{
+  "extends": "D:/FOR-AFTER-DIGITAL-VAULT/for-after-frontend/tsconfig.json",
+  "compilerOptions": { "incremental": false, "baseUrl": "D:/FOR-AFTER-DIGITAL-VAULT/for-after-frontend", "paths": { "@/*": ["D:/FOR-AFTER-DIGITAL-VAULT/for-after-frontend/src/*"] } },
+  "include": ["C:/Users/DELL/AppData/Local/Temp/claude/49e87fd4d08ed1b2/d22e58fa-b27d-46e4-868d-984b9a811719/scratchpad/srccheck/next-env.d.ts", "D:/FOR-AFTER-DIGITAL-VAULT/for-after-frontend/src/**/*.ts", "D:/FOR-AFTER-DIGITAL-VAULT/for-after-frontend/src/**/*.tsx", "D:/FOR-AFTER-DIGITAL-VAULT/for-after-frontend/*.ts", "D:/FOR-AFTER-DIGITAL-VAULT/for-after-frontend/*.mts", "D:/FOR-AFTER-DIGITAL-VAULT/for-after-frontend/e2e/**/*.ts", "D:/FOR-AFTER-DIGITAL-VAULT/for-after-frontend/.next/types/routes.d.ts", "D:/FOR-AFTER-DIGITAL-VAULT/for-after-frontend/.next/types/root-params.d.ts", "D:/FOR-AFTER-DIGITAL-VAULT/for-after-frontend/.next/types/cache-life.d.ts"],
+  "exclude": ["D:/FOR-AFTER-DIGITAL-VAULT/for-after-frontend/next-env.d.ts", "D:/FOR-AFTER-DIGITAL-VAULT/for-after-frontend/node_modules", "D:/FOR-AFTER-DIGITAL-VAULT/for-after-frontend/.next/dev"]
+}

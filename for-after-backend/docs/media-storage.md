@@ -189,17 +189,50 @@ default: no product document sets one).
 
 ## 2d. Deletion and cleanup
 - **PostgreSQL is authoritative:** a row is soft-deleted (or marked `FAILED`) first, so it is inaccessible at once;
-  `MediaCleanup.purge` then deletes the provider file, best effort, and records `storageDeletedAt`. A provider failure
-  never restores access, is logged by media id only, and the request still succeeds.
+  `MediaCleanup.purge` then deletes the provider file, best effort. A provider failure never restores access, is
+  logged by media id only, and the request still succeeds.
+- **Settling (2026-11-10):** a row's signed upload token can still put one file at its path until the token expires
+  and an upload already in flight finishes: `settleMs` = `MEDIA_UPLOAD_URL_TTL_SECONDS` + 60 min
+  (`UPLOAD_IN_FLIGHT_MS`; the browser aborts an upload still running after 60 min, `xhr.timeout`). Before that,
+  `purge` deletes the known file by id at once but leaves `storageDeletedAt` unset (`deferred`). Once settled, it
+  deletes by id **and** looks the path up when a re-upload was possible, so a file re-uploaded with the old token
+  after the first delete is found and removed; only then is `storageDeletedAt` recorded. **No lookup (2026-11-12)**
+  for a `READY` row deleted only after settling: its file occupied the path until then and uploads never overwrite,
+  so nothing can have arrived (rows passed without `status`/`deletedAt`, `FAILED` rows and early deletes always get
+  the lookup). A failure at any step leaves the row unmarked for the next run; a provider rate limit (after the SDK's
+  own retries, `MediaStorageThrottled`) also stops the rest of that batch until the next run (`deferred`). B2 rows
+  are deleted and recorded at once, as before.
 - **Retry (reconciler):** `MediaCleanup.reconcile` runs at startup and every `MEDIA_CLEANUP_INTERVAL_SECONDS`
   (in-process timer re-scanning PostgreSQL, like the release reconciler; idempotent; safe on several instances).
-  It retries **ImageKit** rows that are deleted or `FAILED` but not storage-deleted, at most 100 per table per run.
+  It handles **settled ImageKit** rows that are deleted or `FAILED` but not storage-deleted, at most 100 per table per
+  run (rows deleted earlier were already purged by id; the run finishes them with the path check).
   Deleting a file that is already gone succeeds.
-- **Stale uploads:** `PENDING_UPLOAD` rows older than 24 h are soft-deleted by the reconciler, and whatever was
-  uploaded for them is removed. A row without a provider file id is looked up at its own path only after its upload
-  token has expired (ImageKit's listing lags new uploads by a few seconds, and the token could still be used).
+- **Upload lifecycle (2026-11-12)**, from the row's `createdAt` (upload URL issued):
+  1. until `settleMs` (≈ 70 min): the upload may still arrive (token TTL, then up to 60 min in flight);
+  2. until the **completion window** (`COMPLETION_WINDOW_MS`, 24 h): `complete` may start a verification, so a tab
+     that was backgrounded or frozen between upload and confirmation still succeeds. Later, `complete` answers
+     **`410` "This upload expired before it was confirmed. Please upload the file again."** and scans nothing;
+  3. after the window **and** a scan lease (`MEDIA_MALWARE_SCAN_TIMEOUT_MS` + 10 min, `SCAN_MARGIN_MS`) with no
+     verification started: the reconciler retires the row (soft delete) and the settled purge removes whatever was
+     uploaded (a retired row then answers `404`).
+  Every `complete` first calls `MediaCleanup.claimScan`, a conditional update of `updatedAt` on the live
+  `PENDING_UPLOAD` row inside the window: a scan in progress is never retired, and a row retired (or completed,
+  deleted) first is never scanned (`409`/`404`). The 2026-11-10 bound (≈ 82 min) retired uploads whose tab had only
+  paused; it was replaced by this window. Reserved storage: the browser deletes its pending asset at once when the
+  upload itself fails or is cancelled, so only a page closed mid-upload keeps a reservation until retirement. A row
+  without a provider file id is looked up at its path only once settled (ImageKit's listing lags new uploads).
 - **Never automatic on B2:** the reconciler skips B2 rows.
 - Deleting a **message** or a **memory** soft-deletes all its live media (any status) in the same UPDATE, then purges.
+- Deleting a **Recipient** soft-deletes it and all its photos (any status) in one transaction
+  (`RecipientsService.remove`), then purges after commit. Photo uploads lock the live Recipient row (`FOR UPDATE`),
+  like completion, so an upload racing the delete either lands before it (and is deleted with it) or sees no Recipient.
+- **Reconciliation report (read-only, 2026-11-10):** `npm run storage:reconcile-report` (after `npm run build`) pages
+  through the whole ImageKit library (1000 per page, oldest first; `path` is not used because it does not search
+  sub-folders) and classifies every file under `/for-after/` against the media rows: **live**, **pending** (upload not
+  verified), **cleanup** (row deleted/FAILED: cleanup not finished, or present after cleanup was recorded) and
+  **unmatched** (no row, or a live row recording another file id). It prints counts and, for cleanup/unmatched files
+  only, file id, path (ids only), size and reason: never a URL, file name, content or key. It deletes nothing. Files
+  deleted during the run can shift a page.
 
 ## 2e. Malware scanning (Phase 12B)
 
@@ -226,8 +259,8 @@ browser ──upload──► ImageKit ──► POST …/complete (server)
   choose a different file.` The log line carries the media id only (no signature name, path or URL).
 - **Scanner error (fail closed):** unreachable, timeout, size overrun, malformed reply or download failure → `503
   We couldn't finish checking this file. Please try again.` The row **stays `PENDING_UPLOAD`** (never READY), the
-  file stays, and `complete` can be retried. If never retried, the stale-upload reconciler retires it after 24 h
-  (§2d). No `SCANNING` state is needed: the scan runs inside the request, so a crash leaves a plain
+  file stays, and `complete` can be retried. If never retried, the reconciler retires it once abandoned (completion
+  window 24 h + scan lease, §2d); a retry after that needs a new upload. No `SCANNING` state is needed: the scan runs inside the request, so a crash leaves a plain
   `PENDING_UPLOAD` row.
 - **Nothing new to deny:** an infected or unscanned file is `FAILED` or `PENDING_UPLOAD`, which already gets no
   Customer or Recipient signed URL, never satisfies scheduling composition, and never reaches a Recipient. No new
@@ -289,13 +322,19 @@ The original plan's `MediaFile` model (provider, providerAssetId, objectKey, …
 
 **Approved policy (2026-10-08):** one limit per Customer, `STORAGE_LIMIT_BYTES`, default **5 GiB** (5,368,709,120
 bytes), until per-plan limits arrive with billing (Phase 21; the Basic/Standard/Legacy sizes are still placeholders).
+**Trial allowance (2026-11-12, `billing.md` §8):** with billing enabled, an enforced active trial holds
+**100,000,000 bytes** (decimal 100 MB, `TRIAL_STORAGE_BYTES`) instead; paid states (which win over trial dates), billing
+off, pre-enforcement accounts and states without access keep `STORAGE_LIMIT_BYTES`. `StorageQuota.reserve()` resolves the
+allowance from the account's own billing rows after taking the `User` row lock, in the same transaction; `GET
+/users/me/storage` returns it as `limitBytes`. An account already over its allowance keeps every file (read, download,
+delete) and gets `STORAGE_FULL` on new reservations.
 
 - **What counts:** Message media (incl. copies made from memories and stories), Memory Vault media, Recipient photos and
   My Story media (Phase 14B), from
   PostgreSQL only (never the provider): rows that are not deleted and `READY` (**used**) or `PENDING_UPLOAD`
   (**reserved**: an upload in progress holds its declared size). `FAILED` and deleted rows never count; a deleted file
   stops counting at once, whether or not its provider delete has finished. A stale `PENDING_UPLOAD` stops counting when
-  `MediaCleanup` retires it (24 h). Copies have their own rows, so nothing is counted twice.
+  `MediaCleanup` retires it (24 h completion window + scan lease, §2d; the browser removes a failed upload at once). Copies have their own rows, so nothing is counted twice.
 - **Enforced before any upload is signed**, inside the transaction that inserts the new `PENDING_UPLOAD` row
   (`StorageQuota.reserve`): message media, Memory Vault media, Recipient photos and the copies of a memory→message.
   It locks the Customer's `User` row (`SELECT … FOR UPDATE`), sums, and refuses with **409**:

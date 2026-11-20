@@ -1,0 +1,16 @@
+{"name":"[desktop] Memory Vault: \"1 of 1 trial memory used\"; Save a memory shows Pro and opens the dialog (keyboard); Escape returns focus; no expired banner","ok":true}
+{"name":"[desktop] direct /memory-vault/new at the cap explains (View plans, Back to Memory Vault), no form","ok":true}
+{"name":"[phone] Memory Vault: \"1 of 1 trial memory used\"; Save a memory shows Pro and opens the dialog (keyboard); Escape returns focus; no expired banner","ok":true}
+{"name":"[phone] direct /memory-vault/new at the cap explains (View plans, Back to Memory Vault), no form","ok":true}
+{"name":"[desktop] the existing trial memory can still be edited","ok":true}
+{"name":"[phone] first memory: \"0 of 1\", the form saves it, then \"1 of 1\" with Pro","ok":true}
+{"name":"[desktop] expired: Unlink removes one memory link; text stays read-only; the memory remains in the vault","ok":true}
+{"name":"[phone] expired: Unlink the other memory; no overflow","ok":true}
+{"name":"[phone] expired: \"Unschedule\" (not \"to edit\") works; Change timing opens the plan dialog","ok":true}
+{"name":"[desktop] trial ends mid-typing: \"Not saved to your account.\" and one exact tab copy","ok":true}
+{"name":"[desktop] expired + reload: read-only answer offers \"View unsaved draft\" (exact text); nothing becomes editable","ok":false,"error":"locator.waitFor: Timeout 30000ms exceeded. | Call log: | \u001b[2m  - waiting for getByRole('region', { name: 'Unsaved draft in this tab' }) to be visible\u001b[22m | ","shot":"D:/FOR-AFTER-DIGITAL-VAULT/for-after-backend/docs/evidence/trial-step-7//fail-11.png"}
+{"name":"[phone] read-only unsaved draft fits the phone width","ok":false,"error":"locator.waitFor: Timeout 30000ms exceeded. | Call log: | \u001b[2m  - waiting for getByRole('region', { name: 'Unsaved draft' }) to be visible\u001b[22m | ","shot":"D:/FOR-AFTER-DIGITAL-VAULT/for-after-backend/docs/evidence/trial-step-7//fail-12.png"}
+{"name":"[desktop] after an upgrade (subscription row) + reload the copy is offered; Restore gives the exact text; nothing is sent","ok":false,"error":"locator.waitFor: Timeout 30000ms exceeded. | Call log: | \u001b[2m  - waiting for getByRole('region', { name: 'Unsaved changes found' }) to be visible\u001b[22m | ","shot":"D:/FOR-AFTER-DIGITAL-VAULT/for-after-backend/docs/evidence/trial-step-7//fail-13.png"}
+{"name":"[desktop] Log out (account menu) removes the tab copy","ok":true}
+{"name":"[phone] paid: Memory Vault has no trial counter and a plain Save a memory link","ok":true}
+{"summary":{"checks":15,"passed":12,"failed":3}}

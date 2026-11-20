@@ -1,0 +1,13 @@
+{"name":"[desktop] active trial: Free Trial + separate access; usage meters from the API (AI 3 of 5, 1 of 1 people); Free Trial card is \"Your plan\"","ok":true}
+{"name":"[tablet] active trial plan page: no page-level horizontal scroll; the comparison scrolls inside its own box","ok":true}
+{"name":"[phone] active trial plan page: no page-level horizontal scroll; the comparison scrolls inside its own box","ok":true}
+{"name":"[zoom200] active trial plan page: no page-level horizontal scroll; the comparison scrolls inside its own box","ok":true}
+{"name":"[desktop] People I Love at the trial cap: counter \"1 of 1 person\"; \"Premium\" lock opens the shared dialog (allowance, Premium’s 10, View plans, Close); Escape returns focus","ok":true}
+{"name":"[desktop] Premium: name, \"Billed monthly\", Manage billing; Complete card says plan changes aren’t online (no upgrade/checkout); AI 12 of 50 with UTC reset; 3 of 10 people","ok":true}
+{"name":"[phone] Premium plan page fits the phone width","ok":true}
+{"name":"[desktop] Complete annual: name, \"Billed annually\", Complete card is \"Your plan\"; nothing to buy","ok":true}
+{"name":"[desktop] expired: read-only notice; Premium \"Not available to buy yet\"; the comparison opens with Enter (native disclosure) and its focus is visible","ok":true}
+{"name":"[desktop] expired: arrow keys pick Annual; Tab + Enter sends only { tier: COMPLETE, interval: annual }; the return shows \"Confirming\", access stays locked","ok":true}
+{"name":"[phone] expired: plan cards stack and fit; screenshot","ok":true}
+{"name":"[desktop] unresolved: \"Subscription\" + \"Plan being checked\" (never the stored Complete), Contact support, no checkout; AI \"Available again with an active plan\"","ok":true}
+{"summary":{"checks":12,"passed":12,"failed":0}}

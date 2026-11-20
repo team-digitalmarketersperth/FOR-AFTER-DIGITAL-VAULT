@@ -180,7 +180,7 @@ All under `/api/v1`. Every `/admin/*` route: `SessionAuthGuard` + `AdminGuard`.
 | `GET` | `/admin/access/admins` | Admin access (§22): admin accounts, role, status, two-factor enrolment, last admin sign-in; read-only |
 | `GET` | `/admin/access/admins/:id` | one administrator: effective permissions, access history (explicit fields); read-only |
 | `GET` | `/admin/system/ai` | AI operations (`docs/assistant.md` §8): `window=24h\|7d`, `area`, `action`; aggregates only, never a provider call |
-| `GET` | `/admin/users` | `page, limit (≤100), search, status, role` |
+| `GET` | `/admin/users` | `page, limit (≤100), search, status, role, verification=verified\|unverified`; items carry `emailVerifiedAt`; plus `summary` (2026-11-09): `generatedAt, total, active, emailVerified, customers` over every matching account (not the page), same REPEATABLE READ snapshot as the page; `customersWithBillingRecord` (a trial or a subscription status on file, `billingRecordWhere`) for SUPER_ADMIN only, omitted otherwise |
 | `GET` | `/admin/users/:userId` | account metadata + counts; audited |
 | `POST` | `/admin/users/:userId/suspend` | `{ reason }` (required, ≤1000) |
 | `POST` | `/admin/users/:userId/reactivate` | `{ reason? }` |

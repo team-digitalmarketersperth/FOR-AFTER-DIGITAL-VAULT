@@ -1,0 +1,19 @@
+{"name":"[desktop] active trial: Free Trial + \"Free trial\" access; \"Trial ends\" once, concise with offset; usage in 3 columns; Choose a plan; no sales content","ok":true}
+{"name":"[desktop] keyboard: Tab reaches \"Choose a plan\" with visible focus; Enter opens the purchase route","ok":true}
+{"name":"[desktop] usage request failures: storage and AI say \"Not available right now\" with Try again, never 0; Try again recovers","ok":true}
+{"name":"[desktop] plan request failure: an error with Try again; no assumed plan or zero usage","ok":true}
+{"name":"[phone] active trial: one usage column; fits; summary readable","ok":true}
+{"name":"[desktop] expired trial: \"Trial ended\", read-only notice with \"View plans\" (keyboard) → purchase route; no second button","ok":true}
+{"name":"[desktop] Checkout entry and return: keyboard sends only { COMPLETE, annual }; back on the plan page \"Confirming\", access unchanged","ok":true}
+{"name":"[desktop] typed content kept when the trial ends mid-form (unchanged behaviour)","ok":true}
+{"name":"[desktop] Premium: \"Billed monthly\", \"Renews\" concise; Manage billing works (fake portal returns here); no Choose/Compare","ok":true}
+{"note":"login throttled (5/min per IP); waiting 65 s and retrying once"}
+{"name":"[phone] Premium fits; one usage column","ok":true}
+{"name":"[desktop] Complete: \"Billed annually\"; nothing to buy","ok":true}
+{"name":"[desktop] cancel at period end: \"Access ends\" + \"won’t renew… keep full access\"; access still active","ok":true}
+{"name":"[desktop] ended paid access: read-only notice (read, nothing deleted) with \"View plans\"","ok":true}
+{"name":"[desktop] legacy/unmapped: \"Subscription\" · Monthly, \"4 added\" with no bar, AI \"Not counted\", never \"unlimited\"","ok":true}
+{"note":"login throttled (5/min per IP); waiting 65 s and retrying once"}
+{"name":"[desktop] exempt (grandfathered): \"Your current access\", no invented plan, no purchase","ok":false,"error":"Choose a plan should not be shown","shot":"D:/FOR-AFTER-DIGITAL-VAULT/for-after-backend/docs/evidence/updated-plans-step-7/refinement-2//fail-15.png"}
+{"name":"[desktop] unresolved: Contact support first; never Choose a plan or Compare plans","ok":true}
+{"summary":{"checks":16,"passed":15,"failed":1}}

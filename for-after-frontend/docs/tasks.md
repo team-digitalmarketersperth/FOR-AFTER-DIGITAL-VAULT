@@ -5,7 +5,7 @@
 
 | | |
 |---|---|
-| **Last updated** | 2026-10-03 |
+| **Last updated** | 2026-11-17 (updated plans Step 7; see the section below) |
 | **Latest step** | Step 23: full application audit + fixes (no new features); report: `for-after-backend/docs/step-23-audit.md` |
 | **Tasks** | **27 of 30** built and verified ✅ (FE-1–19, FE-21–28) |
 | **Open** | FE-20 billing (no backend yet), FE-29/30 WordPress login |
@@ -61,7 +61,7 @@
 | FE-17 | Memory Vault: category filter, CRUD, photo/audio; search, tags, pagination (Phase 13A); create a message from a memory (Phase 13B) | ✅ | 18 | `components/memory-vault/memories.tsx`, `memory-to-message.tsx` |
 | FE-18 | My Story: prompts by category, answer/edit/delete; approved V1 catalogue (from the API), 50,000-char answers, earlier-wording notice (Phase 14A); photo/audio/video answers with recorders, linked memories, create a message (Phase 14B) | ✅ | 18 | `components/prompts/prompts.tsx`, `memory-vault/memory-to-message.tsx` |
 | FE-19 | My Wishes: same, with the non-legal notice served by the API, informational only (Phase 15A; no checkbox or Continue since 2026-10-14); photo/audio/video with the shared uploader and recorders, files-only wishes, "Create message for loved ones" → existing message page for people and After-my-passing timing (Phase 15B); no AI (deferred post-MVP) | ✅ | 18 | `components/prompts/prompts.tsx`, `components/memory-vault/memory-to-message.tsx` |
-| FE-20 | Plan / billing pages (Stripe) | ⬜ | — | Backend not built (phase 21) |
+| FE-20 | Plan / billing pages (Stripe) | ⬜ | — | Phase 21 built locally, billing off by default; trial restriction UI Steps 3–5 below. Not marked done here (no Stripe test-mode run) |
 | FE-21 | Recipient sign-in: email → 6-digit code (2026-10-16: or mobile → SMS code) | ✅ | 19 | `components/portals/otp-sign-in.tsx`, `recipient.tsx` |
 | FE-22 | Released messages list + message page | ✅ | 19 | `components/portals/recipient.tsx` |
 | FE-23 | Photo/audio via short-lived signed URLs | ✅ | 19 | `MediaManager` (view-only scope) |
@@ -332,6 +332,243 @@ npx playwright test --project=account --no-deps                   # Step 22 alon
   with `SMS_VERIFY_PROVIDER=console` (never real SMS).
 - **Real SMS verified 2026-10-16** (one OTP to an Indian mobile, approved, Recipient session created). Procedure:
   `for-after-backend/docs/recipient-portal.md` §3b.
+
+## Trial restrictions Step 5: four text questions (2026-11-14, local)
+
+Backend contract: `for-after-backend/docs/billing.md` §8 (`GET /billing` `trialCaps.questions` + `questionsAnswered`;
+409 `TRIAL_LIMIT`). Shared pieces in `components/shared/trial-cap.tsx` (`useTrialQuestions`, `useQuestionGate`,
+`TrialQuestions`, `QuestionGateNotice`).
+- "X of 4 trial questions answered" on My Wishes (list) and My Story (workspace), and on both answer pages.
+- At the cap, a question with nothing saved shows **Pro**: the My Wishes card and the My Story workspace editor open
+  "Answer more questions with a plan" (View plans / Close). Saved answers stay editable; files-only answers still open
+  for their files.
+- A new answer waits for the plan: "Checking your plan…", or "We couldn’t check your plan just now" + "Check plan again";
+  never an open form on unknown data. An open or typed-in form is never swapped away; a `TRIAL_LIMIT` refusal keeps the
+  text and shows View plans. Saves and deletes re-read `GET /billing`.
+- Memory links (close-out): "Choose from Memory Vault" (workspace) and "Link a memory" (answer page) show **Pro** and
+  open "Available with a paid plan" when `features.memoryLinks` is false; linked memories keep Unlink.
+- Workspace save fix (close-out): the question is pinned before the save request, and a save no longer waits for the
+  plan refresh. Before, the refreshed list could move "first unanswered" mid-save, remounting the editor and dropping
+  "Your answer and private note are saved." (found in the browser run; regression test in `story-workspace.test.tsx`).
+- Paid, exempt and billing-off accounts: no counter, no Pro.
+- Memory Vault: no question limit (its trial allowance is a pending product decision).
+- **Verified (close-out, fresh):** full suite 58 files 833/833; isolated source typecheck exit 0 (the normal
+  `tsc --noEmit` is blocked by the dev server's generated `.next/dev/types`); eslint on changed files; isolated
+  production `next build` exit 0 with generated-route types valid; isolated browser run 14/14 (shared count, Pro
+  dialog with keyboard and Close, editing, delete and clear free a slot, loading/retry, stale refusal keeps text,
+  paid). Older editor tests route an explicit billing-off `GET /billing` (`BILLING_OFF` in `src/test/utils.tsx`).
+  Report: `for-after-backend/docs/trial-step-5-closeout.md`. **Not run:** the repo's Playwright suite (it targets
+  :3000/:4000 and the real development ImageKit).
+
+## Trial restrictions Step 6: expired trial, read-only (2026-11-14, local)
+
+Contract: `for-after-backend/docs/billing.md` §8 Step 6 (402 with `code` `TRIAL_EXPIRED` etc.). Shared pieces:
+`components/shared/plan-lock.tsx` (`usePlanLock`, `PlanLockedButton`, `UpgradeDialog`, per-state copy) and
+`PlanAccess` in `components/layout/dashboard-shell.tsx`.
+- Notice on content pages: "Your free trial has ended" / "Choose a plan to keep creating and editing. You can still
+  view, download and delete your existing content." / View plans. Other no-access states keep their own copy.
+- Create/edit controls and links open the plan dialog (View plans / Close); blocked `…/new|edit|create-message` URLs
+  explain and offer "View it read-only" or "Back to the list" (no redirect).
+- Saved answers read-only (Edit answer → dialog, Delete stays); opening a message prompts once (View plans /
+  Continue viewing); media, songs, schedule, restore, recipient photo and invitation controls locked; deletes stay.
+- Open forms are never swapped; a refused save says "This wasn’t saved. What you typed is still here." with View
+  plans; autosave refused with 402 says so and stops. Plan re-read at trial end, on focus and after any refusal.
+- Fix: the shell keeps one stable tree, so pages are never remounted when the plan loads or changes.
+- **Verified (fresh):** full suite 59 files 853/853 (new `trial-expired.test.tsx` 20); isolated source typecheck
+  exit 0 (normal `tsc` blocked by the dev server's `.next/dev/types`); eslint `src` exit 0; isolated production
+  `next build` exit 0 with route types valid; isolated browser 14/14 at 1280 and 390 px. **Not run:** the repo's
+  Playwright suite (it targets :3000/:4000 and the real development ImageKit).
+
+## Trial restrictions Step 7: approved refinements, consistent restriction UI (2026-11-16, local)
+
+Contract: `for-after-backend/docs/billing.md` §8 Step 7 (five decisions approved). Shared pieces in
+`components/shared/trial-cap.tsx`: `TRIAL_CAP_COPY.memories`, `TrialMemories` ("X of 1 trial memory used", from
+`GET /billing` `memoriesSaved`), `useCreateGate` + `CreateGateNotice` (create pages), `ShellShowsPlanCheck`.
+- Memory Vault: counter under the search row; "Save a memory" becomes the shared Pro button + dialog ("Save more
+  memories with a plan", View plans → `/settings/plan`, Close; focus returns) at the cap; `/memory-vault/new` at the
+  cap explains with View plans / Back to Memory Vault. Memory writes refresh the plan. Paid/exempt/billing-off: none.
+- `/memory-vault/new`, `/people/new`, `/trusted-contacts/new`: one gate. Loading → "Checking your plan…"; unreadable →
+  no form (the shell's single "Check plan again"); decided once, so a refetch never removes an open form; no trial cap
+  → opens as soon as the plan is read.
+- Unlink (My Story answer page and workspace) uses `DELETE …/response/memories` with that one id, so it works after a
+  trial ends; linking stays Pro/locked as before.
+- Unsaved words: when autosave is refused (402) the status reads "Not saved to your account." and a temporary copy is
+  kept in `sessionStorage` (`lib/local-drafts.ts`, per account; cleared by `resetPrivateCache` on sign-in, sign-out and
+  session expiry, by Discard, or once the server holds the words). Reopening the editor offers it with the same label;
+  Restore fills the form and sends nothing. While read-only, the answer page, workspace, message page and Messages
+  list show "Unsaved draft in this tab" with View unsaved draft (exact text, read-only) and Discard
+  (`KeptDraft`, `components/shared/draft-recovery.tsx`). Copy says it is temporary and may disappear when the tab
+  closes. Close-out fix: the copy is removed only on real evidence (server autosave, explicit Save, identical to the
+  saved text), never because the form briefly equals the saved text while the page loads.
+- Schedule panel: when locked the button reads "Unschedule" (no "to edit").
+- Tests: new `components/shared/trial-step7.test.tsx`, `components/shared/kept-draft.test.tsx`; updated `people.test.tsx` (forms wait for the plan),
+  `memories.test.tsx`, `my-story-rich.test.tsx`, `story-inline-media.test.tsx`, `trial-expired.test.tsx`.
+
+## Updated plans Steps 3–4: paid recipient limit and media by tier (2026-11-16, local)
+
+Contract: `for-after-backend/docs/billing.md` §9 (409 `PLAN_LIMIT`; 409 `TIER_REQUIRED` with `requiredTier: 'COMPLETE'`;
+`GET /billing` `features.mediaKinds`).
+- **Step 3:** no app code change. The recipient form already shows a `PLAN_LIMIT` message and keeps the input, with
+  no "View plans" link. Pinned in `people.test.tsx`.
+- **Step 4, shared pieces** (`components/shared/trial-cap.tsx`, `form-field.tsx`):
+  - `ProBadge` takes a `label`, `ProButton` a `badge`, and `ChoiceGroup` locked choices a `badge`.
+  - New `COMPLETE_VIDEO_COPY`, `CompleteVideoButton`, and `usePaidMedia().videoLocked`. It locks only when the plan
+    says media is allowed and video isn't; an unknown plan locks nothing.
+- **Where Premium sees "Complete":**
+  - the media manager's Add a video and Record a video (the recorder is hidden);
+  - the Video message format, unless the message is already VIDEO;
+  - the My Story workspace's Add a video (its picker no longer accepts video, and a picked video is explained
+    locally);
+  - a story or wish video in Create a message ("Copy this video").
+- `TIER_REQUIRED` refusals show the message plus View plans, keep the form, and re-read the plan
+  (`FormError`, `UploadFailed`, `query-client`).
+- The trial's Pro controls are unchanged.
+- Tests: new `components/shared/plan-media.test.tsx` (8).
+- Verified: 21 files, 329/329; eslint; isolated build; isolated browser 13/13 at desktop and phone width.
+
+## Updated plans Step 5: AI allowance in the companion (2026-11-17, local)
+
+Contract: `for-after-backend/docs/billing.md` §9 Step 5 (`GET /assistant/usage`; 409 `AI_ALLOWANCE_EXHAUSTED`,
+409 `AI_REQUEST_DUPLICATE`, 503 `AI_USAGE_UNRECORDED`).
+- `companion.tsx`:
+  - each Send (and each Try again) sends a fresh `requestId`;
+  - one usage line under the composer, read only while the panel is open ("X of 5 trial AI replies used" /
+    "X of 50 AI replies used this month · resets 1 December"), and nothing for unmetered accounts;
+  - exhaustion has its own message, with the UTC reset date, no Try again, and a note that writing can continue on
+    your own;
+  - the hourly 429 message is unchanged;
+  - a failed request gives the typed text back;
+  - nothing is resent, saved or scheduled automatically.
+- `lib/api/errors.ts`: `ApiError.allowance` holds the typed, validated facts for `AI_ALLOWANCE_EXHAUSTED` only.
+- `lib/api/assistant.ts`: `requestId`, `AssistantUsage`, `assistantApi.usage`. `query-client.ts`:
+  `queryKeys.assistantUsage`.
+- Admin AI Operations: labels for the outcomes `allowance_exhausted`, `duplicate_request` and `usage_unrecorded`.
+- Tests: `companion.test.tsx`:
+  - the harness gained a query client, a usage stub, and per-Send request ids recorded apart from the body (the
+    existing exact-body assertions are unchanged);
+  - 5 new tests.
+- Verified 2026-11-17: 30 files, 365/365; eslint clean; isolated build 62/62; isolated browser 7/7 at 1280 and 390 px
+  (fake provider, synthetic tiers).
+
+## Updated plans Step 6: tier Checkout on the plan page (2026-11-17, local)
+
+Contract: `for-after-backend/docs/billing.md` §9 Step 6 (`POST /billing/checkout { tier, interval }`,
+`checkoutOptions`, `subscription.mapping`, access state `plan_unresolved`).
+
+`plan.tsx` "Choose a plan" (a minimal change; Step 7 redesigns it):
+- one row per tier, with a button per interval that the server offers;
+- options that aren't on sale say "not available yet";
+- no prices are shown or invented.
+
+`plan.tsx`, other changes:
+- A mapped subscription shows "For After Complete, annual". Legacy and unmapped ones keep "Monthly" / "Annual".
+- `plan_unresolved` explains itself, links to support, offers no second checkout, and stops the return checks.
+- The return from Checkout still polls the server and never unlocks from the URL.
+
+Elsewhere:
+- `lib/api/billing.ts`: the `CheckoutOption` / `PaidTier` types; `checkout(option)`.
+- `use-billing.ts`.
+- `lib/billing.ts`: `TIER_LABEL`, plus the `plan_unresolved` label and tone.
+- `plan-lock.tsx`: copy for `plan_unresolved`.
+- `dashboard-shell.tsx`.
+- Admin Billing: the `plan_unresolved` filter and colour.
+
+Tests: `plan.test.tsx` was updated for the new checkout body, and 2 tests were added (tier naming and legacy wording;
+unresolved).
+
+Close-out (2026-11-17):
+- An unresolved account is sent to **Contact support** (`/support/new`) and never "View plans" or "Choose a plan" in:
+  - the lock dialogs (`PLAN_LOCK_COPY.plan_unresolved.action`, rendered by `ProDialog` and `UpgradeDialog`);
+  - a refused save (`FormError` on `PLAN_UNRESOLVED`);
+  - the plan page (the generic "Choose a plan to keep adding…" note is hidden for this state).
+- Tests: `plan-unresolved.test.tsx` (new, 3 tests).
+- Verified: 36 files, 440/440; eslint and source typecheck clean; isolated build 62/62; isolated browser 10/10 at 1280
+  and 390 px (fake Stripe, synthetic accounts; local evidence, not payment evidence).
+- Evidence: `for-after-backend/docs/evidence/updated-plans-step-6/`.
+- Later the same day, the backend's Prisma CLI was restored to 7.10. The frontend was not affected, so the results
+  above stand (not rerun).
+- Still blocked: real sandbox Checkout. Still interim: the unresolved-price rule.
+
+## Updated plans Step 7: plans and usage experience (2026-11-17, local)
+
+Contract: `for-after-backend/docs/billing.md` §9 Step 7. Report: `for-after-backend/docs/updated-plans-step-7-report.md`.
+
+**Settings → Plan** (`account/plan.tsx`, rebuilt):
+1. Summary: the plan comes from the tier in force, with access shown separately; dates; Start free trial (eligible
+   only); Manage billing.
+2. Usage: storage, People I Love, trusted contacts, AI and the trial counts.
+   - Accessible bars capped at 100%, with the real values in the text.
+   - Try again per source, never 0.
+   - Never "unlimited".
+3. Plans: three cards from the server's `planDefinitions`, plus a `<details>` comparison (removed in the
+   2026-11-19 refinement below).
+   - A radio interval selector shows configured options only, and sends `{ tier, interval }`.
+   - Subscribers see no upgrade or second checkout.
+   - No prices are shown (no pricing contract).
+
+**Shared locks** (`shared/trial-cap.tsx`):
+- `useCapCopy` and `capFor`: People I Love locks at the server's limit, including paid limits.
+- Badges: "Premium" by default; "Complete" for video and Premium's 10-person limit. At Complete's 50 there is no badge
+  and the dialog offers Close only.
+- `ProDialog` can omit its action.
+- `PeopleCounter` on the People I Love and Trusted contacts pages.
+
+**Elsewhere:**
+- Companion: "Compare plans" on trial and Premium allowance exhaustion only.
+- `use-vault`: people writes refresh `/billing`. `query-client`: `PLAN_LIMIT` re-reads the plan.
+
+**Tests:**
+- `plan.test.tsx` (rewritten, 20 tests), `plan-locks.test.tsx` (new, 8), companion (+1, and the throttling check).
+- Badge, copy and `requestId` updates in existing suites (`requestId` checks were stale since Step 5).
+
+**Verified (local, fake Stripe):**
+- All 53 files in the 12 affected directories pass (final run plus 3 files rerun alone after load-induced
+  timeouts/worker starts).
+- eslint (91 files) and typecheck clean.
+- Isolated build 62/62.
+- Browser 12/12 at 1280, 820, 390 and 200% zoom. Screenshots are in
+  `for-after-backend/docs/evidence/updated-plans-step-7/screens/`.
+- Real payments: not verified (sandbox blocked).
+
+**Refinement (2026-11-19, local):** the three plan cards and the `<details>` comparison are removed (pricing and
+comparison live on the marketing site).
+- "Choose a plan" is the one authenticated Checkout entry: a panel per configured tier, with the same interval radios
+  and `{ tier, interval }` payload. Shown only with billing on and no subscription held.
+- One "Compare plans" link, only when `NEXT_PUBLIC_PLANS_URL` (https) is set. **Unset: no verified URL, no link.**
+- Companion exhaustion link renamed "View plans".
+- Verified: 53 files 746/746, tsc/eslint clean, isolated build 62/62, browser 9/9 at 1280 and 390
+  (`for-after-backend/docs/evidence/updated-plans-step-7/refinement/`).
+- Open: the marketing pricing URL; sandbox payments.
+
+## Updated plans Step 8: final integration verification (2026-11-19, local)
+
+Report: `for-after-backend/docs/updated-plans-step-8-report.md`.
+- **Account management split:** `/settings/plan` keeps status, usage, Start free trial, Manage billing and one
+  "Choose a plan" button (only when buying is possible). The tier/interval Checkout moved to the new authenticated
+  `/settings/plan/choose` (`ChoosePlanPage`), which refuses subscribers ("You already have a subscription") and sends
+  unresolved accounts to support. The external "Compare plans on our website" link lives there, only when
+  `NEXT_PUBLIC_PLANS_URL` (https) is set: **unset, no verified URL**. The locked banner is hidden on both plan routes.
+- **Fixed:** usage meters were stale after a plan change (Start free trial left "5.0 GB" and "Available again with an
+  active plan"). `query-client.ts` now re-reads storage and AI usage when `GET /billing` changes state, access or tier.
+- Verified: 64 files, 918/918; tsc/eslint clean; isolated build 63/63; browser journeys 17/17 at 1280, 820, 390 and
+  200% (`for-after-backend/docs/evidence/updated-plans-step-8/`). The repo Playwright suite was not run (it uploads to
+  the real development ImageKit account and can't target isolated services).
+- Open: marketing pricing URL; sandbox payments; screen-reader testing.
+
+## Updated plans Step 7 refinement 2: Settings → Plan as an account page (2026-11-20, local)
+
+Report: `for-after-backend/docs/updated-plans-step-7-report.md` (Refinement 2).
+- `account/plan.tsx`: concise dates once each ("27 Nov 2026, 9:44 am (UTC+5:30)"); a trial row only in trial states;
+  "View plans" at the end of the read-only notice; "Choose a plan" and the optional external "Compare plans" moved into
+  the summary card (buy-eligible accounts only; never subscribers, unresolved or billing off); usage grid
+  `sm:grid-cols-2 xl:grid-cols-3`.
+- Verified: 53 files, 750/750 (6 files rerun alone after worker-start failures); tsc/eslint clean; isolated build
+  63/63; browser 16/16 at 1280 and 390 plus keyboard (`for-after-backend/docs/evidence/updated-plans-step-7/refinement-2/`).
+- Open:
+  - The marketing pricing URL (`NEXT_PUBLIC_PLANS_URL` unset).
+  - No post-sign-in return to `/settings/plan/choose`.
+  - Grandfathered accounts still see Choose a plan (policy open).
+  - Sandbox payments.
 
 ## ⏭️ Next: Step 23 (proposal, not started)
 

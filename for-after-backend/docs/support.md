@@ -59,7 +59,9 @@ readable.
 - At most 20 unresolved requests per Customer (creation is serialised on the User row), and at most 100 messages and
   100 notes per request, so a detail is always bounded without paging the conversation.
 - Lists are paginated (max 100 per page), sorted with an id tie-breaker. The inbox filters by status, category, exact
-  reference, exact account and created range (max 366 days); no text search.
+  reference, exact account and created range (max 366 days), and (2026-11-09) `search`: the subject (contains, any
+  case, ≤150) or a full request id; never descriptions, messages or notes. The response adds `evaluatedAt` and
+  `counts` per status over every filter except the status (REPEATABLE READ snapshot with the page).
 
 ## Privacy, audit, caching, notifications
 

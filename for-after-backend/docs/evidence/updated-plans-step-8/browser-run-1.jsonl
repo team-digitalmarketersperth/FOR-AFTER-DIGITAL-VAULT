@@ -1,0 +1,19 @@
+<claude-code-hint v="1" type="plugin" value="stripe@claude-plugins-official" />
+{"name":"[desktop] new customer: no trial until started; Start free trial (one click) → Free Trial, 7-day dates, trial limits (0 of 1 person, 0 of 5 AI, 100 MB)","ok":false,"error":"locator.waitFor: Timeout 30000ms exceeded. | Call log: | \u001b[2m  - waiting for getByText('0 of 5 replies used') to be visible\u001b[22m | ","shot":"D:/FOR-AFTER-DIGITAL-VAULT/for-after-backend/docs/evidence/updated-plans-step-8//fail-1.png"}
+{"name":"[desktop] trial at the people cap: \"Premium\" lock dialog traps focus, Escape returns it; View plans → plan page → \"Choose a plan\" → purchase route","ok":true}
+{"name":"[desktop] trial capabilities: Photos locked \"Premium\", Video locked \"Complete\"; written text open","ok":true}
+{"name":"[desktop] final plan page and purchase route: fit, no page-level horizontal scroll","ok":true}
+{"name":"[tablet] final plan page and purchase route: fit, no page-level horizontal scroll","ok":true}
+{"name":"[phone] final plan page and purchase route: fit, no page-level horizontal scroll","ok":true}
+{"name":"[zoom200] final plan page and purchase route: fit, no page-level horizontal scroll","ok":true}
+{"name":"[desktop] keyboard: \"Choose a plan\" link reachable by Tab with visible focus; purchase route interval by arrow keys","ok":true}
+{"name":"[desktop] Premium: plan page has Manage billing and no purchase; purchase route refuses a second subscription; Photos/Voice open, Video locked \"Complete\"","ok":true}
+{"name":"[desktop] tier change Premium → Complete (signed fake webhook, real sync): plan page shows Complete; AI keeps this month's 12 (12 of 200); 3 of 50 people","ok":true}
+{"name":"[desktop] Complete: video open; nothing to buy; plan page Billed annually","ok":true}
+{"name":"[desktop] trial ends while a new message is open: typing is kept, \"Not saved to your account\", a tab-local copy only, the plan re-read","ok":false,"error":"no tab-local copy","shot":"D:/FOR-AFTER-DIGITAL-VAULT/for-after-backend/docs/evidence/updated-plans-step-8//fail-12.png"}
+{"name":"[desktop] account switching in the same tab: log out → kept copy removed; the next account sees only its own plan and usage","ok":false,"error":"page.waitForURL: Timeout 60000ms exceeded. | =========================== logs =========================== | waiting for navigation until \"load\" | ============================================================","shot":"D:/FOR-AFTER-DIGITAL-VAULT/for-after-backend/docs/evidence/updated-plans-step-8//fail-13.png"}
+{"name":"[desktop] expired: memories readable; delete still works; adding is locked; the plan page offers \"Choose a plan\"","ok":false,"error":"the deleted memory should not be shown","shot":"D:/FOR-AFTER-DIGITAL-VAULT/for-after-backend/docs/evidence/updated-plans-step-8//fail-14.png"}
+{"name":"[desktop] Checkout cancelled: \"Nothing was charged\"; still locked","ok":true}
+{"name":"[desktop] Checkout by keyboard sends only { COMPLETE, annual }; the success URL alone grants nothing; a signed (fake) webhook confirms → \"Your subscription is confirmed\", access on","ok":true}
+{"name":"[desktop] unresolved: plan page support note → Contact support opens /support/new; purchase route refuses; a valid (fake) sync recovers to Complete","ok":true}
+{"summary":{"checks":17,"passed":13,"failed":4}}

@@ -1,0 +1,11 @@
+{"name":"[desktop] configured options are buttons; unpriced Premium says \"not available yet\"; no price is invented","ok":true}
+{"name":"[phone] configured options are buttons; unpriced Premium says \"not available yet\"; no price is invented","ok":true}
+{"name":"[desktop] keyboard: Tab to Complete Annual and press Enter; the API gets only { tier, interval }; the return shows \"Confirming\", not success, and nothing unlocks","ok":true}
+{"name":"[phone] the success query alone unlocks nothing; the pending note fits","ok":true}
+{"name":"[phone] cancelled return: \"Nothing was charged\", options still offered","ok":true}
+{"name":"[desktop] legacy/unmapped: \"Subscribed\", interval \"Monthly\", no tier name, no Choose a plan","ok":true}
+{"name":"[phone] mapped Complete: \"For After Complete, annual\"; layout fits","ok":true}
+{"name":"[desktop] unresolved: \"Plan being checked\", the explanation, Contact support (keyboard-reachable), no plan choices or \"choose a plan\"","ok":true}
+{"name":"[phone] unresolved: \"Plan being checked\", the explanation, Contact support (keyboard-reachable), no plan choices or \"choose a plan\"","ok":true}
+{"name":"[phone] unresolved: a blocked save says why and links to support (API 402 PLAN_UNRESOLVED)","ok":true}
+{"summary":{"checks":10,"passed":10,"failed":0}}

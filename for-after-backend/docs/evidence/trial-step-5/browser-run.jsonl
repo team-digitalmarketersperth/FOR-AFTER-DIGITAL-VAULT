@@ -1,0 +1,15 @@
+{"name":"My Wishes shows 1 of 4 (the seeded My Story answer) before any wish","ok":true}
+{"name":"answer one wish in the UI: counter becomes 2 of 4 in both sections","ok":true}
+{"name":"answer one My Story question in the workspace: 3 of 4 shared","ok":true}
+{"name":"a fourth answer (wish, via the API like another tab): 4 of 4; a fifth via the API is 409 TRIAL_LIMIT","ok":true}
+{"name":"at the cap: an unanswered wish shows Pro and opens the dialog (View plans / Close); Escape closes and focus returns","ok":true}
+{"name":"Close button closes the dialog and returns focus to the Pro control","ok":true}
+{"name":"My Story at the cap: the current new question shows Pro instead of the answer box; the memory picker shows Pro","ok":true}
+{"name":"an existing answer stays editable at the cap (edit + save; count stays 4)","ok":true}
+{"name":"deleting an answer frees a slot: 3 of 4, and the locked wish opens as a form","ok":true}
+{"name":"stale-limit refusal: the open form keeps the typed text and shows the message with View plans","ok":true}
+{"name":"clearing the words of a linked answer in the UI frees a slot; its linked memory stays","ok":true}
+{"name":"plan loading: a new answer shows \"Checking your plan…\" and no answer box","ok":true}
+{"name":"plan unreadable: retry state, then Check plan again opens the form","ok":true}
+{"name":"paid account: no trial counter, no Pro, new questions open","ok":true}
+{"summary":{"checks":14,"passed":14,"failed":0}}

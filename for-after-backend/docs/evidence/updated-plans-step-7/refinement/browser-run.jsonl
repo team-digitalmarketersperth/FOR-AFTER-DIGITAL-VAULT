@@ -1,0 +1,10 @@
+{"name":"[desktop] active trial: summary + usage; no sales cards/comparison/link; \"Choose a plan\" offers only Complete (Premium unpriced) with Checkout","ok":true}
+{"name":"[phone] active trial plan page fits; no horizontal scroll","ok":true}
+{"name":"[desktop] trial-cap lock dialog: \"View plans\" still navigates to /settings/plan, which loads with the Checkout entry","ok":true}
+{"name":"[desktop] Premium: name, Billed monthly, Manage billing; no purchase section, no checkout, no cards","ok":true}
+{"name":"[phone] Premium plan page fits","ok":true}
+{"name":"[desktop] Complete annual: name, Billed annually; nothing to buy; no cards","ok":true}
+{"name":"[desktop] expired: read-only note; arrow keys pick Annual; Tab + Enter sends only { COMPLETE, annual }; return shows \"Confirming\", access stays locked","ok":true}
+{"name":"[phone] expired: Checkout entry fits the phone width","ok":true}
+{"name":"[desktop] unresolved: Subscription + Plan being checked, Contact support, no purchase or cards","ok":true}
+{"summary":{"checks":9,"passed":9,"failed":0}}

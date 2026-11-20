@@ -1,0 +1,14 @@
+{"name":"[desktop] Premium message media: photo/audio normal; \"Add a video\" shows Complete, opens the dialog (keyboard), Escape returns focus","ok":true}
+{"name":"[desktop] new message: Video shows Complete; closing the dialog keeps the typed title","ok":true}
+{"name":"[desktop] story → message: the photo is a checkbox; the video shows \"Copy this video\" Complete instead","ok":true}
+{"name":"[phone] Premium message media: photo/audio normal; \"Add a video\" shows Complete, opens the dialog (keyboard), Escape returns focus","ok":true}
+{"name":"[phone] new message: Video shows Complete; closing the dialog keeps the typed title","ok":true}
+{"name":"[phone] story → message: the photo is a checkbox; the video shows \"Copy this video\" Complete instead","ok":true}
+{"name":"[desktop] My Story workspace: \"Add a video\" shows Complete beside Add media","ok":true}
+{"name":"[desktop] editing the text of a VIDEO message keeps its existing video (not a new attachment)","ok":true}
+{"name":"[desktop] an existing video stays listed and can be removed","ok":true}
+{"name":"[desktop] a direct API request bypassing the UI is refused (TIER_REQUIRED, Complete)","ok":true}
+{"name":"[phone] Complete: the normal video controls, no Complete mark","ok":true}
+{"name":"[phone] a stale page refused by the server (plan changed to Premium): the message, View plans, and the typed title kept","ok":false,"error":"Command failed: node scripts/phase24/isolated-env.mjs -- node D:/FOR-AFTER-DIGITAL-VAULT/for-after-backend/docs/evidence/updated-plans-step-4//browser-seed.mjs tier 1794825165002 comp PREMIUM","shot":"D:/FOR-AFTER-DIGITAL-VAULT/for-after-backend/docs/evidence/updated-plans-step-4//fail-12.png"}
+{"name":"[phone] trial: unchanged, video shows Pro (not Complete); no overflow","ok":true}
+{"summary":{"checks":13,"passed":12,"failed":1}}

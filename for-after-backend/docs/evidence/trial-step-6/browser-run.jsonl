@@ -1,0 +1,15 @@
+{"name":"[desktop] banner on Memory Vault: approved heading, body, View plans; existing memory listed; no overflow","ok":true}
+{"name":"[desktop] \"Save a memory\" opens the plan dialog (keyboard); Escape closes; focus returns; no navigation","ok":true}
+{"name":"[desktop] direct edit URL explains and offers read-only viewing (no redirect loop)","ok":true}
+{"name":"[desktop] opening a message: prompt with View plans / Continue viewing; dismissed it stays closed; delete still offered","ok":true}
+{"name":"[desktop] saved wish is read-only: Edit answer opens the plan dialog; Delete answer offered","ok":true}
+{"name":"[phone] banner on Memory Vault: approved heading, body, View plans; existing memory listed; no overflow","ok":true}
+{"name":"[phone] \"Save a memory\" opens the plan dialog (keyboard); Escape closes; focus returns; no navigation","ok":true}
+{"name":"[phone] direct edit URL explains and offers read-only viewing (no redirect loop)","ok":true}
+{"name":"[phone] opening a message: prompt with View plans / Continue viewing; dismissed it stays closed; delete still offered","ok":true}
+{"name":"[phone] saved wish is read-only: Edit answer opens the plan dialog; Delete answer offered","ok":true}
+{"name":"[desktop] deleting existing content still works (memory removed)","ok":true}
+{"name":"[phone] trial ends while a form is open: save refused, \"This wasn’t saved\", text kept, View plans, banner appears","ok":true}
+{"name":"[desktop] trial not started: \"Start your free trial\", never \"trial ended\"","ok":true}
+{"name":"[phone] paid with old trial dates: no banner, new answers open","ok":true}
+{"summary":{"checks":14,"passed":14,"failed":0}}

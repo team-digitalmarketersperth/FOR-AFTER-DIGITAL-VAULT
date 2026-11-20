@@ -112,7 +112,8 @@ flowchart LR
 | `MS_CLIENT_SECRET` | secret manager only, and development only: production should use a certificate or federated credential (not implemented yet, §7). **Pending:** live tenant verification |
 | `APP_BASE_URL` | `https://app.forafter.com.au` (https required) |
 | `DEATH_VERIFICATION_SAFEGUARD_SECONDS` | `1209600` (14 days) or the approved value; **never** a testing value like 60 |
-| `STORAGE_LIMIT_BYTES` | per-Customer storage limit; default 5 GiB (Phase 12C, approved 2026-10-08) |
+| `STORAGE_LIMIT_BYTES` | per-Customer storage limit; default 5 GiB (Phase 12C, approved 2026-10-08). An enforced active trial gets 100,000,000 bytes instead (`billing.md` §8) |
+| `BILLING_ENABLED`, `BILLING_ENFORCE_FROM` | **API only** (the worker reads neither). Billing is off unless `BILLING_ENABLED` is exactly `true`; then `BILLING_ENFORCE_FROM` (ISO instant) is required and a missing/invalid value stops the API at startup. Full list: `billing.md` §2 |
 | `MEDIA_MALWARE_SCAN_TIMEOUT_MS` | 120000 (download + scan of one file) |
 
 ### One-off tasks

@@ -64,6 +64,14 @@ Errors: `400` invalid/unsupported/too long · `404` unknown `promptKey` · `429`
 in-flight cap, or Groq 429) · `502` Groq timeout, network, 5xx or malformed/empty output · `503` not configured, Groq
 401/403/400/404 (key or model problem), or Redis unavailable (limits fail closed).
 
+**Updated Plans Step 5 (allowances; full rules in `billing.md` §9 Step 5):**
+- `409 AI_ALLOWANCE_EXHAUSTED`: the trial's 5 replies, or the month's 50 (Premium) or 200 (Complete), are used. The
+  body adds `kind`, `allowance`, `used` and `resetsAt`. This is distinct from the hourly 429.
+- `409 AI_REQUEST_DUPLICATE`: a reused `requestId`. Send a new one per request.
+- `503 AI_USAGE_UNRECORDED`: a reply arrived but its use couldn't be recorded, so it isn't shown and isn't charged.
+- `GET /api/v1/assistant/usage` returns the account's allowance, or `{ metered: false, reason }`.
+- Usage rows (`AiUsage`) are metadata only. No conversation, prompt or reply is stored.
+
 ## 3. What is sent to Groq
 
 Server-built instructions (rules + that page's application facts from `GUIDE` in `assistant.service.ts`), then the
@@ -81,8 +89,9 @@ about Groq retention, data residency or training: **check Groq's terms for the a
 
 **Page knowledge.** `GUIDE` holds short, verified facts per page: purpose, real button labels, steps,
 permission limits (for example, a trusted contact can report a death, add supporting documents and see the review
-status, but cannot read anything or manage the account) and what is not in the app yet (no plans, payments or
-billing). The current page's facts come first and the other pages' facts follow, so a question about another section
+status, but cannot read anything or manage the account) and what is not in the app yet. Since Updated Plans Step 5
+the account facts describe the Plan section ("View your plan") and the companion's remaining-reply counts, never plan
+names, prices or purchases that aren't available. The current page's facts come first and the other pages' facts follow, so a question about another section
 can still be answered. No private record is read to personalise them. **Maintenance:** when a page's labels or
 workflow change, update its `GUIDE` entry from the code (not from `task.md` plans) and the spec's label checks.
 
@@ -113,7 +122,9 @@ is collected for training.
 
 - One companion, mounted in the Customer shell and keyed by account: not on public, auth, Admin, Recipient or
   Trusted Contact pages; signing out or switching account drops it and aborts any request.
-- Opening it or navigating sends nothing. An empty conversation shows "What would you like help with?" and up to
+- Opening it or navigating sends nothing to the AI service. Since Updated Plans Step 5, opening the panel reads the
+  account's allowance (`GET /assistant/usage`, no content) to show one usage line; it hides if that read fails. An
+  empty conversation shows "What would you like help with?" and up to
   three suggested questions for the page (`PAGES` in `companion.tsx`): clicking one sends it exactly like a typed
   message (one request, shown as the Customer's turn first). There are no stored answers: every reply comes from the
   endpoint, and a failure shows a status with Try again (the question is kept and not repeated), never canned text.
